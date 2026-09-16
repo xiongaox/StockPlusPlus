@@ -6,6 +6,11 @@
 #include "sqlite3.h"
 #include "utilities/yyjson/yyjson.h"
 
+// sqlite3 以 SQLITE_THREADSAFE=0 编译（内部无任何锁），而同一连接会被 UI 线程与后台抓取线程并发使用，
+// 并发 prepare/step 会破坏 sqlite 内部结构（随机在解析器处读空指针崩溃）。
+// 用递归锁把每个成员方法的实现串行化；递归锁允许方法内部再调用其它方法。
+#define STOCKDB_LOCK() std::lock_guard<std::recursive_mutex> _stockDbLock(m_db_mutex)
+
 // ===== 文件内静态辅助函数 =====
 
 static time_t GetLocalMidnightTime(int offsetDays = 0)
@@ -110,6 +115,7 @@ CStockDbManager::~CStockDbManager()
 
 bool CStockDbManager::Init(const std::wstring& config_path)
 {
+	STOCKDB_LOCK();
 	if (m_db != nullptr) return true;
 
 	if (config_path.empty()) return false;
@@ -365,6 +371,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 
 void CStockDbManager::Close()
 {
+	STOCKDB_LOCK();
 	if (m_db != nullptr)
 	{
 		// WAL 模式下先主动 checkpoint，把 WAL 日志合并回主库文件
@@ -377,6 +384,7 @@ void CStockDbManager::Close()
 
 bool CStockDbManager::ResetAllData()
 {
+	STOCKDB_LOCK();
 	std::wstring dbPath = m_db_path;
 	std::wstring cfgPath = m_config_path;
 	Close();
@@ -391,6 +399,7 @@ bool CStockDbManager::ResetAllData()
 
 void CStockDbManager::CleanExpiredData()
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr) return;
 
 	time_t cutoffTime7d = GetLocalMidnightTime(-7);
@@ -473,6 +482,7 @@ void CStockDbManager::CleanExpiredData()
 
 bool CStockDbManager::SaveMarketCenterCache(int dataSet, const std::string& payload, time_t fetchedAt, const std::string& tradeDate, int schemaVersion)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr || payload.empty() || dataSet < 0 || dataSet >= 5)
 		return false;
 	if (sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK)
@@ -502,6 +512,7 @@ bool CStockDbManager::SaveMarketCenterCache(int dataSet, const std::string& payl
 
 bool CStockDbManager::LoadMarketCenterCache(int dataSet, std::string& payload, time_t& fetchedAt, std::string& tradeDate, int& schemaVersion)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr || dataSet < 0 || dataSet >= 5)
 		return false;
 	const char* sql = "SELECT payload,fetched_at,trade_date,schema_version,payload_size FROM market_center_cache WHERE dataset=?;";
@@ -530,6 +541,7 @@ bool CStockDbManager::LoadMarketCenterCache(int dataSet, std::string& payload, t
 
 bool CStockDbManager::DeleteMarketCenterCache(int dataSet)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr || dataSet < 0 || dataSet >= 5)
 		return false;
 	const char* sql = "DELETE FROM market_center_cache WHERE dataset=?;";
@@ -544,6 +556,7 @@ bool CStockDbManager::DeleteMarketCenterCache(int dataSet)
 
 bool CStockDbManager::SaveTradeRecord(const std::wstring& stockCode, const std::wstring& stockName, int tradeType, const std::wstring& time, double price, double amount, double totalAmount, double fee, double total)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr) return false;
 
 	const char* sql = "INSERT INTO trades(stock_code, stock_name, trade_type, trade_time, price, amount, total_amount, fee, total) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);";
@@ -569,6 +582,7 @@ bool CStockDbManager::SaveTradeRecord(const std::wstring& stockCode, const std::
 
 bool CStockDbManager::SaveInnerOuterSnapshot(const std::wstring& stockCode, time_t timestamp, STOCK::Volume innerVolume, STOCK::Volume outerVolume)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr) return false;
 
 	const char* sql = "INSERT OR REPLACE INTO inner_outer_snapshots(stock_code, snapshot_time, inner_volume, outer_volume) VALUES(?, ?, ?, ?);";
@@ -589,6 +603,7 @@ bool CStockDbManager::SaveInnerOuterSnapshot(const std::wstring& stockCode, time
 
 std::vector<std::tuple<time_t, STOCK::Volume, STOCK::Volume>> CStockDbManager::LoadInnerOuterSnapshots(const std::wstring& stockCode, time_t startTime)
 {
+	STOCKDB_LOCK();
 	std::vector<std::tuple<time_t, STOCK::Volume, STOCK::Volume>> result;
 	if (m_db == nullptr) return result;
 
@@ -614,6 +629,7 @@ std::vector<std::tuple<time_t, STOCK::Volume, STOCK::Volume>> CStockDbManager::L
 
 bool CStockDbManager::SaveTimelineCache(const std::wstring& stockCode, const std::vector<STOCK::TimelinePoint>& data)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr || data.empty()) return false;
 
 	const char* sql = "INSERT OR IGNORE INTO timeline_cache(stock_code, trade_date, time, volume, price, average_price, amount, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?);";
@@ -651,6 +667,7 @@ bool CStockDbManager::SaveTimelineCache(const std::wstring& stockCode, const std
 
 std::vector<STOCK::TimelinePoint> CStockDbManager::LoadTimelineCache(const std::wstring& stockCode, const std::string& tradeDate)
 {
+	STOCKDB_LOCK();
 	std::vector<STOCK::TimelinePoint> points;
 	if (m_db == nullptr) return points;
 
@@ -681,6 +698,7 @@ std::vector<STOCK::TimelinePoint> CStockDbManager::LoadTimelineCache(const std::
 
 std::vector<STOCK::TimelinePoint> CStockDbManager::LoadLatestTimelineCache(const std::wstring& stockCode)
 {
+	STOCKDB_LOCK();
 	std::string tradeDate = GetTodayDateString();
 	auto points = LoadTimelineCache(stockCode, tradeDate);
 	if (!points.empty()) return points;
@@ -715,6 +733,7 @@ std::vector<STOCK::TimelinePoint> CStockDbManager::LoadLatestTimelineCache(const
 
 bool CStockDbManager::SaveKLineCache(const std::wstring& stockCode, STOCK::Period period, const std::vector<STOCK::KLinePoint>& data)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr || data.empty()) return false;
 	const char* table = GetKLineCacheTable(period);
 	if (table[0] == '\0') return false;
@@ -787,6 +806,7 @@ bool CStockDbManager::SaveKLineCache(const std::wstring& stockCode, STOCK::Perio
 
 bool CStockDbManager::HasKLineCache(const std::wstring& stockCode, STOCK::Period period)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr) return false;
 	std::wstring table = GetKLineCacheTableW(period);
 	if (table.empty()) return false;
@@ -874,6 +894,7 @@ bool CStockDbManager::HasKLineCache(const std::wstring& stockCode, STOCK::Period
 
 std::vector<STOCK::KLinePoint> CStockDbManager::LoadKLineCache(const std::wstring& stockCode, STOCK::Period period)
 {
+	STOCKDB_LOCK();
 	std::vector<STOCK::KLinePoint> points;
 	if (m_db == nullptr) return points;
 	std::wstring table = GetKLineCacheTableW(period);
@@ -901,6 +922,7 @@ std::vector<STOCK::KLinePoint> CStockDbManager::LoadKLineCache(const std::wstrin
 
 int CStockDbManager::HealAbnormalDayKLineCache()
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr) return 0;
 
 	// 取每只股票的日K按日期排序后逐点检测，发现异常跳变（如份额折算造成的不复权断崖）
@@ -944,6 +966,7 @@ int CStockDbManager::HealAbnormalDayKLineCache()
 
 bool CStockDbManager::SaveStockBasicData(const std::wstring& stockCode, STOCK::Volume circulatingAShares)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr || circulatingAShares <= 0) return false;
 
 	const char* sql = "INSERT OR REPLACE INTO stock_basic_data(stock_code, circulating_a_shares, updated_at) VALUES(?, ?, ?);";
@@ -963,6 +986,7 @@ bool CStockDbManager::SaveStockBasicData(const std::wstring& stockCode, STOCK::V
 
 bool CStockDbManager::LoadStockBasicData(const std::wstring& stockCode, STOCK::Volume& outCirculatingAShares)
 {
+	STOCKDB_LOCK();
 	outCirculatingAShares = 0;
 	if (m_db == nullptr) return false;
 
@@ -988,6 +1012,7 @@ bool CStockDbManager::LoadStockBasicData(const std::wstring& stockCode, STOCK::V
 
 bool CStockDbManager::SaveChipDistribution(const std::wstring& stockCode, const STOCK::ChipDistribution& chipData)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr || !chipData.IsValid()) return false;
 
 	std::ostringstream pointsStream;
@@ -1028,6 +1053,7 @@ bool CStockDbManager::SaveChipDistribution(const std::wstring& stockCode, const 
 
 bool CStockDbManager::LoadLatestChipDistribution(const std::wstring& stockCode, STOCK::ChipDistribution& chipData)
 {
+	STOCKDB_LOCK();
 	chipData.Clear();
 	if (m_db == nullptr) return false;
 
@@ -1087,6 +1113,7 @@ bool CStockDbManager::LoadLatestChipDistribution(const std::wstring& stockCode, 
 
 bool CStockDbManager::SaveAvgDiffStats(const std::wstring& stockCode, double minVal, double maxVal, double currentVal)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr) return false;
 
 	std::string code = CCommon::UnicodeToStr(stockCode);
@@ -1110,6 +1137,7 @@ bool CStockDbManager::SaveAvgDiffStats(const std::wstring& stockCode, double min
 
 AvgDiffStats CStockDbManager::LoadAvgDiffStats(const std::wstring& stockCode)
 {
+	STOCKDB_LOCK();
 	AvgDiffStats result = { 0.0, 0.0, 0.0 };
 	if (m_db == nullptr) return result;
 
@@ -1136,6 +1164,7 @@ AvgDiffStats CStockDbManager::LoadAvgDiffStats(const std::wstring& stockCode)
 
 bool CStockDbManager::SaveFundNavCache(const std::wstring& stockCode, const std::vector<STOCK::TimelinePoint>& data)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr || data.empty()) return false;
 
 	const char* sql = "INSERT OR IGNORE INTO fund_nav_cache(stock_code, trade_date, time, nav, updated_at) VALUES(?, ?, ?, ?, ?);";
@@ -1166,6 +1195,7 @@ bool CStockDbManager::SaveFundNavCache(const std::wstring& stockCode, const std:
 
 std::vector<STOCK::TimelinePoint> CStockDbManager::LoadFundNavCache(const std::wstring& stockCode, const std::string& tradeDate)
 {
+	STOCKDB_LOCK();
 	std::vector<STOCK::TimelinePoint> points;
 	if (m_db == nullptr) return points;
 
@@ -1216,6 +1246,7 @@ static std::vector<STOCK::TimelinePoint> FilterValidNavPoints(const std::vector<
 
 std::vector<STOCK::TimelinePoint> CStockDbManager::LoadLatestFundNavCache(const std::wstring& stockCode)
 {
+	STOCKDB_LOCK();
 	// 只返回“今天”（当前交易日）的净值缓存；
 	// 历史交易日缓存以相同 HH:MM 时间戳落在今日分时轴上会造成巨大错位落差
 	// （净值是绝对价格，历史日的水平与今天不可比），因此不再回退加载最近交易日
@@ -1229,6 +1260,7 @@ std::vector<STOCK::TimelinePoint> CStockDbManager::LoadLatestFundNavCache(const 
 bool CStockDbManager::SaveTransactions(const std::wstring& stockCode,
 	const std::string& tradeDate, const std::vector<STOCK::Transaction>& data)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr || data.empty()) return false;
 
 	// 先删除同一天同一股票的历史明细，避免重复累加（同一天数据是幂等覆盖的）
@@ -1261,6 +1293,7 @@ bool CStockDbManager::SaveTransactions(const std::wstring& stockCode,
 
 bool CStockDbManager::DeleteTransactions(const std::wstring& stockCode, const std::string& tradeDate)
 {
+	STOCKDB_LOCK();
 	if (m_db == nullptr) return false;
 
 	const char* sql = "DELETE FROM transaction WHERE code = ? AND trade_date = ?;";
@@ -1278,6 +1311,7 @@ bool CStockDbManager::DeleteTransactions(const std::wstring& stockCode, const st
 std::vector<STOCK::Transaction> CStockDbManager::LoadTransactions(const std::wstring& stockCode,
 	const std::string& tradeDate)
 {
+	STOCKDB_LOCK();
 	std::vector<STOCK::Transaction> result;
 	if (m_db == nullptr) return result;
 

@@ -2749,7 +2749,7 @@ int CManagerDialog::CalcPageContentHeight()
 		return g_data.DPI(86 + 10) + MeasureMetricCard2Height(rightWidth) + g_data.DPI(8);
 	}
 	case PAGE_ABOUT:
-		return g_data.DPI(1396);
+		return g_data.DPI(1440);
 	default:
 		return 0;
 	}
@@ -4909,6 +4909,8 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRec
 	};
 
 	const wchar_t* items_0916_v208[] = {
+		L"•  【新增】 K线族视图（日K/周K/月K）新增「区域」统计：周期行竞价按钮左侧新增区域开关，拖动框选后显示同花顺式区间卡片（区间涨幅/最高/最低/振幅 + 起止日期条 + ✕ 清除），左右边界手柄可逐柱微调；图表仍可平移，选区锚定柱子不随缩放/滚动丢失",
+		L"•  【修复】 修复运行中偶发闪退：崩溃点位于 SQLite 解析器，根因是 sqlite3 以 SQLITE_THREADSAFE=0 编译（内部无锁）而数据库连接被界面线程与后台抓取线程并发使用，现为数据库层全部方法加递归锁串行化访问",
 		L"•  【新增】 涨跌趋势成交额升级东财市场概况同款口径：盘中新增「较前一日同期」同分钟放量/缩量差额与幅度（幅度与主值同字号并排），预测全天改用昨日同分钟进度法，开市首分钟即出数，收盘后回落真实较昨日全天对比",
 		L"•  【修复】 分组管理「状态栏显示」列因阈值提醒列插入右移导致点击勾选/取消失效（自选股/持仓/自定义分组统一按常量列读写）；勾选即时落盘，双击勾选列不再叠加弹窗造成「确定后勾选丢失」错觉",
 		L"•  【优化】 持仓「成本价」列展示三位小数，与编辑弹窗口径一致",

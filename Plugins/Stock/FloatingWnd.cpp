@@ -112,6 +112,7 @@ enum {
 	IDC_KLINE_SOURCE_BTN = 1025,
 	IDC_SETTINGS_BTN = 1027,
 	IDC_MC_REFRESH_BTN = 1028,
+	IDC_REGION_STATS_BTN = 1029,
 	IDC_KLINE_PROGRESS_TIMER = 1026
 };
 
@@ -159,6 +160,7 @@ BEGIN_MESSAGE_MAP(CFloatingWnd, CWnd)
 	ON_BN_CLICKED(IDC_TOGGLE_STOCK_LIST_BTN, &CFloatingWnd::OnBnClickedToggleStockListBtn)
 	ON_BN_CLICKED(IDC_SETTINGS_BTN, &CFloatingWnd::OnBnClickedSettingsBtn)
 	ON_BN_CLICKED(IDC_MC_REFRESH_BTN, &CFloatingWnd::OnBnClickedMcRefreshBtn)
+	ON_BN_CLICKED(IDC_REGION_STATS_BTN, &CFloatingWnd::OnBnClickedRegionStatsBtn)
 END_MESSAGE_MAP()
 
 int CFloatingWnd::OnCreate(LPCREATESTRUCT lpCreateStruct)
@@ -179,12 +181,14 @@ int CFloatingWnd::OnCreate(LPCREATESTRUCT lpCreateStruct)
 	m_btnKLine.Create(_T("日K"), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_KLINE_BTN);
 	m_btnWeekKLine.Create(_T("周K"), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_WEEK_KLINE_BTN);
 	m_btnMonthKLine.Create(_T("月K"), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_MONTH_KLINE_BTN);
+	m_btnRegionStats.Create(_T("区域"), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_REGION_STATS_BTN);
 	m_btnKLineSource.Create(_T(""), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_KLINE_SOURCE_BTN);
 	m_btnCallAuction.ShowWindow(SW_HIDE);
 	m_btnTimeLine.ShowWindow(SW_HIDE);
 	m_btnKLine.ShowWindow(SW_HIDE);
 	m_btnWeekKLine.ShowWindow(SW_HIDE);
 	m_btnMonthKLine.ShowWindow(SW_HIDE);
+	m_btnRegionStats.ShowWindow(SW_HIDE);
 	m_btnKLineSource.ShowWindow(SW_HIDE);
 
 	// 右侧按钮：关闭、放大、自选折叠、筹码峰（全自绘）
@@ -1254,6 +1258,7 @@ void CFloatingWnd::OnPaint()
 			SafeShowWindow(m_btnMonthKLine, true);
 
 			// 竞价模式隐藏副图指标工具按钮
+			SafeShowWindow(m_btnRegionStats, false);
 			SafeShowWindow(m_btnMA, false);
 			SafeShowWindow(m_btnBoll, false);
 			SafeShowWindow(m_btnIndicatorMACD, false);
@@ -1531,9 +1536,185 @@ void CFloatingWnd::OnPaint()
 					m_indicatorChart.DrawIndicatorChartArea(memDC, indicatorCtx, subChartTop, subChartHeight, true, indicatorType, subHover);
 				}
 			}
-			m_timelineChart.DrawTimelineHoverOverlay(memDC, ctx, tlHover);
+			// 区域统计模式（仅K线族视图）不绘制悬浮信息卡（右侧弹窗），其它悬停元素保留
+			if (!(m_regionStatsMode && m_viewMode >= UI_VIEW_DAY_KLINE))
+				m_timelineChart.DrawTimelineHoverOverlay(memDC, ctx, tlHover);
 
 			memDC.RestoreDC(-1);
+
+			// 区域统计覆盖层（同花顺式）：选区高亮带 + 统计卡片（区间涨幅/最高/最低/振幅）+ 日期链 + ✕（仅K线族视图）
+			if (m_regionStatsMode && m_viewMode >= UI_VIEW_DAY_KLINE)
+			{
+				const double regionStep = (ctx.visibleCount > 0) ? static_cast<double>(ctx.chartWidth) / ctx.visibleCount : 0.0;
+				const int bodyL = ctx.chartLeft;
+				const int bodyR = ctx.chartLeft + ctx.chartWidth;
+				// 选区边界锚在"柱子中心"（同花顺式）；左右边界各占一根柱，便于分离拖拽
+				auto slotX = [&](int bar) -> int {
+					const double x = bodyL + (static_cast<double>(bar - ctx.startIndex) + 0.5) * regionStep;
+					return static_cast<int>(max<double>(bodyL, min<double>(bodyR, x)));
+					};
+				if ((m_regionHasSelection || m_isRegionDragging) && m_regionStartBar >= 0 && m_regionEndBar >= m_regionStartBar && regionStep > 0)
+				{
+					const int bandL = slotX(min(m_regionStartBar, m_regionEndBar));
+					const int bandR = slotX(max(m_regionStartBar, m_regionEndBar));
+					// 视口缩放/滚动后把边界的"真实像素"回写为 X 锚点（不回写裁剪后的值，
+					// 否则选区滑出可视区时锚点会被逐帧压扁，看起来像是选区被关闭）
+					m_regionSelStartX = static_cast<int>(bodyL + (min(m_regionStartBar, m_regionEndBar) - ctx.startIndex + 0.5) * regionStep);
+					m_regionSelEndX = static_cast<int>(bodyL + (max(m_regionStartBar, m_regionEndBar) - ctx.startIndex + 0.5) * regionStep);
+					int bandT = ctx.priceChartTop;
+					int bandB = ctx.priceChartTop + ctx.priceChartHeight + subChartHeight;   // 贯穿主图+副图
+					if (bandB <= bandT)
+						bandB = ctx.priceChartTop + ctx.priceChartHeight;
+
+					Gdiplus::Graphics regionG(memDC.GetSafeHdc());
+					regionG.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+					regionG.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+
+					// 选区高亮带（价格区 + 副图区），在副图标题行（VOL/MACD…日K/月K 那一排，
+						// 该行本身没有底色）处断开，避免红色透到按钮背后显得脏
+						const int subStripTop = ctx.priceChartTop + ctx.priceChartHeight;
+						const int subStripH = g_data.RDPI(16);
+						const int bandW = max(2, bandR - bandL);
+						Gdiplus::SolidBrush bandFill(Gdiplus::Color(46, 244, 63, 94));
+						if (subStripTop > bandT)
+							regionG.FillRectangle(&bandFill, static_cast<Gdiplus::REAL>(bandL), static_cast<Gdiplus::REAL>(bandT),
+								static_cast<Gdiplus::REAL>(bandW), static_cast<Gdiplus::REAL>(subStripTop - bandT));
+						const int bandBelowTop = subStripTop + subStripH;
+						if (bandB > bandBelowTop)
+							regionG.FillRectangle(&bandFill, static_cast<Gdiplus::REAL>(bandL), static_cast<Gdiplus::REAL>(bandBelowTop),
+								static_cast<Gdiplus::REAL>(bandW), static_cast<Gdiplus::REAL>(bandB - bandBelowTop));
+						Gdiplus::Pen edgePen(Gdiplus::Color(190, 244, 63, 94), static_cast<Gdiplus::REAL>(max(2, g_data.RDPI(2))));   // 边界描边加粗
+						regionG.DrawLine(&edgePen, static_cast<Gdiplus::REAL>(bandL), static_cast<Gdiplus::REAL>(bandT),
+							static_cast<Gdiplus::REAL>(bandL), static_cast<Gdiplus::REAL>(bandB));
+						regionG.DrawLine(&edgePen, static_cast<Gdiplus::REAL>(bandR), static_cast<Gdiplus::REAL>(bandT),
+							static_cast<Gdiplus::REAL>(bandR), static_cast<Gdiplus::REAL>(bandB));
+
+					// 左右边界拖动手柄（只有按住手柄才能调整区间；其它位置点击/拖动不改动选区）
+					{
+						const int handleW = g_data.RDPI(14), handleH = g_data.RDPI(30);
+						const int handleCy = ctx.priceChartTop + ctx.priceChartHeight / 2;
+						auto drawHandle = [&](int edgeX, bool isLeft) {
+							int hx = edgeX - handleW / 2;
+							hx = max(bodyL, min(hx, bodyR - handleW));
+							int hy = handleCy - handleH / 2;
+							Gdiplus::GraphicsPath hPath;
+							const Gdiplus::REAL hr = static_cast<Gdiplus::REAL>(g_data.RDPI(4));
+							const Gdiplus::REAL x0 = static_cast<Gdiplus::REAL>(hx), y0 = static_cast<Gdiplus::REAL>(hy);
+							const Gdiplus::REAL w0 = static_cast<Gdiplus::REAL>(handleW), h0 = static_cast<Gdiplus::REAL>(handleH);
+							const Gdiplus::REAL d = hr * 2.0f;
+							hPath.AddArc(x0, y0, d, d, 180.0f, 90.0f);
+							hPath.AddArc(x0 + w0 - d, y0, d, d, 270.0f, 90.0f);
+							hPath.AddArc(x0 + w0 - d, y0 + h0 - d, d, d, 0.0f, 90.0f);
+							hPath.AddArc(x0, y0 + h0 - d, d, d, 90.0f, 90.0f);
+							hPath.CloseFigure();
+							Gdiplus::SolidBrush hBg(Gdiplus::Color(235, 244, 63, 94));
+							regionG.FillPath(&hBg, &hPath);
+							const Gdiplus::REAL hInset = static_cast<Gdiplus::REAL>(g_data.RDPI(3));
+							const Gdiplus::RectF iconRc(x0 + hInset, y0 + hInset, w0 - hInset * 2, h0 - hInset * 2);
+							Icons::Draw(regionG, isLeft ? Icons::Id::ChevronLeft : Icons::Id::ChevronRight, iconRc, RGB(255, 255, 255), 255, 2.4f);
+							if (isLeft)
+								m_regionLeftHandleRect = CRect(hx, hy, hx + handleW, hy + handleH);
+							else
+								m_regionRightHandleRect = CRect(hx, hy, hx + handleW, hy + handleH);
+							};
+						drawHandle(bandL, true);
+						drawHandle(bandR, false);
+					}
+
+					// 日期链与✕一体化的圆角矩形（左侧日期文字 + 右端内嵌圆形图标按钮，Icons::X）
+					Gdiplus::Font fChip(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.RDPI(12)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+					Gdiplus::StringFormat sfChip;
+					sfChip.SetAlignment(Gdiplus::StringAlignmentCenter);
+					sfChip.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+					Gdiplus::RectF chipMeasure;
+					const std::wstring& dateTitle = m_regionDateTitle.empty() ? std::wstring(L"拖动选择区间") : m_regionDateTitle;
+					regionG.MeasureString(dateTitle.c_str(), -1, &fChip, Gdiplus::PointF(0, 0), &chipMeasure);
+					const int chipTextW = static_cast<int>(chipMeasure.Width) + g_data.RDPI(2);
+					const int chipH = g_data.RDPI(32);           // 容器加高（原24）
+					const int clearD = g_data.RDPI(22);          // ✕ 圆钮加大（原16），严格正圆
+					const int padL = g_data.RDPI(12), padR = g_data.RDPI(10), gapBtn = g_data.RDPI(6);
+					int chipW = padL + chipTextW + gapBtn + clearD + padR;
+					int chipX = (bandL + bandR) / 2 - chipW / 2;
+					chipX = max(bodyL, min(chipX, bodyR - chipW));
+					int chipY = bandT + g_data.RDPI(2);
+					Gdiplus::SolidBrush chipBg(Gdiplus::Color(232, 30, 34, 44));
+					// 小圆角矩形（非胶囊：不做两头半圆）
+					const Gdiplus::REAL chipR = static_cast<Gdiplus::REAL>(g_data.RDPI(7));
+					Gdiplus::GraphicsPath chipPath;
+					{
+						const Gdiplus::REAL x0 = static_cast<Gdiplus::REAL>(chipX), y0 = static_cast<Gdiplus::REAL>(chipY);
+						const Gdiplus::REAL w0 = static_cast<Gdiplus::REAL>(chipW), h0 = static_cast<Gdiplus::REAL>(chipH);
+						const Gdiplus::REAL d = chipR * 2.0f;
+						chipPath.AddArc(x0, y0, d, d, 180.0f, 90.0f);
+						chipPath.AddArc(x0 + w0 - d, y0, d, d, 270.0f, 90.0f);
+						chipPath.AddArc(x0 + w0 - d, y0 + h0 - d, d, d, 0.0f, 90.0f);
+						chipPath.AddArc(x0, y0 + h0 - d, d, d, 90.0f, 90.0f);
+						chipPath.CloseFigure();
+					}
+					regionG.FillPath(&chipBg, &chipPath);
+					Gdiplus::SolidBrush chipText(Gdiplus::Color(255, 226, 232, 240));
+					// 文案垂直居中：整条高度内居中 + 1px 下压校正 GDI+ 基线偏高
+					const Gdiplus::REAL textZoneX = static_cast<Gdiplus::REAL>(chipX + padL) - g_data.RDPI(2);
+					const Gdiplus::REAL textZoneW = static_cast<Gdiplus::REAL>(chipW - padL - clearD - gapBtn - padR) + g_data.RDPI(4);
+					const Gdiplus::REAL textY = static_cast<Gdiplus::REAL>(chipY) + static_cast<Gdiplus::REAL>(g_data.RDPI(1));
+					const Gdiplus::REAL textH = static_cast<Gdiplus::REAL>(chipH);
+					regionG.DrawString(dateTitle.c_str(), -1, &fChip,
+						Gdiplus::RectF(textZoneX, textY, textZoneW, textH), &sfChip, &chipText);
+					// ✕ 圆钮（日期条右端内嵌）：圆形底 + Icons::X 笔画
+					const int clearL = chipX + chipW - padR - clearD;
+					const int clearT = chipY + (chipH - clearD) / 2;
+					Gdiplus::SolidBrush clearBg(Gdiplus::Color(215, 55, 60, 76));
+					regionG.FillEllipse(&clearBg, static_cast<Gdiplus::REAL>(clearL), static_cast<Gdiplus::REAL>(clearT), static_cast<Gdiplus::REAL>(clearD), static_cast<Gdiplus::REAL>(clearD));
+					const Gdiplus::REAL iconInset = static_cast<Gdiplus::REAL>(clearD) / 5.0f;
+					const Gdiplus::RectF iconBounds(static_cast<Gdiplus::REAL>(clearL) + iconInset, static_cast<Gdiplus::REAL>(clearT) + iconInset,
+						static_cast<Gdiplus::REAL>(clearD) - iconInset * 2, static_cast<Gdiplus::REAL>(clearD) - iconInset * 2);
+					Icons::Draw(regionG, Icons::Id::X, iconBounds, RGB(148, 163, 184), 255, 2.0f);
+					m_regionClearRect = CRect(clearL, clearT, clearL + clearD, clearT + clearD);
+
+					// 统计卡片：图体左上角，顶边与左边同间距（各 6px）；宽度按内容实测收缩，避免右侧大片留白
+					const int cardPad = g_data.RDPI(10);
+					Gdiplus::Font fTitle(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.RDPI(10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+					Gdiplus::Font fBig(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.RDPI(15)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+					const std::wstring rowHigh = L"最高 " + m_regionHighText + L"   最低 " + m_regionLowText;
+					const std::wstring rowAmp = L"振幅 " + m_regionAmpText;
+					Gdiplus::RectF mT = {}, mB = {}, mH = {}, mA = {};
+					regionG.MeasureString(L"区间涨幅", -1, &fTitle, Gdiplus::PointF(0, 0), &mT);
+					regionG.MeasureString(m_regionPctText.c_str(), -1, &fBig, Gdiplus::PointF(0, 0), &mB);
+					regionG.MeasureString(rowHigh.c_str(), -1, &fTitle, Gdiplus::PointF(0, 0), &mH);
+					regionG.MeasureString(rowAmp.c_str(), -1, &fTitle, Gdiplus::PointF(0, 0), &mA);
+					const int cardContentW = static_cast<int>(max(max(mT.Width, mB.Width), max(mH.Width, mA.Width))) + g_data.RDPI(2);
+					int cardX = ctx.chartLeft + g_data.RDPI(6);
+					int cardY = bandT + g_data.RDPI(6);
+					const int cardW = cardContentW + cardPad * 2;
+					const int cardH = cardPad + g_data.RDPI(16) + g_data.RDPI(26) + g_data.RDPI(18) + g_data.RDPI(16) + cardPad;
+					Gdiplus::SolidBrush cardBg(Gdiplus::Color(238, 17, 20, 27));
+					Gdiplus::Pen cardPen(Gdiplus::Color(150, 63, 71, 88), 1.0f);
+					regionG.FillRectangle(&cardBg, static_cast<Gdiplus::REAL>(cardX), static_cast<Gdiplus::REAL>(cardY), static_cast<Gdiplus::REAL>(cardW), static_cast<Gdiplus::REAL>(cardH));
+					regionG.DrawRectangle(&cardPen, static_cast<Gdiplus::REAL>(cardX), static_cast<Gdiplus::REAL>(cardY), static_cast<Gdiplus::REAL>(cardW), static_cast<Gdiplus::REAL>(cardH));
+
+					Gdiplus::SolidBrush tTitle(Gdiplus::Color(255, 148, 163, 184));
+					const COLORREF pctColor = m_regionPctValue >= 0 ? RGB(239, 68, 68) : RGB(16, 185, 129);
+					Gdiplus::SolidBrush tBig(Gdiplus::Color(255, GetRValue(pctColor), GetGValue(pctColor), GetBValue(pctColor)));
+					Gdiplus::SolidBrush tVal(Gdiplus::Color(255, 203, 213, 225));
+					Gdiplus::StringFormat sfLeft;
+					sfLeft.SetAlignment(Gdiplus::StringAlignmentNear);
+					sfLeft.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+					const Gdiplus::REAL cardTextL = static_cast<Gdiplus::REAL>(cardX) + cardPad;
+					const Gdiplus::REAL cardTextW = static_cast<Gdiplus::REAL>(cardW - cardPad * 2);
+					int cardTextY = cardY + cardPad;
+					regionG.DrawString(L"区间涨幅", -1, &fTitle,
+						Gdiplus::RectF(cardTextL, static_cast<Gdiplus::REAL>(cardTextY), cardTextW, static_cast<Gdiplus::REAL>(g_data.RDPI(16))), &sfLeft, &tTitle);
+					cardTextY += g_data.RDPI(16);
+					regionG.DrawString(m_regionPctText.c_str(), -1, &fBig,
+						Gdiplus::RectF(cardTextL, static_cast<Gdiplus::REAL>(cardTextY), cardTextW, static_cast<Gdiplus::REAL>(g_data.RDPI(26))), &sfLeft, &tBig);
+					cardTextY += g_data.RDPI(26);
+					regionG.DrawString(rowHigh.c_str(), -1, &fTitle,
+						Gdiplus::RectF(cardTextL, static_cast<Gdiplus::REAL>(cardTextY), cardTextW, static_cast<Gdiplus::REAL>(g_data.RDPI(16))), &sfLeft, &tVal);
+					cardTextY += g_data.RDPI(18);
+					regionG.DrawString(rowAmp.c_str(), -1, &fTitle,
+						Gdiplus::RectF(cardTextL, static_cast<Gdiplus::REAL>(cardTextY), cardTextW, static_cast<Gdiplus::REAL>(g_data.RDPI(16))), &sfLeft, &tVal);
+				}
+			}
 
 			// 应用信号颜色到按钮背景
 			ApplySignalColors(tlHover.bollSignalColor, tlHover.macdSignalColor, tlHover.kdjSignalColor, tlHover.wrSignalColor, tlHover.rsiSignalColor, tlHover.maSignalColor);
@@ -1570,6 +1751,10 @@ void CFloatingWnd::OnPaint()
 				int modeTabsTotalW = 5 * modeTabW + 4 * tabGap;
 				int modeStartX = rightEdge - modeTabsTotalW - g_data.RDPI(2);
 
+				// 「区域」统计开关贴最左（竞价胶囊左侧）：仅K线族视图可用（分时/竞价无区间选区）
+				SafeSetWindowPos(m_btnRegionStats, modeStartX - (modeTabW + tabGap), tabY, modeTabW, tabH);
+				SafeShowWindow(m_btnRegionStats, m_viewMode >= UI_VIEW_DAY_KLINE);
+
 				SafeSetWindowPos(m_btnCallAuction, modeStartX, tabY, modeTabW, tabH);
 				SafeShowWindow(m_btnCallAuction, true);
 
@@ -1585,16 +1770,17 @@ void CFloatingWnd::OnPaint()
 				SafeSetWindowPos(m_btnMonthKLine, modeStartX + (modeTabW + tabGap) * 4, tabY, modeTabW, tabH);
 				SafeShowWindow(m_btnMonthKLine, true);
 
-				// 定位 K 线数据源状态与刷新按钮（放置在指标按钮与模式切换按钮之间的中间空余区域）
+				// 定位 K 线数据源状态与刷新按钮（放置在指标按钮与模式切换按钮之间的中间空余区域；
+				// 右边界为「区域」按钮左缘，避免数据来源按钮的矩形盖住其右侧刚放置的区域按钮）
 				int indicatorsEndX = tabX + (tabW + tabGap) * 5;
 				int middleStartX = indicatorsEndX + g_data.RDPI(6);
-				int middleEndX = modeStartX - g_data.RDPI(6);
+				int middleEndX = (modeStartX - (modeTabW + tabGap)) - g_data.RDPI(6);
 				int middleW = middleEndX - middleStartX;
 				bool isKLineMode = (m_viewMode >= UI_VIEW_DAY_KLINE);
 				if (isKLineMode && middleW >= g_data.RDPI(80))
 				{
 					int sourceBtnW = min(middleW, g_data.RDPI(260));
-					int sourceBtnX = middleStartX + (middleW - sourceBtnW) / 2;
+					int sourceBtnX = middleStartX;   // 数据来源往左靠，右侧空间留给模式胶囊与「区域」按钮
 					SafeSetWindowPos(m_btnKLineSource, sourceBtnX, tabY, sourceBtnW, tabH);
 					SafeShowWindow(m_btnKLineSource, true);
 					m_btnKLineSource.Invalidate();
@@ -1606,7 +1792,7 @@ void CFloatingWnd::OnPaint()
 
 				CButton* subBtns[] = {
 					&m_btnIndicatorCJL, &m_btnIndicatorMACD, &m_btnIndicatorKDJ, &m_btnIndicatorRSI, &m_btnIndicatorWR,
-					&m_btnCallAuction, &m_btnTimeLine, &m_btnKLine, &m_btnWeekKLine, &m_btnMonthKLine, &m_btnKLineSource
+					&m_btnCallAuction, &m_btnTimeLine, &m_btnKLine, &m_btnWeekKLine, &m_btnMonthKLine, &m_btnRegionStats, &m_btnKLineSource
 				};
 				for (auto* b : subBtns)
 				{
@@ -1627,6 +1813,7 @@ void CFloatingWnd::OnPaint()
 				SafeShowWindow(m_btnKLine, false);
 				SafeShowWindow(m_btnWeekKLine, false);
 				SafeShowWindow(m_btnMonthKLine, false);
+				SafeShowWindow(m_btnRegionStats, false);
 				SafeShowWindow(m_btnKLineSource, false);
 			}
 			SafeShowWindow(m_btnMA, false);
@@ -2120,6 +2307,65 @@ void CFloatingWnd::OnLButtonDown(UINT nFlags, CPoint point)
 		}
 	}
 
+	// 区域统计模式：K线族视图内按下即开始区间选区拖动（分时/竞价不支持，其余交互不变）
+	if (m_regionStatsMode && m_viewMode >= UI_VIEW_DAY_KLINE)
+	{
+		CRect regionClientRect;
+		GetClientRect(&regionClientRect);
+		const bool regionIsIndex = (GetStockPriority(m_stock_id) < 200);
+		const int regionOrderBookWidth = IsInfoPanelVisible(regionIsIndex) ? ORDER_BOOK_WIDTH : 0;
+		const int regionChartLeft = (m_showStockList ? CStockListPanel::GetPanelWidth() : 0) + g_data.RDPI(50);
+		const int regionChartRight = regionClientRect.Width() - regionOrderBookWidth;
+		const int regionTop = g_data.RDPI(26);
+		const int regionBottom = regionClientRect.Height() - g_data.RDPI(20);
+
+		// ✕ 清除按钮：退出区域统计（回归「区域」开关关闭态）
+		if (!m_regionClearRect.IsRectEmpty() && m_regionClearRect.PtInRect(point))
+		{
+			ClearRegionSelection(true);
+			Invalidate();
+			return;
+		}
+
+		// 已有选区：只有左右边界手柄能调整区间；按在其它位置时跳过"新建选区"，
+		// 直接下传为图表拖拽（平移），滚动视图不改动选区，仅 ✕ 可关闭
+		const bool regionSelectionLocked = (m_regionHasSelection && m_regionStartBar >= 0 && m_regionEndBar >= m_regionStartBar);
+		if (regionSelectionLocked)
+		{
+			const bool hitL = (!m_regionLeftHandleRect.IsRectEmpty() && m_regionLeftHandleRect.PtInRect(point));
+			const bool hitR = (!m_regionRightHandleRect.IsRectEmpty() && m_regionRightHandleRect.PtInRect(point));
+			if (hitL || hitR)
+			{
+				m_isRegionDragging = true;
+				m_regionAdjustingLeft = hitL;
+				if (hitL)
+					m_regionSelStartX = point.x;   // 拖动左边界（右端由 UpdateRegionStatsFromPixels 排序自适应）
+				else
+					m_regionSelEndX = point.x;     // 拖动右边界
+				SetCapture();
+				UpdateRegionStatsFromPixels();
+				Invalidate();
+				return;
+			}
+		}
+
+		if (!regionSelectionLocked && point.x >= regionChartLeft && point.x < regionChartRight &&
+			point.y >= regionTop && point.y < regionBottom)
+		{
+			m_isRegionDragging = true;
+			m_regionAdjustingLeft = false;
+			m_regionSelStartX = point.x;
+			m_regionSelEndX = point.x;
+			m_regionHasSelection = false;
+			m_regionStartBar = -1;
+			m_regionEndBar = -1;
+			SetCapture();
+			UpdateRegionStatsFromPixels();   // 按下即出选区（左边界=点中柱，右边界自动落下一柱）
+			Invalidate();
+			return;
+		}
+	}
+
 	// 非总览模式下的分时图双击（所有模式都支持）
 	if (m_viewMode != UI_VIEW_OVERVIEW && isDoubleClick)
 	{
@@ -2315,6 +2561,17 @@ void CFloatingWnd::OnLButtonUp(UINT nFlags, CPoint point)
 				}
 			}
 		}
+		Invalidate();
+		CWnd::OnLButtonUp(nFlags, point);
+		return;
+	}
+
+	// 区域统计：结束选区拖动并定格统计（仅K线族视图）
+	if (m_isRegionDragging)
+	{
+		m_isRegionDragging = false;
+		ReleaseCapture();
+		UpdateRegionStatsFromPixels();
 		Invalidate();
 		CWnd::OnLButtonUp(nFlags, point);
 		return;
@@ -2518,7 +2775,7 @@ void CFloatingWnd::HideChartButtons(bool hide)
 {
 	// 行情中心视图下隐藏图表视图专属按钮，避免串进行情中心界面
 	CButton* btns[] = {
-		&m_btnTimeLine, &m_btnKLine, &m_btnWeekKLine, &m_btnMonthKLine, &m_btnCallAuction,
+		&m_btnTimeLine, &m_btnKLine, &m_btnWeekKLine, &m_btnMonthKLine, &m_btnCallAuction, &m_btnRegionStats,
 		&m_btnMA, &m_btnBoll, &m_btnIndicatorCJL, &m_btnIndicatorMACD,
 		&m_btnIndicatorKDJ, &m_btnIndicatorWR, &m_btnIndicatorRSI,
 		&m_btnChipPeak, &m_btnOrderBook, &m_btnEtfHoldings,
@@ -2765,6 +3022,28 @@ void CFloatingWnd::OnMouseMove(UINT nFlags, CPoint point)
 			m_etfHoldingsScrollOffset = newOffset;
 			Invalidate();
 		}
+		CWnd::OnMouseMove(nFlags, point);
+		return;
+	}
+
+	// 区域统计选区拖动：更新边界并实时刷新统计（仅K线族视图；左缘微调时固定右端）
+	if (m_isRegionDragging)
+	{
+		if (m_regionAdjustingLeft)
+			m_regionSelStartX = point.x;
+		else
+			m_regionSelEndX = point.x;
+		UpdateRegionStatsFromPixels();
+		Invalidate(FALSE);
+		CWnd::OnMouseMove(nFlags, point);
+		return;
+	}
+
+	// 区域统计模式：悬停十字线与右侧信息卡停止更新（抑制悬浮弹窗），保留 mousePos 供其它用途；
+	// 但正在进行图表拖拽滚动时不能拦截，否则区域模式下图无法左右平移
+	if (m_regionStatsMode && m_viewMode >= UI_VIEW_DAY_KLINE && !m_isTimelineDragging && !m_isKLineDragging)
+	{
+		m_mousePos = point;
 		CWnd::OnMouseMove(nFlags, point);
 		return;
 	}
@@ -3213,6 +3492,8 @@ void CFloatingWnd::SetStockId(const std::wstring& stockId)
 	if (m_stock_id == stockId)
 		return;
 	m_stock_id = stockId;
+	ClearRegionSelection(true);   // 换股时选区失效：退出区域统计避免残留旧标的统计
+	g_data.LoadFocusStockCache(m_stock_id);
 	g_data.LoadFocusStockCache(m_stock_id);
 	m_mc_return_stock_id.clear();   // 主动切换股票即结束临时 K 线查看
 	EnsureStockListVisible();
@@ -3268,6 +3549,134 @@ void CFloatingWnd::ToggleKLineMode()
 		EnsureChipPeakData();
 	}
 	Invalidate();
+}
+
+// ========== 区域统计（同花顺式K线区间选区） ==========
+void CFloatingWnd::OnBnClickedRegionStatsBtn()
+{
+	m_regionStatsMode = !m_regionStatsMode;
+	if (!m_regionStatsMode)
+		ClearRegionSelection(false);
+	if (m_btnRegionStats.GetSafeHwnd())
+		m_btnRegionStats.Invalidate();
+}
+
+void CFloatingWnd::ClearRegionSelection(bool exitMode)
+{
+	if (exitMode)
+		m_regionStatsMode = false;
+	m_isRegionDragging = false;
+	m_regionAdjustingLeft = false;
+	m_regionLeftHandleRect.SetRectEmpty();
+	m_regionRightHandleRect.SetRectEmpty();
+	m_regionHasSelection = false;
+	m_regionStartBar = -1;
+	m_regionEndBar = -1;
+	m_regionSelStartX = 0;
+	m_regionSelEndX = 0;
+	m_regionDateTitle.clear();
+	m_regionPctText.clear();
+	m_regionHighText.clear();
+	m_regionLowText.clear();
+	m_regionAmpText.clear();
+	m_regionPctValue = 0.0;
+	m_regionClearRect.SetRectEmpty();
+}
+
+void CFloatingWnd::UpdateRegionStatsFromPixels()
+{
+	m_regionClearRect.SetRectEmpty();
+	const bool freshStart = !m_regionHasSelection;   // 初次点击（尚未成区）
+
+	std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
+	auto stockData = g_data.GetStockData(m_stock_id);
+	STOCK::KLineData* klineObj = nullptr;
+	if (stockData)
+	{
+		if (m_viewMode == UI_VIEW_DAY_KLINE)
+			klineObj = stockData->getKLineData();
+		else if (m_viewMode == UI_VIEW_WEEK_KLINE)
+			klineObj = stockData->getWeekKLineData();
+		else if (m_viewMode == UI_VIEW_MONTH_KLINE)
+			klineObj = stockData->getMonthKLineData();
+	}
+	if (!klineObj || klineObj->data.empty())
+	{
+		m_regionStartBar = -1;
+		m_regionEndBar = -1;
+		m_regionHasSelection = false;
+		return;
+	}
+	const std::vector<STOCK::KLinePoint>& bars = klineObj->data;
+	const int totalPoints = static_cast<int>(bars.size());
+
+	CRect clientRect;
+	GetClientRect(&clientRect);
+	const bool isIndexR = (GetStockPriority(m_stock_id) < 200);
+	const int orderBookWidth = IsInfoPanelVisible(isIndexR) ? ORDER_BOOK_WIDTH : 0;
+	const int chartLeft = (m_showStockList ? CStockListPanel::GetPanelWidth() : 0) + g_data.RDPI(50);
+	const int effectiveWidth = clientRect.Width() - orderBookWidth - chartLeft;
+	if (effectiveWidth <= 0)
+	{
+		m_regionHasSelection = false;
+		return;
+	}
+
+	int visibleCount = min(m_timelineVisibleCount, totalPoints);
+	int maxOffset = max(0, totalPoints - visibleCount);
+	int startIndex = max(0, min(m_timelineScrollOffset, maxOffset));
+
+	// 与分时图双击命中同款 x→bar 映射（保证选区对准可见曲线的bar位）
+	auto barFromX = [&](int x) {
+		double rel = static_cast<double>(x - chartLeft) * static_cast<double>(visibleCount) / effectiveWidth;
+		rel = max(0.0, min(rel, visibleCount - 1));
+		return max(0, min(startIndex + static_cast<int>(rel), totalPoints - 1));
+	};
+	int a = barFromX(min(m_regionSelStartX, m_regionSelEndX));
+	int b = barFromX(max(m_regionSelStartX, m_regionSelEndX));
+	// 初次点击：左边界=点中的柱，右边界自动落到下一柱（左右边界各占一柱，便于分离拖拽）
+	if (freshStart && a == b && a + 1 < totalPoints)
+		b = a + 1;
+	m_regionStartBar = a;
+	m_regionEndBar = b;
+	m_regionHasSelection = true;
+
+	// 起点基准：前一日收盘（选区首bar自身涨跌计入），无前bar时退回首bar开盘
+	const double base = (a > 0) ? static_cast<double>(bars[a - 1].close) : static_cast<double>(bars[a].open);
+	double hi = bars[a].high, lo = bars[a].low;
+	for (int i = a; i <= b; i++)
+	{
+		hi = max(hi, bars[i].high);
+		lo = min(lo, bars[i].low);
+	}
+	m_regionPctValue = (base > 0) ? (static_cast<double>(bars[b].close) - base) / base * 100.0 : 0.0;
+	const double amp = (base > 0) ? (hi - lo) / base * 100.0 : 0.0;
+
+	wchar_t buf[64];
+	swprintf_s(buf, L"%s%.2f%%", m_regionPctValue >= 0 ? L"+" : L"", m_regionPctValue);
+	m_regionPctText = buf;
+	swprintf_s(buf, L"%.2f", hi);
+	m_regionHighText = buf;
+	swprintf_s(buf, L"%.2f", lo);
+	m_regionLowText = buf;
+	swprintf_s(buf, L"%.2f%%", amp);
+	m_regionAmpText = buf;
+
+	auto toWideDate = [](const std::string& d) {
+		std::wstring w = CCommon::StrToUnicode(d.c_str(), false);
+		std::replace(w.begin(), w.end(), L'-', L'/');
+		return w;
+	};
+	const wchar_t* unit = (m_viewMode == UI_VIEW_DAY_KLINE) ? L"日" : (m_viewMode == UI_VIEW_WEEK_KLINE ? L"周" : L"月");
+	m_regionDateTitle = toWideDate(bars[a].day) + L" ⋅ " + std::to_wstring(b - a + 1) + unit + L" ⋅ " + toWideDate(bars[b].day);
+
+	// X 锚点落在柱子中心（与绘制边界同源，供按住边缘微调时的命中判定）
+	if (visibleCount > 0)
+	{
+		const double stepPx = static_cast<double>(effectiveWidth) / visibleCount;
+		m_regionSelStartX = chartLeft + static_cast<int>((a - startIndex + 0.5) * stepPx);
+		m_regionSelEndX = chartLeft + static_cast<int>((b - startIndex + 0.5) * stepPx);
+	}
 }
 
 void CFloatingWnd::UpdateModeButtons()
@@ -3839,6 +4248,8 @@ void CFloatingWnd::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 
 		COLORREF bgColor = isSelected ? RGB(38, 42, 54) : RGB(24, 27, 34);
 		dc.FillSolidRect(rect, bgColor);
+		// 文本裁剪在其按钮矩形内：按钮宽度可能被收缩（右侧预留「区域」开关），防止文字溢出盖到相邻按钮
+		dc.IntersectClipRect(rect);
 
 		dc.SetBkMode(TRANSPARENT);
 		CFont btnFont;
@@ -3897,6 +4308,7 @@ void CFloatingWnd::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 	else if (nID == IDC_KLINE_BTN) { isActive = (m_viewMode == UI_VIEW_DAY_KLINE); }
 	else if (nID == IDC_WEEK_KLINE_BTN) { isActive = (m_viewMode == UI_VIEW_WEEK_KLINE); }
 	else if (nID == IDC_MONTH_KLINE_BTN) { isActive = (m_viewMode == UI_VIEW_MONTH_KLINE); }
+	else if (nID == IDC_REGION_STATS_BTN) { isActive = m_regionStatsMode; }
 	else if (nID == IDC_CHIP_PEAK_BTN) { isActive = m_showChipPeak; }
 	else if (nID == IDC_ORDER_BOOK_BTN) { isActive = !m_showChipPeak && !m_showEtfHoldings && m_showOrderBook; }
 	else if (nID == IDC_ETF_HOLDINGS_BTN) { isActive = m_showEtfHoldings; }
@@ -4002,6 +4414,7 @@ void CFloatingWnd::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 	else if (nID == IDC_KLINE_BTN) text = _T("日K");
 	else if (nID == IDC_WEEK_KLINE_BTN) text = _T("周K");
 	else if (nID == IDC_MONTH_KLINE_BTN) text = _T("月K");
+	else if (nID == IDC_REGION_STATS_BTN) text = _T("区域");
 	else if (nID == IDC_CHIP_PEAK_BTN) text = _T("CM");
 	else if (nID == IDC_ORDER_BOOK_BTN) text = _T("PK");
 	else if (nID == IDC_ETF_HOLDINGS_BTN) text = _T("CC");

@@ -18,6 +18,8 @@ namespace
 		static const Icon refreshCw = { kRefreshCw, _countof(kRefreshCw), nullptr, 0, nullptr, 0 };
 		static const Icon chevronUp = { kChevronUp, _countof(kChevronUp), nullptr, 0, nullptr, 0 };
 		static const Icon chevronDown = { kChevronDown, _countof(kChevronDown), nullptr, 0, nullptr, 0 };
+		static const Icon chevronLeft = { kChevronLeft, _countof(kChevronLeft), nullptr, 0, nullptr, 0 };
+		static const Icon chevronRight = { kChevronRight, _countof(kChevronRight), nullptr, 0, nullptr, 0 };
 		static const Icon chevronsUp = { kChevronsUp, _countof(kChevronsUp), nullptr, 0, nullptr, 0 };
 		static const Icon chevronsDown = { kChevronsDown, _countof(kChevronsDown), nullptr, 0, nullptr, 0 };
 		static const Icon panelLeftOpen = { kPanelLeftOpen, _countof(kPanelLeftOpen), nullptr, 0, nullptr, 0 };
@@ -39,6 +41,8 @@ namespace
 		case Icons::Id::RefreshCw: return refreshCw;
 		case Icons::Id::ChevronUp: return chevronUp;
 		case Icons::Id::ChevronDown: return chevronDown;
+		case Icons::Id::ChevronLeft: return chevronLeft;
+		case Icons::Id::ChevronRight: return chevronRight;
 		case Icons::Id::ChevronsUp: return chevronsUp;
 		case Icons::Id::ChevronsDown: return chevronsDown;
 		case Icons::Id::PanelLeftOpen: return panelLeftOpen;

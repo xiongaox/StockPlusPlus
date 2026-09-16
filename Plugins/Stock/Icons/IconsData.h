@@ -99,6 +99,12 @@ namespace IconsData
 	ICON_POINTS(kChevronDown0, { 6, 9 }, { 12, 15 }, { 18, 9 });
 	ICON_STROKES(kChevronDown, { kChevronDown0, _countof(kChevronDown0) });
 
+	ICON_POINTS(kChevronLeft0, { 15, 18 }, { 9, 12 }, { 15, 6 });
+	ICON_STROKES(kChevronLeft, { kChevronLeft0, _countof(kChevronLeft0) });
+
+	ICON_POINTS(kChevronRight0, { 9, 18 }, { 15, 12 }, { 9, 6 });
+	ICON_STROKES(kChevronRight, { kChevronRight0, _countof(kChevronRight0) });
+
 	ICON_POINTS(kChevronsUp0, { 17, 11 }, { 12, 6 }, { 7, 11 });
 	ICON_POINTS(kChevronsUp1, { 17, 18 }, { 12, 13 }, { 7, 18 });
 	ICON_STROKES(kChevronsUp, { kChevronsUp0, _countof(kChevronsUp0) }, { kChevronsUp1, _countof(kChevronsUp1) });
