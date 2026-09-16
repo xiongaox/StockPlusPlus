@@ -53,6 +53,36 @@ public:
 	// 内嵌“设置”视图：与行情中心一致的原地切换体验（入口=顶栏设置图标）
 	void ShowSettingsView();     // 打开设置视图（悬浮窗已开启时供外部入口直达）
 	void ToggleSettingsView();   // 在悬浮窗内原地切换设置视图/图表视图
+
+	// 悬浮窗“当前状态”快照：点击桌面等隐藏时会整体销毁重建，销毁前由 Stock 暂存本快照，
+	// 重新打开后调用 RestoreUiState 还原视图，避免每次回到首页K线/默认状态
+	struct UiState
+	{
+		bool marketCenterMode{ false };   // 正处于行情中心视图
+		bool settingsMode{ false };       // 正处于内嵌设置视图
+		int mcPage{ 0 };                  // 行情中心侧栏页（McPage）
+		int mcSectorViewMode{ 0 };        // 板块视图：0=资金树图 1=时间走向
+		int mcTreemapMode{ 0 };           // 树图模式：0=红绿 1=仅流入 2=仅流出
+		// K线首页（图表）状态
+		int viewMode{ 3 };                // UIViewMode（0=总览 1=竞价 2=分时 3=日K 4=周K 5=月K）
+		bool showChipPeak{ false };       // 右侧面板三选（互斥）：筹码峰
+		bool showOrderBook{ false };      // 右侧面板三选（互斥）：盘口
+		bool showEtfHoldings{ false };    // 右侧面板三选（互斥）：ETF持仓（CC）
+		bool showMA{ false };             // 均线开关
+		bool showBollBands{ true };       // 布林带开关
+		int timelineIndicator{ 0 };       // 分时副图指标（TimelineIndicator）
+		bool expandedMode{ false };       // 放大模式（隐藏副图）
+		bool showStockList{ true };       // 左侧股票列表显隐
+		int activeGroupTab{ 0 };          // 左侧列表分组（0=自选 1=持仓 >=2 自定义）
+		int groupListSort{ 0 };           // 列表排序：0=默认 1=涨跌幅降序 2=涨跌幅升序
+		bool showPositionSummaryPercent{ false };  // 持仓汇总栏盈亏百分比模式
+		bool showJZCurve{ false };        // 基金净值曲线
+	};
+	UiState CaptureUiState() const;
+	void RestoreUiState(const UiState& st);
+	// 按快照恢复首页图表视图状态（RestoreUiState 内部步骤）
+	void ApplyChartViewState(const UiState& st);
+
 	// 鼠标移出图表区超过2秒时自动清除悬停信息卡，避免长期遮挡图表
 	void CheckHoverCardAutoHide();
 	// 右侧信息面板（盘口/筹码峰）当前是否可见：隐藏后宽度全部让给图表

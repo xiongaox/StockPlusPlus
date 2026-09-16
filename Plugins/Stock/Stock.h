@@ -54,7 +54,7 @@ public:
 	void ShowContextMenu(CWnd* pWnd);
 
 	void ShowFloatingWnd(void* hWnd, CPoint ptScreen, std::wstring stock_id);
-	void DestroyFloatingWnd();
+	void DestroyFloatingWnd(bool saveUiState = true);   // saveUiState=false：主动换绑重建（如换股票），不暂存界面状态
 	void UpdateKLine();
 	void PreloadAllKLineData();
 	void PreloadAllChipDistributionData();
@@ -83,6 +83,29 @@ private:
 	CMenu m_menu;
 	std::mutex m_wndMutex;
 	CFloatingWnd* m_pFloatingWnd;
+
+	// 悬浮窗销毁前的“当前状态”暂存：点击桌面等隐藏会整体销毁窗口，重新打开时恢复
+	// （是否处于行情中心/内嵌设置视图，及行情中心页签、板块子视图模式）
+	bool m_floating_ui_saved{ false };
+	bool m_floating_mc_mode{ false };
+	bool m_floating_settings_mode{ false };
+	int m_floating_mc_page{ 0 };
+	int m_floating_mc_sector_view{ 0 };
+	int m_floating_mc_treemap_mode{ 0 };
+	// K线首页（图表）状态（对应 CFloatingWnd::UiState 字段）
+	int m_floating_view_mode{ 3 };              // UIViewMode（3=日K 默认）
+	bool m_floating_show_chip_peak{ false };
+	bool m_floating_show_order_book{ false };
+	bool m_floating_show_etf_holdings{ false }; // CC 持仓面板
+	bool m_floating_show_ma{ false };
+	bool m_floating_show_boll{ true };
+	int m_floating_timeline_indicator{ 0 };
+	bool m_floating_expanded{ false };
+	bool m_floating_show_stock_list{ true };
+	int m_floating_group_tab{ 0 };
+	int m_floating_group_sort{ 0 };
+	bool m_floating_summary_pct{ false };
+	bool m_floating_show_jz{ false };
 
 	ITrafficMonitor* m_pMonitor{};          // 主程序接口指针
 

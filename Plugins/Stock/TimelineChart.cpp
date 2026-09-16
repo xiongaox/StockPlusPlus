@@ -885,7 +885,6 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 				}
 
 				const int dotR = g_data.RDPI(3);
-				const int labelOff = g_data.RDPI(8);
 				int oldBkMode = memDC.SetBkMode(TRANSPARENT);
 				auto drawSignalArrow = [&](int x, int fromY, int toY, COLORREF color) {
 					CPen pen(PS_SOLID, 1, color);
@@ -903,6 +902,18 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 					memDC.SelectObject(pOldP);
 					};
 
+				// 点旁信号名小字（反买/正卖/弱震买…，可带“+强底背”等背离后缀）：
+				// 买点标签置下方、卖点标签置上方，距图区顶/底不足时翻到另一侧；
+				// 被 5 分钟密度过滤的重叠信号只画点不写字，避免遮挡
+				CFont sigLabelFont;
+				CreateStockFont(sigLabelFont, memDC, g_data.RDPI(12));
+				CFont* pOldSigFont = memDC.SelectObject(&sigLabelFont);
+				// 以最长候选文案估算半宽，作为标签矩形宽度基准
+				const int halfLabelW = static_cast<int>(memDC.GetTextExtent(_T("反卖+强顶背")).cx / 2) + g_data.RDPI(2);
+				const int lineH = g_data.RDPI(17);
+				const int chartBottom = ctx.priceChartTop + ctx.priceChartHeight;
+				CString trimmedReason;
+
 				for (int i = 0; i < totalPoints; i++)
 				{
 					if (!buySignals[i] && !sellSignals[i] && !forbidSignals[i])
@@ -913,6 +924,7 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 					int ptX = static_cast<int>(round(pricePoints[i].X));
 					int ptY = static_cast<int>(round(pricePoints[i].Y));
 
+					bool hasLabel = !noLabelSignals[i];
 					if (buySignals[i])
 					{
 						CBrush brush(COLOR_GREEN_DOWN);
@@ -922,6 +934,18 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 						memDC.Ellipse(ptX - dotR, ptY - dotR, ptX + dotR, ptY + dotR);
 						memDC.SelectObject(pOldB);
 						memDC.SelectObject(pOldP);
+						if (hasLabel && !buyReasons[i].IsEmpty())
+						{
+							// 买点：默认在点下方（低吸位置），触底翻到上方
+							CRect rcLabel(ptX - halfLabelW, ptY + dotR + g_data.RDPI(2), ptX + halfLabelW, ptY + dotR + g_data.RDPI(2) + lineH);
+							if (rcLabel.bottom > chartBottom - g_data.RDPI(2))
+								rcLabel.OffsetRect(0, -(rcLabel.Height() + dotR * 2 + g_data.RDPI(4)));
+							memDC.SetTextColor(COLOR_GREEN_DOWN);
+							trimmedReason = buyReasons[i];
+							trimmedReason.Replace(_T("(放量)"), _T(""));
+							trimmedReason.Replace(_T("(无量)"), _T(""));
+							memDC.DrawText(trimmedReason, &rcLabel, DT_CENTER | DT_SINGLELINE);
+						}
 					}
 					else if (sellSignals[i])
 					{
@@ -932,8 +956,21 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 						memDC.Ellipse(ptX - dotR, ptY - dotR, ptX + dotR, ptY + dotR);
 						memDC.SelectObject(pOldB);
 						memDC.SelectObject(pOldP);
+						if (hasLabel && !sellReasons[i].IsEmpty())
+						{
+							// 卖点：默认在点上方（高抛位置），触顶翻到下方
+							CRect rcLabel(ptX - halfLabelW, ptY - dotR - g_data.RDPI(2) - lineH, ptX + halfLabelW, ptY - dotR - g_data.RDPI(2));
+							if (rcLabel.top < ctx.priceChartTop + g_data.RDPI(2))
+								rcLabel.OffsetRect(0, rcLabel.Height() + dotR * 2 + g_data.RDPI(4));
+							memDC.SetTextColor(COLOR_RED_UP);
+							trimmedReason = sellReasons[i];
+							trimmedReason.Replace(_T("(放量)"), _T(""));
+							trimmedReason.Replace(_T("(无量)"), _T(""));
+							memDC.DrawText(trimmedReason, &rcLabel, DT_CENTER | DT_SINGLELINE);
+						}
 					}
 				}
+				memDC.SelectObject(pOldSigFont);
 				memDC.SetBkMode(oldBkMode);
 			}
 		}

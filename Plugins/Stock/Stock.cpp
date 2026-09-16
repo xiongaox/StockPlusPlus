@@ -386,8 +386,8 @@ void Stock::ShowContextMenu(CWnd* pWnd)
 
 void Stock::ShowFloatingWnd(void* hWnd, CPoint ptScreen, std::wstring stock_id)
 {
-	// 如果已有悬浮窗，先销毁
-	DestroyFloatingWnd();
+	// 如果已有悬浮窗，先销毁（更换绑定股票的重建属于主动换窗，不暂存旧界面状态）
+	DestroyFloatingWnd(false);
 
 	ClientToScreen((HWND)hWnd, &ptScreen);
 
@@ -411,14 +411,67 @@ void Stock::ShowFloatingWnd(void* hWnd, CPoint ptScreen, std::wstring stock_id)
 	{
 		// 通知获取线程开始为当前股票定时获取图表数据
 		CStockFetchThread::Instance().SetFocusStockId(stock_id);
+
+		// 此前因点击桌面等隐藏而暂存的“当前状态”在此恢复（恢复后即消费，避免残留到后面的重建）
+		if (m_floating_ui_saved)
+		{
+			CFloatingWnd::UiState st;
+			st.marketCenterMode = m_floating_mc_mode;
+			st.settingsMode = m_floating_settings_mode;
+			st.mcPage = m_floating_mc_page;
+			st.mcSectorViewMode = m_floating_mc_sector_view;
+			st.mcTreemapMode = m_floating_mc_treemap_mode;
+			// K线首页（图表）状态
+			st.viewMode = m_floating_view_mode;
+			st.showChipPeak = m_floating_show_chip_peak;
+			st.showOrderBook = m_floating_show_order_book;
+			st.showEtfHoldings = m_floating_show_etf_holdings;
+			st.showMA = m_floating_show_ma;
+			st.showBollBands = m_floating_show_boll;
+			st.timelineIndicator = m_floating_timeline_indicator;
+			st.expandedMode = m_floating_expanded;
+			st.showStockList = m_floating_show_stock_list;
+			st.activeGroupTab = m_floating_group_tab;
+			st.groupListSort = m_floating_group_sort;
+			st.showPositionSummaryPercent = m_floating_summary_pct;
+			st.showJZCurve = m_floating_show_jz;
+			m_pFloatingWnd->RestoreUiState(st);
+			m_floating_ui_saved = false;
+		}
 	}
 }
 
-void Stock::DestroyFloatingWnd()
+void Stock::DestroyFloatingWnd(bool saveUiState)
 {
 	std::lock_guard<std::mutex> lock(m_wndMutex);
 	if (m_pFloatingWnd != NULL && ::IsWindow(m_pFloatingWnd->GetSafeHwnd()))
 	{
+		if (saveUiState)
+		{
+			// 销毁前暂存界面状态（行情中心/设置视图及行情中心页签），
+			// 下次 ShowFloatingWnd 重建后恢复，避免重开回到首页K线
+			CFloatingWnd::UiState st = m_pFloatingWnd->CaptureUiState();
+			m_floating_mc_mode = st.marketCenterMode;
+			m_floating_settings_mode = st.settingsMode;
+			m_floating_mc_page = st.mcPage;
+			m_floating_mc_sector_view = st.mcSectorViewMode;
+			m_floating_mc_treemap_mode = st.mcTreemapMode;
+			// K线首页（图表）状态
+			m_floating_view_mode = st.viewMode;
+			m_floating_show_chip_peak = st.showChipPeak;
+			m_floating_show_order_book = st.showOrderBook;
+			m_floating_show_etf_holdings = st.showEtfHoldings;
+			m_floating_show_ma = st.showMA;
+			m_floating_show_boll = st.showBollBands;
+			m_floating_timeline_indicator = st.timelineIndicator;
+			m_floating_expanded = st.expandedMode;
+			m_floating_show_stock_list = st.showStockList;
+			m_floating_group_tab = st.activeGroupTab;
+			m_floating_group_sort = st.groupListSort;
+			m_floating_summary_pct = st.showPositionSummaryPercent;
+			m_floating_show_jz = st.showJZCurve;
+			m_floating_ui_saved = true;
+		}
 		m_pFloatingWnd->DestroyWindow();
 		delete m_pFloatingWnd;
 		m_pFloatingWnd = NULL;
