@@ -17,6 +17,17 @@ struct AvgDiffStats
 	double currentVal;
 };
 
+// 交易台账一笔（trades 表的一行，人工录入的建仓/加仓/减仓）
+struct StockTradeRecord
+{
+	long long id{ 0 };
+	bool isSell{ false };       // true=卖出，false=买入
+	std::wstring time;          // 成交时间 yyyy-MM-dd HH:mm
+	double price{ 0.0 };        // 成交价
+	double amount{ 0.0 };       // 数量（股）
+	double fee{ 0.0 };          // 手续费（默认 0；口径上不影响当日盈亏，仅台账留存）
+};
+
 // 股票数据库管理类
 // 负责所有 SQLite 数据库的 CRUD 操作，与业务逻辑、UI 解耦。
 // CDataManager 持有其一个实例，并将原数据库方法转发到此。
@@ -44,6 +55,17 @@ public:
 		int tradeType, const std::wstring& time,
 		double price, double amount, double totalAmount,
 		double fee, double total);
+	// 交易台账（人工录入的建仓/加仓/减仓，用于当日盈亏修正与日K B/S 标记）
+	// 插入一笔并返回新记录 id（0 表示失败）；total 按 SaveTradeRecord 的符号约定重算
+	long long InsertTradeRecord(const std::wstring& stockCode, const std::wstring& stockName,
+		int tradeType, const std::wstring& time, double price, double amount, double fee);
+	// 按股票查询全部记录，时间升序（同一时刻按 id 升序）
+	std::vector<StockTradeRecord> LoadTradeRecords(const std::wstring& stockCode);
+	// 按 id 更新一笔（金额与合计按 tradeType/价格/数量/费用重算）
+	bool UpdateTradeRecord(long long id, int tradeType, const std::wstring& time,
+		double price, double amount, double fee);
+	// 按 id 删除一笔
+	bool DeleteTradeRecord(long long id);
 
 	// 交易明细（一档行情逐笔成交）
 	// 批量插入，写前会先按 (code, trade_date) 删除同日旧数据，保证幂等覆盖

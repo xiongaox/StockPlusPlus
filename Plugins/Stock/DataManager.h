@@ -35,15 +35,6 @@ struct CustomGroup
 	}
 };
 
-// 今日成交一笔（当日手工录入，仅用于实时修正“当日盈亏”；跨天自动失效）
-// 数量为股、价格为成交价；手续费按券商“当日参考盈亏”口径不计入，故不存
-struct TodayTradeEntry
-{
-	bool is_sell{ false };   // true=卖出，false=买入
-	double quantity{ 0.0 };  // 股数
-	double price{ 0.0 };     // 成交价
-};
-
 struct SettingData
 {
 	vector<std::wstring> m_stock_codes{ L"sz300750", L"rt_hk01810", L"gb_nvda", L"gb_tsla" }; // 代码
@@ -194,20 +185,22 @@ public:
 	std::wstring GetBuyDate(const std::wstring& code);
 	void SetPosition(const std::wstring& code, double cost, double count, const std::wstring& buy_date = L"");
 
-	// ── 今日成交（当日手工成交流水，用于实时修正当日盈亏）──────────────
-	// 读取今日成交：存储日期不是今天时视为失效，返回空
-	std::vector<TodayTradeEntry> GetTodayTrades(const std::wstring& code);
-	// 保存今日成交（仅更新内存；持久化由调用方随后调用 SaveConfig 完成）
-	void SetTodayTrades(const std::wstring& code, const std::vector<TodayTradeEntry>& entries);
-	// 把弹窗多行文本解析为成交项：一行一笔「卖 1900 1.104 / 买 4600 0.660」，
-	// 兼容竖线「|」分隔与 S/B 英文方向。解析失败返回 false 并给出出错的行
-	static bool ParseTodayTradesText(const std::wstring& text, std::vector<TodayTradeEntry>& out, std::wstring& err_line);
-	// 成交项回显为多行文本（弹窗预填）
-	static std::wstring FormatTodayTradesText(const std::vector<TodayTradeEntry>& entries);
-	// 当日盈亏修正值：Σ卖出量×(卖价−昨收) + Σ买入量×(昨收−买价)。昨收<=0 时无基准，返回 0
-	// 这是“当日参考盈亏”相对 (现价−昨收)×持股数 公式缺失的部分，与现价无关、盘中恒定
+	// ── 交易台账（人工录入的建仓/加仓/减仓；当日盈亏修正与日K B/S 标记的数据源）──
+	// 读取该股票全部成交（时间升序）；内部按股票缓存，写操作后自动失效
+	std::vector<StockTradeRecord> GetStockTrades(const std::wstring& code);
+	// 新增一笔，成功返回新记录 id（0 表示失败）
+	long long AddStockTrade(const std::wstring& code, bool is_sell, const std::wstring& time,
+		double price, double amount, double fee = 0.0);
+	// 按 id 更新一笔
+	bool UpdateStockTrade(const std::wstring& code, const StockTradeRecord& record);
+	// 按 id 删除一笔
+	bool DeleteStockTrade(const std::wstring& code, long long id);
+	// 台账类型标签：按历史持仓推导 建仓/加仓/减仓/清仓（首笔买入=建仓，其后买入=加仓）
+	static std::wstring GetTradeKindLabel(const std::vector<StockTradeRecord>& trades, size_t index);
+	// 当日盈亏修正值：今日各笔 Σ卖出量×(卖价−昨收) + Σ买入量×(昨收−买价)。昨收<=0 时返回 0
+	// 该值与现价无关，盘中恒定；口径与券商「当日参考盈亏」一致（手续费不计）
 	double GetTodayTradeAdjust(const std::wstring& code, double prev_close);
-	// 还原昨收持股数：填写持股数 + 今日卖出量 − 今日买入量（无当日成交时即填写的持股数）
+	// 还原昨收持股数：填写持股数 + 今日卖出量 − 今日买入量（今日无成交时即填写的持股数）
 	// 用作“当日盈亏%”的分母（昨收市值），与券商口径一致
 	double GetYesterdayHoldCount(const std::wstring& code);
 
@@ -295,9 +288,8 @@ private:
 	// 持仓配置映射表: code -> (cost_price, holding_count, buy_date)
 	std::map<std::wstring, std::tuple<double, double, std::wstring>> m_stock_positions;
 
-	// 今日成交流水映射表: code -> (存储日期 yyyy-MM-dd, 成交项列表)
-	// 仅当日有效（Get/Set 均按日期校验），用于实时修正当日盈亏
-	std::map<std::wstring, std::pair<std::wstring, std::vector<TodayTradeEntry>>> m_stock_today_trades;
+	// 交易台账缓存: code -> 台账记录（惰性加载，写操作后失效重载）
+	std::map<std::wstring, std::vector<StockTradeRecord>> m_trade_cache;
 
 	// 状态栏展示映射表: code -> show_in_statusbar
 	std::map<std::wstring, bool> m_stock_statusbar;

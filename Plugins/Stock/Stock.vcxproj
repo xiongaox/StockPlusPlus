@@ -278,6 +278,7 @@
     <ClInclude Include="CallAuctionChart.h" />
     <ClInclude Include="ChipPeakPanel.h" />
     <ClInclude Include="EtfHoldingsPanel.h" />
+    <ClInclude Include="BsTradePanel.h" />
     <ClInclude Include="IndicatorChart.h" />
     <ClInclude Include="OrderBookPanel.h" />
     <ClInclude Include="OverviewPanel.h" />
@@ -319,6 +320,7 @@
     <ClCompile Include="CallAuctionChart.cpp" />
     <ClCompile Include="ChipPeakPanel.cpp" />
     <ClCompile Include="EtfHoldingsPanel.cpp" />
+    <ClCompile Include="BsTradePanel.cpp" />
     <ClCompile Include="IndicatorChart.cpp" />
     <ClCompile Include="OrderBookPanel.cpp" />
     <ClCompile Include="OverviewPanel.cpp" />

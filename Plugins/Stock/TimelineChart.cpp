@@ -12,6 +12,7 @@
 #include "Stock.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <set>
 
 // 时间标记结构体（供分时图绘制函数共用）
@@ -79,6 +80,33 @@ static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLef
 		memDC.LineTo(pointX + arrowHalf, pointY - dir * arrowLen);
 		memDC.SelectObject(pOldPen);
 	}
+}
+
+// 交易台账 B/S 标记：在给定横坐标与价格纵坐标处画「买」（红）/「卖」（绿）圆标。
+// isBuy 决定文案与配色；price 为标记价格（成交价，无成交价时传 0 由调用方回退到该 bar 高低点）。
+// 圆标画在 (x, y) 正上方，超界时自动翻到下方，与「买」标记原有风格保持一致。
+static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int chartBottom)
+{
+	const CString txt = isBuy ? _T("买") : _T("卖");
+	const COLORREF circleColor = isBuy ? COLOR_RED_UP : COLOR_GREEN_DOWN;
+	CSize txtSize = memDC.GetTextExtent(txt);
+	int circleRadius = max(txtSize.cx, txtSize.cy) / 2 + g_data.RDPI(1);
+
+	int circleY = y - g_data.RDPI(2) - circleRadius;
+	if (circleY - circleRadius < chartTop + g_data.RDPI(2))
+		circleY = y + g_data.RDPI(2) + circleRadius;  // 顶部放不下翻到下方
+
+	CPen circlePen(PS_SOLID, 1, circleColor);
+	CPen* pOldPen = memDC.SelectObject(&circlePen);
+	CBrush circleBrush(circleColor);
+	CBrush* pOldBrush = memDC.SelectObject(&circleBrush);
+	memDC.Ellipse(x - circleRadius, circleY - circleRadius, x + circleRadius, circleY + circleRadius);
+	memDC.SelectObject(pOldBrush);
+	memDC.SelectObject(pOldPen);
+
+	memDC.SetTextColor(RGB(255, 255, 255));
+	memDC.SetBkMode(TRANSPARENT);
+	memDC.TextOut(x - txtSize.cx / 2, circleY - txtSize.cy / 2, txt);
 }
 
 void CTimelineChart::DrawTimelineHeader(CDC& memDC, const TimelineDrawContext& ctx, const HoverState& hover)
@@ -975,6 +1003,52 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 			}
 		}
 	}
+
+	// 交易台账 B/S 标记：匹配可见数据点。
+	// 分时模式下数据点只有 HH:mm，只标注当日成交；趋势图（K线数据派生）fullTime 为完整日期，按日期匹配。
+	if (!hover.stockId.empty())
+	{
+		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
+		if (!trades.empty())
+		{
+			CTime now = CTime::GetCurrentTime();
+			std::wstring today;
+			{
+				CString t;
+				t.Format(_T("%04d-%02d-%02d"), now.GetYear(), now.GetMonth(), now.GetDay());
+				today = t.GetString();
+			}
+			for (const auto& rec : trades)
+			{
+				if (rec.time.size() < 16)
+					continue;
+				const std::wstring recDay = rec.time.substr(0, 10);
+				const std::wstring recTime = rec.time.substr(11, 5);
+				for (int i = 0; i < totalPoints; i++)
+				{
+					const auto& tp = timelinePoint[i];
+					// fullTime 为完整日期 = K线派生点（趋势图），按日期匹配；否则为当日分时点，按 HH:mm 匹配
+					bool matched = false;
+					if (tp.fullTime.size() >= 10)
+						matched = (tp.fullTime.compare(0, 10, CCommon::UnicodeToStr(recDay.c_str())) == 0);
+					else
+						matched = (recDay == today) && (CString(tp.time.c_str()) == CString(recTime.c_str()));
+					if (!matched)
+						continue;
+
+					STOCK::Price refPrice = rec.price > 0 ? rec.price : tp.price;
+					if (refPrice <= 0)
+						break;
+					float pointX = pointXAt(i);
+					float yVal = static_cast<float>((refPrice - minPrice) * unitY);
+					int anchorY = ctx.priceChartTop + ctx.priceChartHeight - static_cast<int>(yVal);
+					anchorY = max(ctx.priceChartTop, min(anchorY, ctx.priceChartTop + ctx.priceChartHeight));
+					DrawBsMarker(memDC, static_cast<int>(pointX), anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight);
+					break;
+				}
+			}
+		}
+	}
 }
 
 void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawContext& ctx, const HoverState& hover)
@@ -1497,6 +1571,33 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 		CBrush* pOldBrush = memDC.SelectObject(&brush);
 		memDC.Rectangle(leftX, bodyTop, leftX + barWidth, bodyBottom + 1);
 		memDC.SelectObject(pOldBrush);
+	}
+
+	// 交易台账 B/S 标记：按成交日期匹配可见 bar，买入标在最低价下方，卖出标在最高价上方
+	if (!hover.stockId.empty())
+	{
+		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
+		std::map<std::string, int> sameDaySeq;   // 同一交易日的第几笔，用于横向错开避免圆标重叠
+		for (const auto& rec : trades)
+		{
+			if (rec.time.size() < 10)
+				continue;
+			std::string tradeDay = CCommon::UnicodeToStr(rec.time.substr(0, 10).c_str());
+			for (int i = 0; i < totalPoints && (klineStartIdx + i) < klineEndIdx; i++)
+			{
+				const auto& kp = klineData[klineStartIdx + i];
+				if (kp.day != tradeDay)
+					continue;
+
+				int seq = sameDaySeq[tradeDay]++;
+				int centerX = static_cast<int>(ctx.chartWidth / static_cast<float>(totalPoints) * i)
+					+ static_cast<int>(barTotalWidth / 2) + (seq % 3 - 1) * g_data.RDPI(5);
+				// 标记锚定成交价：买入标在下方（避免遮住当日K线实体），卖出标在上方
+				int anchorY = rec.price > 0 ? priceToY(rec.price) : (rec.isSell ? priceToY(kp.high) : priceToY(kp.low));
+				DrawBsMarker(memDC, centerX, anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight);
+				break;
+			}
+		}
 	}
 
 	if (hover.showMA)

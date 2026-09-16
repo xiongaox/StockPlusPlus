@@ -936,14 +936,9 @@ public:
 	std::wstring m_full_code;
 	double m_cost_price{ 0.0 };
 	double m_holding_count{ 0.0 };
-	std::vector<TodayTradeEntry> m_today_trades;   // 今日成交（仅当日有效，跨天自动失效）
 
 	CEdit m_cost_edit;
 	CEdit m_count_edit;
-	CEdit m_trades_edit;        // 今日成交多行输入：一行一笔「方向 数量 价格」
-	int m_trades_y{ 0 };        // 今日成交框顶端（客户区像素，绘制时复用）
-	int m_trades_h{ 0 };        // 今日成交框高度
-	static constexpr int kTradesVisibleLines = 3;   // 今日成交框可见行数，决定滚动条何时出现
 	CButton m_btn_ok;
 	CButton m_btn_cancel;
 
@@ -968,8 +963,6 @@ public:
 		}
 		m_cost_price = g_data.GetCostPrice(fullCode);
 		m_holding_count = g_data.GetHoldingCount(fullCode);
-		// 预填今天已录入的成交：弹窗反复打开时数据都在，下午补一笔只需追加一行
-		m_today_trades = g_data.GetTodayTrades(fullCode);
 	}
 
 	INT_PTR DoModal(CWnd* pParent = nullptr)
@@ -986,14 +979,6 @@ public:
 
 		InitModalIndirect(pDlg, pParent);
 		return CDialog::DoModal();
-	}
-
-	// 今日成交框的滚动条按行数显隐：内容不超过可见行数时不挂一条空滚动条
-	void UpdateTradesScrollBar()
-	{
-		if (!m_trades_edit.GetSafeHwnd())
-			return;
-		m_trades_edit.ShowScrollBar(SB_VERT, m_trades_edit.GetLineCount() > kTradesVisibleLines);
 	}
 
 	virtual BOOL OnInitDialog() override
@@ -1025,24 +1010,8 @@ public:
 		int editInnerLeft = editBorderLeft + g_data.DPI(6);
 		int editInnerRight = cr.right - marginX - g_data.DPI(6);
 
-		// 今日成交多行框：固定三行可见高度，超出后框内滚动；
-		// 滚动条不常显（由 UpdateTradesScrollBar 按行数显隐），主题用 DarkMode_Explorer 保证滚动条也是深色
+		// 持股数输入框
 		int countY = costY + editH + g_data.DPI(12);
-		m_trades_y = countY + editH + g_data.DPI(12);
-		m_trades_h = editBoxH * kTradesVisibleLines + editOffset * 2;
-
-		// 模板高度是按两行输入设计的，加了成交流水后按内容补高（含框下方一行格式提示）；
-		// 底部按钮坐标由客户区底边推导，会自动跟随，无需另行调整
-		const int tradesHintH = g_data.DPI(16);
-		const int neededClientH = m_trades_y + m_trades_h + g_data.DPI(8) + tradesHintH + g_data.DPI(14) + editH + g_data.DPI(12);
-		if (cr.Height() < neededClientH)
-		{
-			CRect wr;
-			GetWindowRect(&wr);
-			SetWindowPos(nullptr, 0, 0, wr.Width(), wr.Height() + (neededClientH - cr.Height()),
-				SWP_NOMOVE | SWP_NOZORDER);
-			GetClientRect(&cr);
-		}
 
 		m_cost_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
 			CRect(editInnerLeft, costY + editOffset, editInnerRight, costY + editOffset + editBoxH), this, 1001);
@@ -1070,17 +1039,6 @@ public:
 			m_count_edit.SetWindowText(s);
 		}
 		m_count_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"输入持股数量");
-
-		// 今日成交多行输入：一行一笔「卖 1900 1.104」，回显今天已录入的流水（格式提示画在框下方）
-		m_trades_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_LEFT |
-			ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
-			CRect(editInnerLeft, m_trades_y + editOffset, editInnerRight, m_trades_y + m_trades_h - editOffset), this, 1003);
-		m_trades_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
-		::SetWindowTheme(m_trades_edit.GetSafeHwnd(), L"DarkMode_Explorer", nullptr);
-		m_trades_edit.SetFont(&m_font);
-		if (!m_today_trades.empty())
-			m_trades_edit.SetWindowText(CDataManager::FormatTodayTradesText(m_today_trades).c_str());
-		UpdateTradesScrollBar();
 
 		// 底部按钮
 		int btnW = g_data.DPI(70);
@@ -1120,11 +1078,6 @@ public:
 			if (wNotifyCode == EN_SETFOCUS || wNotifyCode == EN_KILLFOCUS)
 			{
 				InvalidateRect(nullptr, FALSE);
-			}
-			else if (wNotifyCode == EN_CHANGE && (HWND)lParam == m_trades_edit.GetSafeHwnd())
-			{
-				// 打字或预填后按行数决定是否露出滚动条
-				UpdateTradesScrollBar();
 			}
 		}
 		else if (message == WM_CTLCOLORSTATIC)
@@ -1233,10 +1186,6 @@ public:
 			int countY = costY + g_data.DPI(26) + g_data.DPI(12);
 			g.DrawString(L"持股数 (股):", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(countY + g_data.DPI(5))), &labelBrush);
 
-			// 今日成交标签（与框内第一行文字对齐），框下方给一行格式提示
-			const int tradesBorderLeft = marginX + g_data.DPI(80);
-			g.DrawString(L"今日成交:", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(m_trades_y + g_data.DPI(5))), &labelBrush);
-
 			// Draw edit borders
 			auto drawEdit = [&](CWnd& edit, int y) {
 				if (!edit.GetSafeHwnd()) return;
@@ -1254,34 +1203,6 @@ public:
 			};
 			drawEdit(m_cost_edit, costY);
 			drawEdit(m_count_edit, countY);
-
-			// 今日成交多行框边框（比单行框高），以及框下方的格式提示
-			if (m_trades_edit.GetSafeHwnd())
-			{
-				CRect tradesRc(tradesBorderLeft, m_trades_y, rc.right - marginX, m_trades_y + m_trades_h);
-
-				Gdiplus::SolidBrush editBg(Gdiplus::Color(255, 13, 15, 21));
-				g.FillRectangle(&editBg, tradesRc.left, tradesRc.top, tradesRc.Width(), tradesRc.Height());
-
-				CWnd* pFocus = GetFocus();
-				bool focused = (pFocus && pFocus->GetSafeHwnd() == m_trades_edit.GetSafeHwnd());
-				Gdiplus::Pen pen(focused ? Gdiplus::Color(255, 37, 99, 235) : Gdiplus::Color(255, 52, 58, 72), 1.0f);
-				g.DrawRectangle(&pen, tradesRc.left, tradesRc.top, tradesRc.Width() - 1, tradesRc.Height() - 1);
-
-				// 格式提示：限制在内容区内绘制（Gdiplus 按点绘制不会自动裁剪，长文本会越出右边距），
-				// 万一字号/DPI 变化导致放不下，退化为省略号而不是溢出
-				Gdiplus::Font hintFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-				Gdiplus::SolidBrush hintBrush(Gdiplus::Color(255, 113, 122, 140));
-				Gdiplus::RectF hintRc(
-					static_cast<Gdiplus::REAL>(tradesBorderLeft),
-					static_cast<Gdiplus::REAL>(m_trades_y + m_trades_h + g_data.DPI(6)),
-					static_cast<Gdiplus::REAL>(max(0, rc.right - marginX - tradesBorderLeft)),
-					static_cast<Gdiplus::REAL>(g_data.DPI(14)));
-				Gdiplus::StringFormat hintFormat;
-				hintFormat.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
-				hintFormat.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
-				g.DrawString(L"每行一笔：卖 1900 1.104", -1, &hintFont, hintRc, &hintFormat, &hintBrush);
-			}
 
 			dc.BitBlt(0, 0, rc.Width(), rc.Height(), &memDC, 0, 0, SRCCOPY);
 			memDC.SelectObject(pOldBmp);
@@ -1306,22 +1227,6 @@ public:
 			m_count_edit.GetWindowText(strCount);
 			strCount.Trim();
 			m_holding_count = _ttof(strCount);
-		}
-		// 今日成交：逐行解析，只要有一行认不出来就提示并留在弹窗里，不静默丢数据
-		if (m_trades_edit.GetSafeHwnd())
-		{
-			CString strTrades;
-			m_trades_edit.GetWindowText(strTrades);
-			std::vector<TodayTradeEntry> entries;
-			std::wstring err_line;
-			if (!CDataManager::ParseTodayTradesText(std::wstring(strTrades.GetString()), entries, err_line))
-			{
-				CString msg;
-				msg.Format(_T("今日成交这一行认不出来：%s\n\n请按「卖 1900 1.104」一行一笔填写（方向 数量 成交价），没有成交就留空"), err_line.c_str());
-				AfxMessageBox(msg);
-				return;
-			}
-			m_today_trades = entries;
 		}
 		CDialog::OnOK();
 	}
@@ -2265,7 +2170,6 @@ BOOL CManagerDialog::OnInitDialog()
 			if (dlg.DoModal(this) == IDOK)
 			{
 				g_data.SetPosition(stock.fullCode, dlg.m_cost_price, dlg.m_holding_count);
-				g_data.SetTodayTrades(stock.fullCode, dlg.m_today_trades);
 				if (std::find(m_data.m_position_codes.begin(), m_data.m_position_codes.end(), stock.fullCode) == m_data.m_position_codes.end())
 					m_data.m_position_codes.push_back(stock.fullCode);
 				g_data.m_setting_data.m_stock_codes = m_data.m_stock_codes;
@@ -4948,7 +4852,9 @@ namespace
 	};
 
 	const wchar_t* kItems_0916_v208[] = {
-		L"•  【新增】 持仓编辑弹窗新增「今日成交」录入（一行一笔「卖 1900 1.104」，仅当日有效、隔日自动清空）：做T/减仓当天把买卖部分相对昨收的差价补进当日盈亏，金额与百分比口径均对齐券商「当日参考盈亏」（百分比分母按今日成交还原昨收持股），修正做T或减仓后当日盈亏对不上的问题",
+		L"•  【新增】 悬浮窗新增「BS」交易台账：筹码峰/盘口/ETF持仓按钮左侧一格，四选互斥；面板按时间升序列出该股全部成交流水（序号/时间/类型/数量/价格），底部固定汇总买卖笔数与股数；双击行弹出暗色弹窗编辑或删除，双击空白处新增，改完即时写库",
+		L"•  【新增】 日K与分时图新增 B/S 成交标记（买红卖绿圆标，锚定成交价），做T/减仓的买卖点直接画在K线上，一眼看出成本变化",
+		L"•  【优化】 成交记录改存数据库 trades 表（按股票缓存、写后自动失效），替代原先 ini 手填的「今日成交」文本框：支持任意日期回填历史建仓/加仓/减仓/清仓，当日盈亏修正与日K标记共用同一份台账",
 		L"•  【优化】 关于页更新日志抽取统一排版/量高函数，页面滚动高度按日志实际内容自然高度计算，日志条目变多后不再被页面底部截断",
 		L"•  【新增】 K线族视图（日K/周K/月K）新增「区域」统计：周期行竞价按钮左侧新增区域开关，拖动框选后显示同花顺式区间卡片（区间涨幅/最高/最低/振幅 + 起止日期条 + ✕ 清除），左右边界手柄可逐柱微调；图表仍可平移，选区锚定柱子不随缩放/滚动丢失",
 		L"•  【修复】 修复运行中偶发闪退：崩溃点位于 SQLite 解析器，根因是 sqlite3 以 SQLITE_THREADSAFE=0 编译（内部无锁）而数据库连接被界面线程与后台抓取线程并发使用，现为数据库层全部方法加递归锁串行化访问",
@@ -6154,7 +6060,6 @@ void CManagerDialog::OnLbnDblclkPosList(NMHDR* pNMHDR, LRESULT* pResult)
 			if (dlg.DoModal(this) == IDOK)
 			{
 				g_data.SetPosition(code, dlg.m_cost_price, dlg.m_holding_count);
-				g_data.SetTodayTrades(code, dlg.m_today_trades);
 				g_data.m_setting_data.m_position_codes = m_data.m_position_codes;
 				g_data.SaveConfig();
 				RefreshPositionList();
@@ -6243,7 +6148,6 @@ void CManagerDialog::OnAddBtnClick()
 			if (dlg.DoModal(this) == IDOK)
 			{
 				g_data.SetPosition(code, dlg.m_cost_price, dlg.m_holding_count);
-				g_data.SetTodayTrades(code, dlg.m_today_trades);
 				if (std::find(m_data.m_position_codes.begin(), m_data.m_position_codes.end(), code) == m_data.m_position_codes.end())
 					m_data.m_position_codes.push_back(code);
 				g_data.m_setting_data.m_position_codes = m_data.m_position_codes;

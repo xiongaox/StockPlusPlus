@@ -13,6 +13,7 @@
 #include "CallAuctionChart.h"
 #include "ChipPeakPanel.h"
 #include "EtfHoldingsPanel.h"
+#include "BsTradePanel.h"
 #include "OrderBookPanel.h"
 #include "OverviewPanel.h"
 #include "IndicatorChart.h"
@@ -65,9 +66,10 @@ public:
 		int mcTreemapMode{ 0 };           // 树图模式：0=红绿 1=仅流入 2=仅流出
 		// K线首页（图表）状态
 		int viewMode{ 3 };                // UIViewMode（0=总览 1=竞价 2=分时 3=日K 4=周K 5=月K）
-		bool showChipPeak{ false };       // 右侧面板三选（互斥）：筹码峰
-		bool showOrderBook{ false };      // 右侧面板三选（互斥）：盘口
-		bool showEtfHoldings{ false };    // 右侧面板三选（互斥）：ETF持仓（CC）
+		bool showChipPeak{ false };       // 右侧面板四选（互斥）：筹码峰
+		bool showOrderBook{ false };      // 右侧面板四选（互斥）：盘口
+		bool showEtfHoldings{ false };    // 右侧面板四选（互斥）：ETF持仓（CC）
+		bool showBsTrades{ false };       // 右侧面板四选（互斥）：交易台账（BS）
 		bool showMA{ false };             // 均线开关
 		bool showBollBands{ true };       // 布林带开关
 		int timelineIndicator{ 0 };       // 分时副图指标（TimelineIndicator）
@@ -124,6 +126,7 @@ protected:
 	afx_msg void OnBnClickedChipPeakBtn();
 	afx_msg void OnBnClickedOrderBookBtn();
 	afx_msg void OnBnClickedEtfHoldingsBtn();
+	afx_msg void OnBnClickedBsTradesBtn();
 	afx_msg void OnBnClickedExpandBtn();
 	afx_msg void OnBnClickedToggleStockListBtn();
 	afx_msg void OnBnClickedSettingsBtn();
@@ -179,6 +182,7 @@ private:
 	CCallAuctionChart m_callAuctionChart;
 	CChipPeakPanel m_chipPeakPanel;
 	CEtfHoldingsPanel m_etfHoldingsPanel;
+	CBsTradePanel m_bsTradePanel;
 	COrderBookPanel m_orderBookPanel;
 	COverviewPanel m_overviewPanel;
 	CIndicatorChart m_indicatorChart;
@@ -207,6 +211,7 @@ private:
 	CButton m_btnChipPeak;       // 筹码峰按钮
 	CButton m_btnOrderBook;      // 盘口按钮（与筹码峰按钮切换）
 	CButton m_btnEtfHoldings;    // ETF持仓按钮（CC）
+	CButton m_btnBsTrades;       // 交易台账按钮（BS）
 	CFont m_chipPeakFont;        // 筹码峰按钮小字体
 	std::wstring m_stock_id;
 	std::wstring m_mc_return_stock_id;  // 非空 = 正在临时查看行情中心 ETF 的 K 线，值为跳转前股票 id
@@ -296,6 +301,17 @@ private:
 	bool m_isEtfHoldingsDragMoved{ false }; // ETF持仓列表拖动是否产生了位移
 	CPoint m_etfHoldingsDragStartPos;       // ETF持仓列表拖动起点
 	int m_etfHoldingsDragStartOffset{ 0 };  // ETF持仓列表拖动起始偏移
+	bool m_showBsTrades{ false };           // 是否显示右侧 BS 交易台账面板
+	int m_bsScrollOffset{ 0 };              // BS台账列表垂直滚动偏移
+	int m_bsSelectedRow{ -1 };              // BS台账选中行（点击行高亮，-1 无）
+	bool m_isBsDragging{ false };           // BS台账列表是否正在拖动
+	bool m_isBsDragMoved{ false };          // BS台账拖动是否产生了位移
+	CPoint m_bsDragStartPos;                // BS台账拖动起点
+	int m_bsDragStartOffset{ 0 };           // BS台账拖动起始偏移
+	// BS 行双击检测（窗口无 CS_DBLCLKS，双击表现为同位置两次 WM_LBUTTONDOWN）
+	DWORD m_bsLastClickTick{ 0 };           // 上次 BS 行点击时刻
+	CPoint m_bsLastClickPos;                // 上次 BS 行点击位置
+	int m_bsLastClickRow{ -1 };             // 上次 BS 行点击行号（-1 空白区）
 	bool m_expandedMode{ false };  // 放大模式：隐藏副图，走势图3/4+成交量1/4
 	bool m_showStockList{ true };  // 是否显示左侧股票列表面板
 	bool m_showPositionSummaryPercent{ false };  // 持仓汇总栏是否显示盈亏百分比
