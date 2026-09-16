@@ -2373,6 +2373,123 @@ void CFloatingWnd::ToggleMarketCenter()
 	Invalidate();
 }
 
+CFloatingWnd::UiState CFloatingWnd::CaptureUiState() const
+{
+	UiState st;
+	st.marketCenterMode = m_marketCenterMode;
+	st.settingsMode = m_settingsMode;
+	const CMarketCenterPanel::BrowseSnapshot browse = m_marketCenterPanel.CaptureBrowseState();
+	st.mcPage = browse.page;
+	st.mcSectorViewMode = browse.sectorViewMode;
+	st.mcTreemapMode = browse.treemapMode;
+
+	// K线首页（图表）状态
+	st.viewMode = static_cast<int>(m_viewMode);
+	// 右侧面板三选互斥，快照保持互斥（ETF持仓 > 盘口 > 筹码峰，正常按钮逻辑下三者本就不会同真）
+	st.showEtfHoldings = m_showEtfHoldings;
+	st.showOrderBook = m_showOrderBook && !m_showEtfHoldings;
+	st.showChipPeak = m_showChipPeak && !m_showEtfHoldings && !st.showOrderBook;
+	st.showMA = m_showMA;
+	st.showBollBands = m_showBollBands;
+	st.timelineIndicator = static_cast<int>(m_timelineIndicator);
+	st.expandedMode = m_expandedMode;
+	st.showStockList = m_showStockList;
+	st.activeGroupTab = m_activeGroupTab;
+	st.groupListSort = m_groupListSort;
+	st.showPositionSummaryPercent = m_showPositionSummaryPercent;
+	st.showJZCurve = m_showJZCurve;
+	return st;
+}
+
+// 按快照恢复首页图表视图状态（须在 Create 完成、按钮建好后调用）：
+// 先走标准模式进入分支（重置指标/面板默认并确保数据），再覆盖快照里的离散状态
+void CFloatingWnd::ApplyChartViewState(const UiState& st)
+{
+	const int vm = min(max(st.viewMode, static_cast<int>(UI_VIEW_OVERVIEW)), static_cast<int>(UI_VIEW_MONTH_KLINE));
+	switch (vm)
+	{
+	case UI_VIEW_AUCTION:
+		// 复刻竞价按钮进入分支的副作用（竞价无独立 Set 默认函数）
+		if (m_viewMode != UI_VIEW_AUCTION)
+		{
+			m_viewMode = UI_VIEW_AUCTION;
+			m_showTrendView = false;
+			m_showChipPeak = false;
+			m_timelineScrollOffset = -1;
+			m_timelineVisibleCount = TIME_LINE_VISIBLE_COUNT_1MIN;
+			ResetHoverState();
+			m_timelinePriceTitleTip.Empty();
+		}
+		break;
+	case UI_VIEW_TIMELINE:
+		SetTimelineModeDefaults();
+		break;
+	case UI_VIEW_DAY_KLINE:
+		SetDayKLineModeDefaults();
+		break;
+	case UI_VIEW_WEEK_KLINE:
+		SetWeekKLineModeDefaults();
+		break;
+	case UI_VIEW_MONTH_KLINE:
+		SetMonthKLineModeDefaults();
+		break;
+	default:
+		break;   // OVERVIEW 无进入分支（未再使用），回落保持当前模式
+	}
+
+	// 右侧面板三选（互斥；快照已保证互斥，恢复即覆盖）
+	m_showChipPeak = st.showChipPeak;
+	m_showOrderBook = st.showOrderBook && !st.showEtfHoldings;
+	m_showEtfHoldings = st.showEtfHoldings;
+	if (m_showChipPeak)
+		EnsureChipPeakData();
+	if (m_showEtfHoldings)
+		EnsureEtfHoldingsData();
+
+	// 指标/曲线覆盖模式默认
+	m_showMA = st.showMA;
+	m_showBollBands = st.showBollBands;
+	m_timelineIndicator = static_cast<TimelineIndicator>(min(max(st.timelineIndicator, 0),
+		static_cast<int>(TimelineIndicator::RSI)));
+	m_showJZCurve = st.showJZCurve;
+
+	// 布局/列表覆盖
+	m_expandedMode = st.expandedMode;
+	m_showStockList = st.showStockList;
+	m_activeGroupTab = CStockListPanel::ClampGroupTab(st.activeGroupTab);
+	m_groupListSort = min(max(st.groupListSort, 0), 2);
+	m_showPositionSummaryPercent = st.showPositionSummaryPercent;
+
+	UpdateModeButtons();
+	UpdateIndicatorButtons();
+	UpdatePeriodComboVisibility();
+	if (m_showStockList)
+		EnsureStockListVisible();
+	Invalidate();
+}
+
+void CFloatingWnd::RestoreUiState(const UiState& st)
+{
+	// 先恢复首页图表视图状态（行情中心/设置退出后回到的就是这个状态）
+	ApplyChartViewState(st);
+
+	// 行情中心：先还原面板页签/子视图，再走标准进入分支（隐藏图表按钮、绑定通知窗口并按当前页拉数）
+	if (st.marketCenterMode && !m_marketCenterMode)
+	{
+		CMarketCenterPanel::BrowseSnapshot browse;
+		browse.page = st.mcPage;
+		browse.sectorViewMode = st.mcSectorViewMode;
+		browse.treemapMode = st.mcTreemapMode;
+		m_marketCenterPanel.RestoreBrowseState(browse);
+		ToggleMarketCenter();
+	}
+	// 内嵌设置视图：与行情中心互斥，按保存状态原地重建
+	else if (st.settingsMode && !m_settingsMode)
+	{
+		ToggleSettingsView();
+	}
+}
+
 void CFloatingWnd::HideChartButtons(bool hide)
 {
 	// 行情中心视图下隐藏图表视图专属按钮，避免串进行情中心界面
@@ -4184,11 +4301,15 @@ void CFloatingWnd::OnBnClickedCloseBtn()
 
 LRESULT CFloatingWnd::OnCloseWindow(WPARAM wParam, LPARAM lParam)
 {
+	UNREFERENCED_PARAMETER(wParam);
+	UNREFERENCED_PARAMETER(lParam);
 	if (GetSafeHwnd())
 	{
 		SetForegroundWindow();
-		DestroyWindow();
-	}
+		// 统一经由 Stock 入口销毁：内含界面状态捕获与暂存，并同步清理 Stock 中的悬浮窗指针；
+		// 直接 DestroyWindow 会绕过状态捕获（重开无法恢复浏览状态）且指针悬挂
+		Stock::Instance().DestroyFloatingWnd();
+		}
 	return 0;
 }
 

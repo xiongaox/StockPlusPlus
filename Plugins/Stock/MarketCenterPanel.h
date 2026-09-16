@@ -44,6 +44,16 @@ public:
 	// 快照下标转 ETF 六位代码（越界返回空串；供悬浮窗处理 WM_MC_ETF_CLICKED）
 	std::wstring EtfCodeAt(int idx) const;
 
+	// 浏览状态快照：悬浮窗隐藏销毁前暂存，重建后恢复“当前状态”（页签/子视图）
+	struct BrowseSnapshot
+	{
+		int page{ 0 };             // McPage 枚举值
+		int sectorViewMode{ 0 };   // 0=资金树图 1=时间走向
+		int treemapMode{ 0 };      // 0=全部红绿 1=仅流入 2=仅流出
+	};
+	BrowseSnapshot CaptureBrowseState() const;
+	void RestoreBrowseState(const BrowseSnapshot& st);
+
 private:
 	// ===== 页面枚举（与侧栏菜单一一对应）=====
 	enum McPage
@@ -163,8 +173,12 @@ private:
 	int m_selected_sector{ -1 };
 	int m_hover_bubble{ -1 };
 	CRect m_bubble_stat_rects[2];   // 流入/流出合计卡片（点击切换树图单色视图）
+	CRect m_bubble_sector_rects[2]; // 最强/最弱板块卡片热区（0=最强 1=最弱，点击选中板块）
 	int m_treemap_mode{ 0 };        // 0=全部红绿 1=仅流入 2=仅流出
 	int m_hover_bubble_stat{ -1 };
+	int m_hover_sector_card{ -1 };  // 悬停中的最强/最弱板块卡片
+	int m_bubble_max_sector{ -1 };  // 最新快照的最强板块下标（点击卡片时取用）
+	int m_bubble_min_sector{ -1 };  // 最新快照的最弱板块下标
 	int m_sector_view_mode{ 0 };    // 0=资金树图, 1=时间走向图
 	CRect m_sector_tab_rects[2];    // 切换按钮 [资金树图] [时间走向]
 	int m_hover_sector_tab{ -1 };

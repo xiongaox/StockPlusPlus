@@ -342,6 +342,7 @@ void CMarketCenterPanel::SwitchPage(McPage page)
 	m_hover_inflow_bar = -1;
 	m_treemap_mode = 0;   // 离开页面恢复红绿全部视图
 	m_hover_bubble_stat = -1;
+	m_hover_sector_card = -1;
 	m_hover_sector_tab = -1;
 	m_hover_timeline_idx = -1;
 	m_hover_timeline_sector = -1;
@@ -352,6 +353,20 @@ void CMarketCenterPanel::SwitchPage(McPage page)
 	// 切页后拉取该页数据（懒加载；数据到达由悬浮窗 WM_MC_DATA_UPDATED 触发重绘）
 	RequestData();
 	// 重绘由悬浮窗在 HandleLButtonDown 后 Invalidate 完成
+}
+
+CMarketCenterPanel::BrowseSnapshot CMarketCenterPanel::CaptureBrowseState() const
+{
+	return { static_cast<int>(m_page), m_sector_view_mode, m_treemap_mode };
+}
+
+void CMarketCenterPanel::RestoreBrowseState(const BrowseSnapshot& st)
+{
+	// 页签与子视图模式越界时回落默认，防御暂存值异常导致非法枚举
+	int page = min(max(st.page, static_cast<int>(PAGE_BUBBLE)), static_cast<int>(PAGE_COUNT) - 1);
+	m_page = static_cast<McPage>(page);
+	m_sector_view_mode = (st.sectorViewMode == 1) ? 1 : 0;
+	m_treemap_mode = (st.treemapMode >= 0 && st.treemapMode <= 2) ? st.treemapMode : 0;
 }
 
 std::wstring CMarketCenterPanel::EtfCodeAt(int idx) const
@@ -734,6 +749,8 @@ void CMarketCenterPanel::DrawBubblePage(Gdiplus::Graphics& g, const CRect& rc)
 	}
 	if (m_selected_sector < 0)
 		m_selected_sector = maxIdx;
+	m_bubble_max_sector = maxIdx;
+	m_bubble_min_sector = minIdx;
 
 	CRect statsRc(rc.left + g_data.DPI(16), rc.top + g_data.DPI(16), rc.right - g_data.DPI(16), rc.top + g_data.DPI(16) + g_data.DPI(50));
 	FillCard(g, statsRc);
@@ -770,9 +787,45 @@ void CMarketCenterPanel::DrawBubblePage(Gdiplus::Graphics& g, const CRect& rc)
 					Gdiplus::REAL(cell.Width()), Gdiplus::REAL(cell.Height()));
 			}
 		}
+		else
+		{
+			// 最强/最弱板块卡片：悬停提亮（点击选中对应板块）
+			m_bubble_sector_rects[i - 2] = cell;
+			if (m_hover_sector_card == i - 2)
+			{
+				Gdiplus::SolidBrush hovBrush(Gdi(MC_TEXT, 14));
+				g.FillRectangle(&hovBrush, Gdiplus::REAL(cell.left), Gdiplus::REAL(cell.top),
+					Gdiplus::REAL(cell.Width()), Gdiplus::REAL(cell.Height()));
+			}
+		}
 		DrawStrMid(g, cells[i].label, f11.get(), CRect(cell.left, cell.top + g_data.DPI(6), cell.right, cell.top + g_data.DPI(21)),
-			statActive || (i < 2 && m_hover_bubble_stat == i) ? MC_TEXT : MC_TEXT_SUB);
-		DrawStrMid(g, cells[i].value, f15b.get(), CRect(cell.left, cell.top + g_data.DPI(21), cell.right, cell.bottom - g_data.DPI(4)), cells[i].color);
+			statActive || (i < 2 && m_hover_bubble_stat == i) || (i >= 2 && m_hover_sector_card == i - 2) ? MC_TEXT : MC_TEXT_SUB);
+		if (i < 2)
+		{
+			DrawStrMid(g, cells[i].value, f15b.get(), CRect(cell.left, cell.top + g_data.DPI(21), cell.right, cell.bottom - g_data.DPI(4)), cells[i].color);
+		}
+		else
+		{
+			// 名称超宽时单行省略截断（溢出隐藏），资金额右对齐固定不被截断
+			const auto& sec = m_sectors_snapshot[static_cast<size_t>((i == 2) ? maxIdx : minIdx)];
+			std::wstring name = sec.name;
+			std::wstring flowTxt = FormatYi(sec.flow);
+			CRect valRc(cell.left + g_data.DPI(4), cell.top + g_data.DPI(21), cell.right - g_data.DPI(4), cell.bottom - g_data.DPI(4));
+			CSize nameSz = MeasureStr(g, f15b.get(), name);
+			CSize flowSz = MeasureStr(g, f15b.get(), flowTxt);
+			if (nameSz.cx + g_data.DPI(6) + flowSz.cx <= valRc.Width())
+			{
+				DrawStrSingle(g, name + L"  " + flowTxt, f15b.get(), valRc, cells[i].color);
+			}
+			else
+			{
+				CRect flowRc(max(valRc.left, valRc.right - flowSz.cx), valRc.top, valRc.right, valRc.bottom);
+				CRect nameRc(valRc.left, valRc.top, flowRc.left - g_data.DPI(3), valRc.bottom);
+				if (nameRc.Width() > g_data.DPI(8))
+					DrawStrSingle(g, name, f15b.get(), nameRc, cells[i].color, 255, Gdiplus::StringAlignmentNear);
+				DrawStrSingle(g, flowTxt, f15b.get(), flowRc, cells[i].color, 255, Gdiplus::StringAlignmentFar);
+			}
+		}
 	}
 
 	// 主区域：矩形树图 + 右侧详情
@@ -2539,6 +2592,21 @@ bool CMarketCenterPanel::HandleMouseMove(CPoint point)
 				changed = true;
 			}
 
+			int hovSectorCard = -1;
+			for (int i = 0; i < 2; i++)
+			{
+				if (!m_bubble_sector_rects[i].IsRectEmpty() && m_bubble_sector_rects[i].PtInRect(point))
+				{
+					hovSectorCard = i;
+					break;
+				}
+			}
+			if (hovSectorCard != m_hover_sector_card)
+			{
+				m_hover_sector_card = hovSectorCard;
+				changed = true;
+			}
+
 			int hovTab = -1;
 			for (int i = 0; i < 2; i++)
 			{
@@ -2826,6 +2894,24 @@ void CMarketCenterPanel::HandleLButtonDown(CPoint point)
 			}
 		}
 
+		// 点击最强/最弱板块卡片 → 选中该板块（树图高亮 + 右侧详情联动）
+		for (int i = 0; i < 2; i++)
+		{
+			if (!m_bubble_sector_rects[i].IsRectEmpty() && m_bubble_sector_rects[i].PtInRect(point))
+			{
+				int secIdx = (i == 0) ? m_bubble_max_sector : m_bubble_min_sector;
+				if (secIdx >= 0 && secIdx < static_cast<int>(m_sectors_snapshot.size()))
+					m_selected_sector = secIdx;
+				// 单色视图只铺一组，可能看不到点击的目标板块，恢复红绿全部
+				if (m_treemap_mode != 0)
+				{
+					m_treemap_mode = 0;
+					m_bubble_layout_dirty = true;
+				}
+				return;
+			}
+		}
+
 		if (m_sector_view_mode == 0)
 		{
 			for (const auto& cellNode : m_treemap_cells)
@@ -3036,6 +3122,9 @@ bool CMarketCenterPanel::IsCursorOverInteractive(CPoint point) const
 		case PAGE_BUBBLE:
 			for (int i = 0; i < 2; i++)
 				if (!m_bubble_stat_rects[i].IsRectEmpty() && m_bubble_stat_rects[i].PtInRect(point)) { hand = true; break; }
+			if (!hand)
+				for (int i = 0; i < 2; i++)
+					if (!m_bubble_sector_rects[i].IsRectEmpty() && m_bubble_sector_rects[i].PtInRect(point)) { hand = true; break; }
 			if (!hand)
 				for (int i = 0; i < 2; i++)
 					if (!m_sector_tab_rects[i].IsRectEmpty() && m_sector_tab_rects[i].PtInRect(point)) { hand = true; break; }

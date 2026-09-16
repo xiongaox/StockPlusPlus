@@ -1216,30 +1216,14 @@ static std::vector<STOCK::TimelinePoint> FilterValidNavPoints(const std::vector<
 
 std::vector<STOCK::TimelinePoint> CStockDbManager::LoadLatestFundNavCache(const std::wstring& stockCode)
 {
+	// 只返回“今天”（当前交易日）的净值缓存；
+	// 历史交易日缓存以相同 HH:MM 时间戳落在今日分时轴上会造成巨大错位落差
+	// （净值是绝对价格，历史日的水平与今天不可比），因此不再回退加载最近交易日
 	std::string tradeDate = GetTodayDateString();
 	auto points = LoadFundNavCache(stockCode, tradeDate);
-	if (!points.empty()) return FilterValidNavPoints(points);
-
-	// 今天没有缓存时，回退加载最近交易日的基金净值
-	if (m_db == nullptr) return points;
-
-	const char* fallbackSql = "SELECT time, nav FROM fund_nav_cache WHERE stock_code = ? AND trade_date = (SELECT trade_date FROM fund_nav_cache WHERE stock_code = ? ORDER BY trade_date DESC LIMIT 1) ORDER BY time ASC;";
-	sqlite3_stmt* stmt = nullptr;
-	if (sqlite3_prepare_v2(m_db, fallbackSql, -1, &stmt, nullptr) != SQLITE_OK) return points;
-	sqlite3_bind_text16(stmt, 1, stockCode.c_str(), -1, SQLITE_TRANSIENT);
-	sqlite3_bind_text16(stmt, 2, stockCode.c_str(), -1, SQLITE_TRANSIENT);
-
-	std::vector<STOCK::TimelinePoint> rawPoints;
-	while (sqlite3_step(stmt) == SQLITE_ROW)
-	{
-		STOCK::TimelinePoint point;
-		const unsigned char* timeText = sqlite3_column_text(stmt, 0);
-		point.time = timeText ? reinterpret_cast<const char*>(timeText) : "";
-		point.iopv = sqlite3_column_double(stmt, 1);
-		rawPoints.push_back(point);
-	}
-	sqlite3_finalize(stmt);
-	return FilterValidNavPoints(rawPoints);
+	if (!points.empty())
+		return FilterValidNavPoints(points);
+	return points;
 }
 
 bool CStockDbManager::SaveTransactions(const std::wstring& stockCode,

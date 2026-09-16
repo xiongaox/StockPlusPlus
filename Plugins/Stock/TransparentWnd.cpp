@@ -37,8 +37,12 @@ void CTransparentWnd::OnLButtonDown(UINT nFlags, CPoint point)
 		if (!rcFloat.PtInRect(ptScreen))
 		{
 			TRACE(L"Destroying floating window\n");
-			DestroyWindow();
+			// 必须先经 Stock::DestroyFloatingWnd 销毁悬浮窗（内含界面状态捕获与对象释放），
+			// 再销毁透明捕获窗。悬浮窗是本透明窗的（owned）子窗：若先 DestroyWindow 透明窗，
+			// 悬浮窗会被级联销毁，届时 Stock::DestroyFloatingWnd 因窗口已不存在而跳过捕获，
+			// 重开悬浮窗便无法恢复浏览状态（行情中心/页签等）
 			Stock::Instance().DestroyFloatingWnd();
+			DestroyWindow();
 		}
 		else
 		{
