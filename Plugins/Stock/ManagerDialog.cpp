@@ -1268,10 +1268,19 @@ public:
 				Gdiplus::Pen pen(focused ? Gdiplus::Color(255, 37, 99, 235) : Gdiplus::Color(255, 52, 58, 72), 1.0f);
 				g.DrawRectangle(&pen, tradesRc.left, tradesRc.top, tradesRc.Width() - 1, tradesRc.Height() - 1);
 
+				// 格式提示：限制在内容区内绘制（Gdiplus 按点绘制不会自动裁剪，长文本会越出右边距），
+				// 万一字号/DPI 变化导致放不下，退化为省略号而不是溢出
 				Gdiplus::Font hintFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 				Gdiplus::SolidBrush hintBrush(Gdiplus::Color(255, 113, 122, 140));
-				g.DrawString(L"每行一笔「卖 1900 1.104」，隔日自动清空", -1, &hintFont,
-					Gdiplus::PointF(static_cast<Gdiplus::REAL>(tradesBorderLeft), static_cast<Gdiplus::REAL>(m_trades_y + m_trades_h + g_data.DPI(6))), &hintBrush);
+				Gdiplus::RectF hintRc(
+					static_cast<Gdiplus::REAL>(tradesBorderLeft),
+					static_cast<Gdiplus::REAL>(m_trades_y + m_trades_h + g_data.DPI(6)),
+					static_cast<Gdiplus::REAL>(max(0, rc.right - marginX - tradesBorderLeft)),
+					static_cast<Gdiplus::REAL>(g_data.DPI(14)));
+				Gdiplus::StringFormat hintFormat;
+				hintFormat.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+				hintFormat.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+				g.DrawString(L"每行一笔：卖 1900 1.104", -1, &hintFont, hintRc, &hintFormat, &hintBrush);
 			}
 
 			dc.BitBlt(0, 0, rc.Width(), rc.Height(), &memDC, 0, 0, SRCCOPY);
