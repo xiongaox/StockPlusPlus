@@ -126,6 +126,10 @@ public:
 	MC::UpDownDist m_dist;                              // 最新涨跌分布
 	double m_turnover_today{ 0.0 };                      // 沪深京今日合计成交额(元)
 	double m_turnover_yesterday{ 0.0 };                  // 沪深京昨日合计成交额(元)
+	double m_turnover_avg60{ 0.0 };                      // 近60个已完成交易日日均成交额(元)
+	std::vector<double> m_turnover_yday_curve;           // 前一交易日分时累计成交额(元)，下标=时间轴槽号；size==时间轴长度时有效
+	std::wstring m_turnover_yday_date;                   // 分时曲线覆盖的交易日(如"2026-09-15")
+	int m_turnover_slot{ -1 };                           // 今日累计额覆盖的最后时间轴槽号（与曲线同槽对齐比较）
 	std::vector<MC::TrendSample> m_trend_curve;         // 涨跌家数分时（自积累）
 	std::vector<MC::EtfFlowSample> m_etf_flow_curve;    // ETF累计净流入分时（自积累）
 
