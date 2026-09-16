@@ -724,8 +724,14 @@ void CFloatingWnd::OnPaint()
 						}
 						if (stockData->info.prevClosePrice > 0)
 						{
-							totalPreviousCloseValue += stockData->info.prevClosePrice * holdingCount;
-							todayProfitLoss += (currentPrice - stockData->info.prevClosePrice) * holdingCount;
+							const double prevClose = stockData->info.prevClosePrice;
+							// “当日盈亏%”的分母用昨收持股市值：当天有买卖时，填写的持股数已减去卖出量，
+							// 需按今日成交还原回昨收持股（无成交时与填写的持股数一致），与券商口径对齐
+							totalPreviousCloseValue += prevClose * g_data.GetYesterdayHoldCount(code);
+							// 叠加今日成交修正：卖出部分按“卖价−昨收”、买入部分按“昨收−买价”结算，
+							// 该修正与现价无关，因此盘中恒定，只有现价那一项随行情跳动
+							todayProfitLoss += (currentPrice - prevClose) * holdingCount
+								+ g_data.GetTodayTradeAdjust(code, prevClose);
 						}
 						if (code == m_stock_id && costPrice > 0)
 						{

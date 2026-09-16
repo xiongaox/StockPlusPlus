@@ -1,4 +1,4 @@
-#include "pch.h"
+#include "pch.h"
 #include "DataManager.h"
 #include "Common.h"
 #include "Stock.h"
@@ -25,6 +25,108 @@ static std::string GetLocalDateString(time_t t)
 static std::string GetTodayDateString()
 {
 	return GetLocalDateString(time(nullptr));
+}
+
+// ── 今日成交（当日手工成交流水）解析与序列化 ────────────────────────────
+// 当日日期串（宽字符版，与买入日期同格式），用于“今日成交”的跨天失效判断
+static std::wstring GetTodayDateStringW()
+{
+	CTime now = CTime::GetCurrentTime();
+	CString text;
+	text.Format(_T("%04d-%02d-%02d"), now.GetYear(), now.GetMonth(), now.GetDay());
+	return std::wstring(text.GetString());
+}
+
+// 解析正数（数量/价格）：要求整串皆为数字，避免把“1900股”这类脏输入当成有效值
+static bool ParseTodayTradeNumber(const std::wstring& text, double& value)
+{
+	if (text.empty())
+		return false;
+	wchar_t* end = nullptr;
+	const double parsed = wcstod(text.c_str(), &end);
+	if (end == text.c_str())
+		return false;
+	while (*end == L' ')
+		++end;
+	if (*end != L'\0')
+		return false;
+	value = parsed;
+	return true;
+}
+
+// 去掉首尾空白（含全角空格与回车），空行在解析时直接跳过
+static std::wstring TrimTodayTradeLine(const std::wstring& text)
+{
+	size_t begin = 0;
+	size_t end = text.size();
+	while (begin < end && (text[begin] == L' ' || text[begin] == L'\t' || text[begin] == L'\r' || text[begin] == L'　'))
+		++begin;
+	while (end > begin && (text[end - 1] == L' ' || text[end - 1] == L'\t' || text[end - 1] == L'\r' || text[end - 1] == L'　'))
+		--end;
+	return text.substr(begin, end - begin);
+}
+
+// 解析一行成交：方向(卖/卖出/买/买入/S/B，大小写均可) + 数量 + 价格，多余字段忽略
+static bool ParseTodayTradeLine(const std::wstring& line, TodayTradeEntry& out)
+{
+	std::vector<std::wstring> tokens;
+	std::wstring token;
+	for (const wchar_t ch : line)
+	{
+		// 半角空格、制表符、全角空格都作为分隔符
+		if (ch == L' ' || ch == L'\t' || ch == L'　')
+		{
+			if (!token.empty())
+			{
+				tokens.push_back(token);
+				token.clear();
+			}
+		}
+		else
+		{
+			token += ch;
+		}
+	}
+	if (!token.empty())
+		tokens.push_back(token);
+	if (tokens.size() < 3)
+		return false;
+
+	const wchar_t head = tokens[0][0];
+	bool is_sell = false;
+	if (head == L'卖' || head == L's' || head == L'S')
+		is_sell = true;
+	else if (head == L'买' || head == L'b' || head == L'B')
+		is_sell = false;
+	else
+		return false;
+
+	double quantity = 0.0;
+	double price = 0.0;
+	if (!ParseTodayTradeNumber(tokens[1], quantity) || !ParseTodayTradeNumber(tokens[2], price))
+		return false;
+	if (quantity <= 0 || price <= 0)
+		return false;
+
+	out.is_sell = is_sell;
+	out.quantity = quantity;
+	out.price = price;
+	return true;
+}
+
+// ini 存储格式（纯 ASCII，避免 ini 值里出现中文）：`S 4600 0.686|B 4600 0.66`
+static std::wstring FormatTodayTradesStoredText(const std::vector<TodayTradeEntry>& entries)
+{
+	std::wstring text;
+	for (size_t i = 0; i < entries.size(); ++i)
+	{
+		if (i > 0)
+			text += L'|';
+		wchar_t buf[64] = { 0 };
+		swprintf_s(buf, L"%c %.6g %.6g", entries[i].is_sell ? L'S' : L'B', entries[i].quantity, entries[i].price);
+		text += buf;
+	}
+	return text;
 }
 
 // 将 "YYYY-MM-DD" 转为自 1970-01-01 起的天数（用于周K去重的周索引计算）
@@ -282,6 +384,8 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 	m_stock_alert_prices.clear();
 	// 加载每个股票的持仓配置
 	m_stock_positions.clear();
+	// 加载每个股票的今日成交（仅当日有效）
+	m_stock_today_trades.clear();
 	// 加载每个股票的状态栏展示配置
 	m_stock_statusbar.clear();
 	// 加载每个股票的关联股票配置
@@ -313,6 +417,17 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 		if (!cost_str.empty()) cost = std::stod(cost_str);
 		if (!count_str.empty()) count = std::stod(count_str);
 		m_stock_positions[code] = std::make_tuple(cost, count, buy_date);
+
+		// 今日成交：存储的是 ASCII 流水（`S 4600 0.686|...`），日期不是今天时读取即失效
+		std::wstring trades_text = ini.GetString(code.c_str(), L"today_trades", L"");
+		if (!trades_text.empty())
+		{
+			std::wstring trades_date = ini.GetString(code.c_str(), L"today_trades_date", L"");
+			std::vector<TodayTradeEntry> trades;
+			std::wstring err_line;
+			if (ParseTodayTradesText(trades_text, trades, err_line) && !trades.empty())
+				m_stock_today_trades[code] = std::make_pair(trades_date, trades);
+		}
 
 		m_stock_statusbar[code] = ini.GetBool(code.c_str(), L"show_in_statusbar", false);
 
@@ -848,6 +963,20 @@ void CDataManager::SaveConfig()
 			else
 			{
 				ini.WriteString(code.c_str(), L"buy_date", L"");
+			}
+			// 今日成交仅当日有效：跨天后写空覆盖，避免昨天的流水残留到明天
+			auto it_trades = m_stock_today_trades.find(code);
+			if (it_trades != m_stock_today_trades.end() &&
+				it_trades->second.first == GetTodayDateStringW() &&
+				!it_trades->second.second.empty())
+			{
+				ini.WriteString(code.c_str(), L"today_trades", FormatTodayTradesStoredText(it_trades->second.second));
+				ini.WriteString(code.c_str(), L"today_trades_date", it_trades->second.first);
+			}
+			else
+			{
+				ini.WriteString(code.c_str(), L"today_trades", L"");
+				ini.WriteString(code.c_str(), L"today_trades_date", L"");
 			}
 		}
 
@@ -1685,6 +1814,103 @@ void CDataManager::SetPosition(const std::wstring& code, double cost, double cou
 		auto& codes = m_setting_data.m_position_codes;
 		codes.erase(std::remove(codes.begin(), codes.end(), code), codes.end());
 	}
+}
+
+std::vector<TodayTradeEntry> CDataManager::GetTodayTrades(const std::wstring& code)
+{
+	auto it = m_stock_today_trades.find(code);
+	if (it == m_stock_today_trades.end())
+		return std::vector<TodayTradeEntry>();
+	// 跨天自动失效：昨天的成交不再参与今天的当日盈亏，也不需要用户手工清零
+	if (it->second.first != GetTodayDateStringW())
+		return std::vector<TodayTradeEntry>();
+	return it->second.second;
+}
+
+void CDataManager::SetTodayTrades(const std::wstring& code, const std::vector<TodayTradeEntry>& entries)
+{
+	if (entries.empty())
+		m_stock_today_trades.erase(code);
+	else
+		m_stock_today_trades[code] = std::make_pair(GetTodayDateStringW(), entries);
+}
+
+bool CDataManager::ParseTodayTradesText(const std::wstring& text, std::vector<TodayTradeEntry>& out, std::wstring& err_line)
+{
+	out.clear();
+	err_line.clear();
+	std::wstring current;
+	// 逐字符扫描：换行与竖线都当作一笔的结束，兼容多行输入框与 ini 存储两种写法
+	for (size_t i = 0; i <= text.size(); ++i)
+	{
+		const bool at_end = (i == text.size());
+		const wchar_t ch = at_end ? L'\0' : text[i];
+		if (!at_end && ch != L'\n' && ch != L'\r' && ch != L'|')
+		{
+			current += ch;
+			continue;
+		}
+		const std::wstring line = TrimTodayTradeLine(current);
+		current.clear();
+		if (line.empty())
+			continue;
+		TodayTradeEntry entry;
+		if (!ParseTodayTradeLine(line, entry))
+		{
+			err_line = line;
+			return false;
+		}
+		out.push_back(entry);
+	}
+	return true;
+}
+
+std::wstring CDataManager::FormatTodayTradesText(const std::vector<TodayTradeEntry>& entries)
+{
+	std::wstring text;
+	for (size_t i = 0; i < entries.size(); ++i)
+	{
+		if (i > 0)
+			text += L"\r\n";
+		wchar_t buf[64] = { 0 };
+		swprintf_s(buf, L"%s %.6g %.6g", entries[i].is_sell ? L"卖" : L"买", entries[i].quantity, entries[i].price);
+		text += buf;
+	}
+	return text;
+}
+
+double CDataManager::GetTodayTradeAdjust(const std::wstring& code, double prev_close)
+{
+	// 完整“当日参考盈亏” = (现价−昨收)×持股数 + 本修正值，与券商口径一致：
+	// 卖出部分按“卖价−昨收”结算，买入部分按“昨收−买价”结算。
+	// 该值与现价无关，因此盘中恒定，只有现价那一项随行情跳动。
+	// 手续费不计：券商“当日参考盈亏”同样不含费（ETF 卖出手续费为 0）。
+	if (prev_close <= 0)
+		return 0.0;
+	double adjust = 0.0;
+	for (const auto& entry : GetTodayTrades(code))
+	{
+		if (entry.is_sell)
+			adjust += entry.quantity * (entry.price - prev_close);
+		else
+			adjust += entry.quantity * (prev_close - entry.price);
+	}
+	return adjust;
+}
+
+double CDataManager::GetYesterdayHoldCount(const std::wstring& code)
+{
+	// 填写的持股数是“当前实际持股”，加上今日净卖出量即回到昨收持股；
+	// 无当日成交时结果就是填写的持股数，与旧口径完全一致
+	double hold = GetHoldingCount(code);
+	for (const auto& entry : GetTodayTrades(code))
+	{
+		if (entry.is_sell)
+			hold += entry.quantity;
+		else
+			hold -= entry.quantity;
+	}
+	return hold;
 }
 
 bool CDataManager::GetShowInStatusBar(const std::wstring& code)

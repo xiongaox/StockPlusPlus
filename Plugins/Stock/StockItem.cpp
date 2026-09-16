@@ -97,7 +97,8 @@ int StockItem::GetSingleStockWidth(CDC* pDC, const std::wstring& code) const
 	if (showTodayProfit)
 	{
 		double curPrice = (data->info.currentPrice > 0.0001 ? data->info.currentPrice : effPrev);
-		double todayProfit = (curPrice - effPrev) * holdingCount;
+		// 叠加今日成交修正：把当天卖出/买回部分相对昨收的差价算进来（做T、减仓当天口径与券商一致）
+		double todayProfit = (curPrice - effPrev) * holdingCount + g_data.GetTodayTradeAdjust(code, effPrev);
 		CString strProfit;
 		if (todayProfit > 0.0001)
 			strProfit.Format(_T("【+%s】"), CCommon::FormatAmount(todayProfit).GetString());
@@ -348,7 +349,8 @@ int StockItem::DrawSingleStock(CDC* pDC, const std::wstring& code, int x, int y,
 	{
 		Price effPrevToday = data->info.EffectivePrevClose();
 		double curPrice = (data->info.currentPrice > 0.0001 ? data->info.currentPrice : effPrevToday);
-		double todayProfit = (curPrice - effPrevToday) * holdingCount;
+		// 叠加今日成交修正：把当天卖出/买回部分相对昨收的差价算进来（做T、减仓当天口径与券商一致）
+		double todayProfit = (curPrice - effPrevToday) * holdingCount + g_data.GetTodayTradeAdjust(code, effPrevToday);
 		CString strProfit;
 		if (todayProfit > 0.0001)
 			strProfit.Format(_T("【+%s】"), CCommon::FormatAmount(todayProfit).GetString());
