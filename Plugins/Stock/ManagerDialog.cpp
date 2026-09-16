@@ -2747,7 +2747,7 @@ int CManagerDialog::CalcPageContentHeight()
 		return g_data.DPI(86 + 10) + MeasureMetricCard2Height(rightWidth) + g_data.DPI(8);
 	}
 	case PAGE_ABOUT:
-		return g_data.DPI(1250);
+		return g_data.DPI(1330);
 	default:
 		return 0;
 	}
@@ -4906,6 +4906,12 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRec
 		int count;
 	};
 
+	const wchar_t* items_0916_v208[] = {
+		L"•  【新增】 每日涨跌幅阈值提醒：分组管理新增「阈值提醒」列，双击暗色弹窗设置涨幅/跌幅阈值，当日首次达标经宿主托盘气泡提醒一次，跨日自动重置",
+		L"•  【新增】 悬浮窗销毁重建后完整恢复浏览状态（K线视图模式、指标、面板与行情中心页签全记忆）；分时图买卖点绘制信号名称小字；气泡页新增最强/最弱板块卡片，点击直达树图选区",
+		L"•  【新增】 行情中心顶栏新增手动刷新按钮，无视新鲜度与失败退避强制重拉当前页数据",
+		L"•  【修复】 昨收缺失时沿用最近一次有效昨收兜底涨跌幅与当日持仓收益，消除早间空白与橙色持平误色；指数成交额与行情快照按交易日严格区分，修正较昨日全天口径、午休预测与基金净值跨日错位"
+	};
 	const wchar_t* items_0912_v207[] = {
 		L"•  【优化】 裁剪 SQLite 未使用模块与调试符号，大幅压缩 Stock.dll 二进制体积",
 		L"•  【优化】 新增股票切换焦点任务高优先级队列，彻底消除港美股切换卡顿与界面冻结",
@@ -4954,6 +4960,7 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRec
 	};
 
 	LogGroup groups[] = {
+		{ L"2026-09-16 (v2.0.8)", items_0916_v208, _countof(items_0916_v208) },
 		{ L"2026-09-12 (v2.0.7)", items_0912_v207, _countof(items_0912_v207) },
 		{ L"2026-09-12 (v2.0.6)", items_0912, _countof(items_0912) },
 		{ L"2026-09-11 (v2.0.4)", items_0911, _countof(items_0911) },
