@@ -943,6 +943,7 @@ public:
 	CEdit m_trades_edit;        // 今日成交多行输入：一行一笔「方向 数量 价格」
 	int m_trades_y{ 0 };        // 今日成交框顶端（客户区像素，绘制时复用）
 	int m_trades_h{ 0 };        // 今日成交框高度
+	static constexpr int kTradesVisibleLines = 3;   // 今日成交框可见行数，决定滚动条何时出现
 	CButton m_btn_ok;
 	CButton m_btn_cancel;
 
@@ -987,6 +988,14 @@ public:
 		return CDialog::DoModal();
 	}
 
+	// 今日成交框的滚动条按行数显隐：内容不超过可见行数时不挂一条空滚动条
+	void UpdateTradesScrollBar()
+	{
+		if (!m_trades_edit.GetSafeHwnd())
+			return;
+		m_trades_edit.ShowScrollBar(SB_VERT, m_trades_edit.GetLineCount() > kTradesVisibleLines);
+	}
+
 	virtual BOOL OnInitDialog() override
 	{
 		CDialog::OnInitDialog();
@@ -1016,14 +1025,16 @@ public:
 		int editInnerLeft = editBorderLeft + g_data.DPI(6);
 		int editInnerRight = cr.right - marginX - g_data.DPI(6);
 
-		// 今日成交多行框：固定三行高度，行数多了框内滚动，弹窗本身不会随成交笔数变长
+		// 今日成交多行框：固定三行可见高度，超出后框内滚动；
+		// 滚动条不常显（由 UpdateTradesScrollBar 按行数显隐），主题用 DarkMode_Explorer 保证滚动条也是深色
 		int countY = costY + editH + g_data.DPI(12);
 		m_trades_y = countY + editH + g_data.DPI(12);
-		m_trades_h = editBoxH * 3 + editOffset * 2 + g_data.DPI(8);
+		m_trades_h = editBoxH * kTradesVisibleLines + editOffset * 2;
 
-		// 模板高度是按两行输入设计的，加了成交流水后按内容补高；
+		// 模板高度是按两行输入设计的，加了成交流水后按内容补高（含框下方一行格式提示）；
 		// 底部按钮坐标由客户区底边推导，会自动跟随，无需另行调整
-		const int neededClientH = m_trades_y + m_trades_h + g_data.DPI(16) + editH + g_data.DPI(12);
+		const int tradesHintH = g_data.DPI(16);
+		const int neededClientH = m_trades_y + m_trades_h + g_data.DPI(8) + tradesHintH + g_data.DPI(14) + editH + g_data.DPI(12);
 		if (cr.Height() < neededClientH)
 		{
 			CRect wr;
@@ -1061,14 +1072,15 @@ public:
 		m_count_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"输入持股数量");
 
 		// 今日成交多行输入：一行一笔「卖 1900 1.104」，回显今天已录入的流水（格式提示画在框下方）
-		m_trades_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_LEFT |
+		m_trades_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_LEFT |
 			ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN,
 			CRect(editInnerLeft, m_trades_y + editOffset, editInnerRight, m_trades_y + m_trades_h - editOffset), this, 1003);
 		m_trades_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
-		::SetWindowTheme(m_trades_edit.GetSafeHwnd(), L"", L"");
+		::SetWindowTheme(m_trades_edit.GetSafeHwnd(), L"DarkMode_Explorer", nullptr);
 		m_trades_edit.SetFont(&m_font);
 		if (!m_today_trades.empty())
 			m_trades_edit.SetWindowText(CDataManager::FormatTodayTradesText(m_today_trades).c_str());
+		UpdateTradesScrollBar();
 
 		// 底部按钮
 		int btnW = g_data.DPI(70);
@@ -1108,6 +1120,11 @@ public:
 			if (wNotifyCode == EN_SETFOCUS || wNotifyCode == EN_KILLFOCUS)
 			{
 				InvalidateRect(nullptr, FALSE);
+			}
+			else if (wNotifyCode == EN_CHANGE && (HWND)lParam == m_trades_edit.GetSafeHwnd())
+			{
+				// 打字或预填后按行数决定是否露出滚动条
+				UpdateTradesScrollBar();
 			}
 		}
 		else if (message == WM_CTLCOLORSTATIC)
@@ -1216,9 +1233,9 @@ public:
 			int countY = costY + g_data.DPI(26) + g_data.DPI(12);
 			g.DrawString(L"持股数 (股):", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(countY + g_data.DPI(5))), &labelBrush);
 
-			// 今日成交标签（框顶端对齐），框下方给一行格式提示
+			// 今日成交标签（与框内第一行文字对齐），框下方给一行格式提示
 			const int tradesBorderLeft = marginX + g_data.DPI(80);
-			g.DrawString(L"今日成交:", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(m_trades_y + g_data.DPI(2))), &labelBrush);
+			g.DrawString(L"今日成交:", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(m_trades_y + g_data.DPI(5))), &labelBrush);
 
 			// Draw edit borders
 			auto drawEdit = [&](CWnd& edit, int y) {
@@ -1253,8 +1270,8 @@ public:
 
 				Gdiplus::Font hintFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 				Gdiplus::SolidBrush hintBrush(Gdiplus::Color(255, 113, 122, 140));
-				g.DrawString(L"每行一笔：卖 1900 1.104 / 买 4600 0.660（仅当日有效，隔日自动清空）", -1, &hintFont,
-					Gdiplus::PointF(static_cast<Gdiplus::REAL>(tradesBorderLeft), static_cast<Gdiplus::REAL>(m_trades_y + m_trades_h + g_data.DPI(5))), &hintBrush);
+				g.DrawString(L"每行一笔「卖 1900 1.104」，隔日自动清空", -1, &hintFont,
+					Gdiplus::PointF(static_cast<Gdiplus::REAL>(tradesBorderLeft), static_cast<Gdiplus::REAL>(m_trades_y + m_trades_h + g_data.DPI(6))), &hintBrush);
 			}
 
 			dc.BitBlt(0, 0, rc.Width(), rc.Height(), &memDC, 0, 0, SRCCOPY);
