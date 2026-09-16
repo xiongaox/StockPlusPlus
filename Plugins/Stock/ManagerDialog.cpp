@@ -2749,7 +2749,7 @@ int CManagerDialog::CalcPageContentHeight()
 		return g_data.DPI(86 + 10) + MeasureMetricCard2Height(rightWidth) + g_data.DPI(8);
 	}
 	case PAGE_ABOUT:
-		return g_data.DPI(1440);
+		return MeasureAboutPageHeight();
 	default:
 		return 0;
 	}
@@ -4840,6 +4840,156 @@ LRESULT CManagerDialog::OnApiProbeFinished(WPARAM, LPARAM)
 	return 0;
 }
 
+namespace
+{
+	// 关于页更新日志：按版本分组，文案与 README 变更记录同源
+	struct AboutLogGroup {
+		const wchar_t* date;
+		const wchar_t* const* items;
+		int count;
+	};
+
+	const wchar_t* kItems_0916_v208[] = {
+		L"•  【新增】 K线族视图（日K/周K/月K）新增「区域」统计：周期行竞价按钮左侧新增区域开关，拖动框选后显示同花顺式区间卡片（区间涨幅/最高/最低/振幅 + 起止日期条 + ✕ 清除），左右边界手柄可逐柱微调；图表仍可平移，选区锚定柱子不随缩放/滚动丢失",
+		L"•  【修复】 修复运行中偶发闪退：崩溃点位于 SQLite 解析器，根因是 sqlite3 以 SQLITE_THREADSAFE=0 编译（内部无锁）而数据库连接被界面线程与后台抓取线程并发使用，现为数据库层全部方法加递归锁串行化访问",
+		L"•  【新增】 涨跌趋势成交额升级东财市场概况同款口径：盘中新增「较前一日同期」同分钟放量/缩量差额与幅度（幅度与主值同字号并排），预测全天改用昨日同分钟进度法，开市首分钟即出数，收盘后回落真实较昨日全天对比",
+		L"•  【修复】 分组管理「状态栏显示」列因阈值提醒列插入右移导致点击勾选/取消失效（自选股/持仓/自定义分组统一按常量列读写）；勾选即时落盘，双击勾选列不再叠加弹窗造成「确定后勾选丢失」错觉",
+		L"•  【优化】 持仓「成本价」列展示三位小数，与编辑弹窗口径一致",
+		L"•  【新增】 每日涨跌幅阈值提醒：分组管理新增「阈值提醒」列，双击暗色弹窗设置涨幅/跌幅阈值，当日首次达标经宿主托盘气泡提醒一次，跨日自动重置",
+		L"•  【新增】 悬浮窗销毁重建后完整恢复浏览状态（K线视图模式、指标、面板与行情中心页签全记忆）；分时图买卖点绘制信号名称小字；气泡页新增最强/最弱板块卡片，点击直达树图选区",
+		L"•  【新增】 行情中心顶栏新增手动刷新按钮，无视新鲜度与失败退避强制重拉当前页数据",
+		L"•  【修复】 昨收缺失时沿用最近一次有效昨收兜底涨跌幅与当日持仓收益，消除早间空白与橙色持平误色；指数成交额与行情快照按交易日严格区分，修正较昨日全天口径、午休预测与基金净值跨日错位"
+	};
+	const wchar_t* kItems_0912_v207[] = {
+		L"•  【优化】 裁剪 SQLite 未使用模块与调试符号，大幅压缩 Stock.dll 二进制体积",
+		L"•  【优化】 新增股票切换焦点任务高优先级队列，彻底消除港美股切换卡顿与界面冻结",
+		L"•  【优化】 完善港美股新浪与东财代码双向转换映射，增强跨市场分时数据稳定性",
+		L"•  【修复】 强化 K 线多周期数据并发安全读写互斥锁，彻底消除多线程并发偶发崩溃"
+	};
+	const wchar_t* kItems_0912[] = {
+		L"•  【新增】 悬浮窗内嵌设置视图，彻底废弃旧版独立大弹窗，支持无边框平滑滚动与配置即时生效",
+		L"•  【优化】 右键快捷菜单精炼简化，仅保留一键快速刷新股票行情",
+		L"•  【优化】 分时走势曲线铺满边缘自绘，重构集合竞价 62:38 黄金分割比例与盘前走势回放",
+		L"•  【优化】 开源仓库与关于页面重命名为 StockPlusPlus，更新项目主页跳转与远程地址",
+		L"•  【修复】 彻底解决顶部状态栏指标多语言 UTF-8 BOM 乱码问题，增强配置文件读写兼容性"
+	};
+	const wchar_t* kItems_0911[] = {
+		L"•  【新增】 行情中心增加资金流向全景监控页、板块分时走势图与领涨股看板",
+		L"•  【新增】 支持全市场港股 (HK)、美股 (US) 行情、分时图、K线及自选分组拉取",
+		L"•  【新增】 K线数据源即时切换按钮，支持带进度条的手动强制刷新与状态反馈",
+		L"•  【新增】 行情中心集成一键隐私模式遮罩，支持敏感资产与金额脱敏显示",
+		L"•  【优化】 全市场总成交额纳入北交所成交统计，全面统一列表排序三角矢量图标",
+		L"•  【修复】 修复美股分时数据拉取及东财成交量解析，修复搜索下拉列表换行问题"
+	};
+	const wchar_t* kItems_0910[] = {
+		L"•  【新增】 图表标题栏增加数据缓存状态指示，延后行情中心预热加速启动响应",
+		L"•  【优化】 隔离行情中心缓存与网络请求，优化前台可见数据优先级与预加载限流",
+		L"•  【优化】 新安装首次运行图表默认尺寸优化设定为 800x480 黄金分辨率",
+		L"•  【修复】 消除行情中心调度器并发死锁隐患，强化东财K线写入前有效性校验",
+		L"•  【修复】 修复上海黄金交易所 (SGE) 现货金价名称显示与图表缓存水合问题"
+	};
+	const wchar_t* kItems_0909[] = {
+		L"•  【新增】 指数编辑支持添加上海黄金交易所金价指标，分组管理增加默认标签页单选",
+		L"•  【新增】 行情中心 ETF 榜单点击直达对应日K线走势，支持右键一键快速返回",
+		L"•  【优化】 首次运行自动预置精选自选股清单并持久化状态栏注册项",
+		L"•  【优化】 收盘后保持展示全天最终成交额，优化持仓汇总居中与紧凑列表行高"
+	};
+	const wchar_t* kItems_0903[] = {
+		L"•  【新增】 设置界面新增接口检测 (API Health) 诊断页与 ETF 重仓持股面板",
+		L"•  【新增】 持仓汇总栏增加个股当日盈亏列与金额/比例一键切换模式",
+		L"•  【优化】 顶部状态栏指标配置重构为扁平自绘按钮组，支持零盈亏中性橙色提示"
+	};
+	const wchar_t* kItems_0831[] = {
+		L"•  【重大】 Stock 股票行情插件全面升级重构为 v2.0 架构，开启现代暗黑视觉体系",
+		L"•  【新增】 WebDAV 云端备份与历史备份选择器，支持云端自动备份与多端同步",
+		L"•  【新增】 股票代码全局拼音/代码联想搜索与多自定义分组管理",
+		L"•  【优化】 全面重构设置管理器为卡片化容器与无边框扁平自绘控件",
+		L"•  【优化】 动态精确计算任务栏项目渲染宽度，彻底消除右侧多余空白"
+	};
+
+	const AboutLogGroup kAboutLogGroups[] = {
+		{ L"2026-09-16 (v2.0.8)", kItems_0916_v208, _countof(kItems_0916_v208) },
+		{ L"2026-09-12 (v2.0.7)", kItems_0912_v207, _countof(kItems_0912_v207) },
+		{ L"2026-09-12 (v2.0.6)", kItems_0912, _countof(kItems_0912) },
+		{ L"2026-09-11 (v2.0.4)", kItems_0911, _countof(kItems_0911) },
+		{ L"2026-09-10 (v2.0.3)", kItems_0910, _countof(kItems_0910) },
+		{ L"2026-09-09 (v2.0.2)", kItems_0909, _countof(kItems_0909) },
+		{ L"2026-09-03 (v2.0.1)", kItems_0903, _countof(kItems_0903) },
+		{ L"2026-08-31 (v2.0.0)", kItems_0831, _countof(kItems_0831) }
+	};
+
+}
+
+// 关于页更新日志区排版：折行高度逐条实测，滚动量高与绘制共用本函数，
+// draw=false 只走量高路径，保证 CalcPageContentHeight 与画出来的内容永远一致
+int CManagerDialog::LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, int rightX, int startY)
+{
+	Gdiplus::Font dateFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(13)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+	Gdiplus::SolidBrush dateBrush(Gdiplus::Color(255, 248, 250, 252));
+	Gdiplus::Font logFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(12)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+	Gdiplus::SolidBrush logBrush(Gdiplus::Color(255, 203, 213, 225));
+	Gdiplus::Pen sepPen(Gdiplus::Color(255, 42, 47, 60), 1.0f);
+
+	// 必须用默认可换行的 StringFormat：GenericTypographic 自带 NoWrap，
+	// 拿它画长条目仍会退回单行排版、溢出内容区右缘被裁掉
+	Gdiplus::StringFormat logFmt;
+	logFmt.SetTrimming(Gdiplus::StringTrimmingNone);
+
+	const Gdiplus::REAL itemW = static_cast<Gdiplus::REAL>(max(0, rightX - textX));
+	const Gdiplus::REAL measureH = static_cast<Gdiplus::REAL>(g_data.DPI(4000));
+	int textY = startY;
+
+	for (size_t gIdx = 0; gIdx < _countof(kAboutLogGroups); ++gIdx)
+	{
+		const AboutLogGroup& grp = kAboutLogGroups[gIdx];
+		if (gIdx > 0)
+		{
+			textY += g_data.DPI(12);
+			if (draw)
+				g.DrawLine(&sepPen, textX, textY, rightX, textY);
+			textY += g_data.DPI(14);
+		}
+
+		if (draw)
+			g.DrawString(grp.date, -1, &dateFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &dateBrush);
+		textY += g_data.DPI(24);
+
+		for (int it = 0; it < grp.count; ++it)
+		{
+			Gdiplus::RectF measureRf(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY), itemW, measureH);
+			Gdiplus::RectF boundRf;
+			g.MeasureString(grp.items[it], -1, &logFont, measureRf, &logFmt, &boundRf);
+			const int itemH = static_cast<int>(boundRf.Height + 0.5f);
+
+			if (draw)
+			{
+				// 绘制框比实测高度再高 6px（GDI+ 按框高裁行，避免末行被取整吃掉），
+				// 而行距只推进 itemH+4px，两者不会重叠
+				Gdiplus::RectF drawRf(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY), itemW,
+					static_cast<Gdiplus::REAL>(itemH + g_data.DPI(6)));
+				g.DrawString(grp.items[it], -1, &logFont, drawRf, &logFmt, &logBrush);
+			}
+			textY += itemH + g_data.DPI(4);
+		}
+	}
+
+	return textY + g_data.DPI(24);
+}
+
+// 关于页自然总高：日志区起点与 DrawAboutPage 对齐（22 名称 + 28 版本行 + 24 间隔）
+int CManagerDialog::MeasureAboutPageHeight()
+{
+	CRect clientRect;
+	GetClientRect(clientRect);
+	const int textX = m_menu_width + g_data.DPI(18) + g_data.DPI(24);
+	const int rightX = clientRect.Width() - g_data.DPI(18) - g_data.DPI(24);
+
+	CClientDC dc(this);
+	Gdiplus::Graphics g(dc.GetSafeHdc());
+	g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+	return LayoutAboutLog(g, false, textX, rightX, g_data.DPI(74));
+}
+
 void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRect)
 {
 	int panelH = max(contentRect.Height(), CalcPageContentHeight());
@@ -4894,110 +5044,7 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRec
 		static_cast<int>(curPt.X + boundRect.Width), textY + g_data.DPI(18));
 
 	textY += g_data.DPI(24);
-	Gdiplus::Font dateFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(13)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-	Gdiplus::SolidBrush dateBrush(Gdiplus::Color(255, 248, 250, 252));
-
-	Gdiplus::Font logFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(12)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-	Gdiplus::SolidBrush logBrush(Gdiplus::Color(255, 203, 213, 225));
-
-	Gdiplus::Pen sepPen(Gdiplus::Color(255, 42, 47, 60), 1.0f);
-
-	struct LogGroup {
-		const wchar_t* date;
-		const wchar_t* const* items;
-		int count;
-	};
-
-	const wchar_t* items_0916_v208[] = {
-		L"•  【新增】 K线族视图（日K/周K/月K）新增「区域」统计：周期行竞价按钮左侧新增区域开关，拖动框选后显示同花顺式区间卡片（区间涨幅/最高/最低/振幅 + 起止日期条 + ✕ 清除），左右边界手柄可逐柱微调；图表仍可平移，选区锚定柱子不随缩放/滚动丢失",
-		L"•  【修复】 修复运行中偶发闪退：崩溃点位于 SQLite 解析器，根因是 sqlite3 以 SQLITE_THREADSAFE=0 编译（内部无锁）而数据库连接被界面线程与后台抓取线程并发使用，现为数据库层全部方法加递归锁串行化访问",
-		L"•  【新增】 涨跌趋势成交额升级东财市场概况同款口径：盘中新增「较前一日同期」同分钟放量/缩量差额与幅度（幅度与主值同字号并排），预测全天改用昨日同分钟进度法，开市首分钟即出数，收盘后回落真实较昨日全天对比",
-		L"•  【修复】 分组管理「状态栏显示」列因阈值提醒列插入右移导致点击勾选/取消失效（自选股/持仓/自定义分组统一按常量列读写）；勾选即时落盘，双击勾选列不再叠加弹窗造成「确定后勾选丢失」错觉",
-		L"•  【优化】 持仓「成本价」列展示三位小数，与编辑弹窗口径一致",
-		L"•  【新增】 每日涨跌幅阈值提醒：分组管理新增「阈值提醒」列，双击暗色弹窗设置涨幅/跌幅阈值，当日首次达标经宿主托盘气泡提醒一次，跨日自动重置",
-		L"•  【新增】 悬浮窗销毁重建后完整恢复浏览状态（K线视图模式、指标、面板与行情中心页签全记忆）；分时图买卖点绘制信号名称小字；气泡页新增最强/最弱板块卡片，点击直达树图选区",
-		L"•  【新增】 行情中心顶栏新增手动刷新按钮，无视新鲜度与失败退避强制重拉当前页数据",
-		L"•  【修复】 昨收缺失时沿用最近一次有效昨收兜底涨跌幅与当日持仓收益，消除早间空白与橙色持平误色；指数成交额与行情快照按交易日严格区分，修正较昨日全天口径、午休预测与基金净值跨日错位"
-	};
-	const wchar_t* items_0912_v207[] = {
-		L"•  【优化】 裁剪 SQLite 未使用模块与调试符号，大幅压缩 Stock.dll 二进制体积",
-		L"•  【优化】 新增股票切换焦点任务高优先级队列，彻底消除港美股切换卡顿与界面冻结",
-		L"•  【优化】 完善港美股新浪与东财代码双向转换映射，增强跨市场分时数据稳定性",
-		L"•  【修复】 强化 K 线多周期数据并发安全读写互斥锁，彻底消除多线程并发偶发崩溃"
-	};
-	const wchar_t* items_0912[] = {
-		L"•  【新增】 悬浮窗内嵌设置视图，彻底废弃旧版独立大弹窗，支持无边框平滑滚动与配置即时生效",
-		L"•  【优化】 右键快捷菜单精炼简化，仅保留一键快速刷新股票行情",
-		L"•  【优化】 分时走势曲线铺满边缘自绘，重构集合竞价 62:38 黄金分割比例与盘前走势回放",
-		L"•  【优化】 开源仓库与关于页面重命名为 StockPlusPlus，更新项目主页跳转与远程地址",
-		L"•  【修复】 彻底解决顶部状态栏指标多语言 UTF-8 BOM 乱码问题，增强配置文件读写兼容性"
-	};
-	const wchar_t* items_0911[] = {
-		L"•  【新增】 行情中心增加资金流向全景监控页、板块分时走势图与领涨股看板",
-		L"•  【新增】 支持全市场港股 (HK)、美股 (US) 行情、分时图、K线及自选分组拉取",
-		L"•  【新增】 K线数据源即时切换按钮，支持带进度条的手动强制刷新与状态反馈",
-		L"•  【新增】 行情中心集成一键隐私模式遮罩，支持敏感资产与金额脱敏显示",
-		L"•  【优化】 全市场总成交额纳入北交所成交统计，全面统一列表排序三角矢量图标",
-		L"•  【修复】 修复美股分时数据拉取及东财成交量解析，修复搜索下拉列表换行问题"
-	};
-	const wchar_t* items_0910[] = {
-		L"•  【新增】 图表标题栏增加数据缓存状态指示，延后行情中心预热加速启动响应",
-		L"•  【优化】 隔离行情中心缓存与网络请求，优化前台可见数据优先级与预加载限流",
-		L"•  【优化】 新安装首次运行图表默认尺寸优化设定为 800x480 黄金分辨率",
-		L"•  【修复】 消除行情中心调度器并发死锁隐患，强化东财K线写入前有效性校验",
-		L"•  【修复】 修复上海黄金交易所 (SGE) 现货金价名称显示与图表缓存水合问题"
-	};
-	const wchar_t* items_0909[] = {
-		L"•  【新增】 指数编辑支持添加上海黄金交易所金价指标，分组管理增加默认标签页单选",
-		L"•  【新增】 行情中心 ETF 榜单点击直达对应日K线走势，支持右键一键快速返回",
-		L"•  【优化】 首次运行自动预置精选自选股清单并持久化状态栏注册项",
-		L"•  【优化】 收盘后保持展示全天最终成交额，优化持仓汇总居中与紧凑列表行高"
-	};
-	const wchar_t* items_0903[] = {
-		L"•  【新增】 设置界面新增接口检测 (API Health) 诊断页与 ETF 重仓持股面板",
-		L"•  【新增】 持仓汇总栏增加个股当日盈亏列与金额/比例一键切换模式",
-		L"•  【优化】 顶部状态栏指标配置重构为扁平自绘按钮组，支持零盈亏中性橙色提示"
-	};
-	const wchar_t* items_0831[] = {
-		L"•  【重大】 Stock 股票行情插件全面升级重构为 v2.0 架构，开启现代暗黑视觉体系",
-		L"•  【新增】 WebDAV 云端备份与历史备份选择器，支持云端自动备份与多端同步",
-		L"•  【新增】 股票代码全局拼音/代码联想搜索与多自定义分组管理",
-		L"•  【优化】 全面重构设置管理器为卡片化容器与无边框扁平自绘控件",
-		L"•  【优化】 动态精确计算任务栏项目渲染宽度，彻底消除右侧多余空白"
-	};
-
-	LogGroup groups[] = {
-		{ L"2026-09-16 (v2.0.8)", items_0916_v208, _countof(items_0916_v208) },
-		{ L"2026-09-12 (v2.0.7)", items_0912_v207, _countof(items_0912_v207) },
-		{ L"2026-09-12 (v2.0.6)", items_0912, _countof(items_0912) },
-		{ L"2026-09-11 (v2.0.4)", items_0911, _countof(items_0911) },
-		{ L"2026-09-10 (v2.0.3)", items_0910, _countof(items_0910) },
-		{ L"2026-09-09 (v2.0.2)", items_0909, _countof(items_0909) },
-		{ L"2026-09-03 (v2.0.1)", items_0903, _countof(items_0903) },
-		{ L"2026-08-31 (v2.0.0)", items_0831, _countof(items_0831) }
-	};
-
-	for (size_t gIdx = 0; gIdx < _countof(groups); ++gIdx)
-	{
-		const auto& grp = groups[gIdx];
-		if (gIdx > 0)
-		{
-			textY += g_data.DPI(12);
-			g.DrawLine(&sepPen, textX, textY, rightX, textY);
-			textY += g_data.DPI(14);
-		}
-
-		g.DrawString(grp.date, -1, &dateFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &dateBrush);
-		textY += g_data.DPI(24);
-
-		for (int it = 0; it < grp.count; ++it)
-		{
-			g.DrawString(grp.items[it], -1, &logFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &logBrush);
-			textY += g_data.DPI(22);
-		}
-	}
-
-	textY += g_data.DPI(24);
+	textY = LayoutAboutLog(g, true, textX, rightX, textY);
 }
 
 void CManagerDialog::OnMouseMove(UINT nFlags, CPoint point)

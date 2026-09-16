@@ -261,6 +261,8 @@ private:
 	void SetPageScroll(int scrollY);                     // 钳制滚动偏移并联动控件布局与重绘
 	int CalcPageContentHeight();                         // 当前页内容自然总高（0 = 不启用通用滚动）
 	int MeasureMetricCard2Height(int rightWidth);        // 指标页候选库自然高度（与绘制排布一致）
+	int MeasureAboutPageHeight();                       // 关于页日志区自然高度（与绘制排布一致）
+	int LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, int rightX, int startY); // 日志区排版并返回结束 Y（draw=false 只量高）
 	int ContentBottomPad() const;                        // 内容区底部留白（内嵌无按钮条时收窄，分组页仍留操作按钮行）
 	void ApplyIfEmbedded();                              // 内嵌模式即时提交设置（模态模式等「确定」）
 	void ApplyOpacity(int opacityPercent);               // 实时应用并推送背景透明度到宿主与当前窗口
