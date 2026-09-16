@@ -36,6 +36,10 @@ public:
 	void OnTimerTick();
 	// 数据到达（悬浮窗收到 WM_MC_DATA_UPDATED 后调用，触发重绘由悬浮窗 Invalidate 完成）
 	void OnDataUpdated();
+	// 顶栏手动刷新：无视新鲜度与失败退避，强制重拉当前页数据集
+	void RequestManualRefresh();
+	// 当前页数据集是否正在拉取（在途或排队中；顶栏刷新按钮点亮态）
+	bool IsRefreshing() const;
 	// 设置数据到达通知窗口（悬浮窗句柄；取数线程完成后向其 PostMessage WM_MC_DATA_UPDATED）
 	void SetNotifyWnd(HWND h);
 
@@ -124,6 +128,7 @@ private:
 
 	void UpdateClock();
 	void RequestData();
+	void RequestDatasets(bool force);
 	void SwitchPage(McPage page);
 	void RefreshSnapshots();
 

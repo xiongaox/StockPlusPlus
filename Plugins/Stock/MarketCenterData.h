@@ -165,6 +165,8 @@ public:
 	bool IsPremarketNoData(DataSet ds) const;
 	// 用户主动重试：清除退避并立即重新请求（UI 线程调用）
 	void Retry(DataSet ds, HWND notifyWnd);
+	// 用户手动刷新：无视新鲜度强制重新请求（数据存疑时主动触发；UI 线程调用）
+	void ForceRefresh(DataSet ds, HWND notifyWnd);
 
 	// 行情中心独立执行器：与股票实时/K线线程隔离；当前页面任务优先于后台预热。
 	void StartExecutor();

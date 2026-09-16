@@ -111,6 +111,7 @@ enum {
 	IDC_REFRESH_TIMER = 1023,
 	IDC_KLINE_SOURCE_BTN = 1025,
 	IDC_SETTINGS_BTN = 1027,
+	IDC_MC_REFRESH_BTN = 1028,
 	IDC_KLINE_PROGRESS_TIMER = 1026
 };
 
@@ -157,6 +158,7 @@ BEGIN_MESSAGE_MAP(CFloatingWnd, CWnd)
 	ON_BN_CLICKED(IDC_EXPAND_BTN, &CFloatingWnd::OnBnClickedExpandBtn)
 	ON_BN_CLICKED(IDC_TOGGLE_STOCK_LIST_BTN, &CFloatingWnd::OnBnClickedToggleStockListBtn)
 	ON_BN_CLICKED(IDC_SETTINGS_BTN, &CFloatingWnd::OnBnClickedSettingsBtn)
+	ON_BN_CLICKED(IDC_MC_REFRESH_BTN, &CFloatingWnd::OnBnClickedMcRefreshBtn)
 END_MESSAGE_MAP()
 
 int CFloatingWnd::OnCreate(LPCREATESTRUCT lpCreateStruct)
@@ -205,6 +207,11 @@ int CFloatingWnd::OnCreate(LPCREATESTRUCT lpCreateStruct)
 	// 设置按钮：收起分组左侧（顶栏第 4 格），点击原地切入内嵌“设置”视图
 	CRect settingsBtnRect(toggleStockListBtnRect.left - toggleStockListBtnWidth, g_data.RDPI(2), toggleStockListBtnRect.left, g_data.RDPI(2) + toggleStockListBtnHeight);
 	m_btnSettings.Create(_T(""), WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, settingsBtnRect, this, IDC_SETTINGS_BTN);
+
+	// 行情中心手动刷新按钮：仅行情中心视图可见（顶栏设置左侧），无视新鲜度强制重拉当前页数据集
+	CRect mcRefreshBtnRect(0, 0, closeBtnWidth, closeBtnHeight);
+	m_btnMcRefresh.Create(_T(""), WS_CHILD | BS_OWNERDRAW, mcRefreshBtnRect, this, IDC_MC_REFRESH_BTN);
+	m_btnMcRefresh.ShowWindow(SW_HIDE);
 
 	const int rightBtnWidth = g_data.RDPI(32);
 
@@ -308,6 +315,8 @@ LRESULT CFloatingWnd::OnMcEtfClicked(WPARAM wParam, LPARAM lParam)
 	SetDayKLineModeDefaults();
 	m_marketCenterMode = false;   // 跳转首页（退出行情中心视图，恢复图表按钮）
 	HideChartButtons(false);
+	if (m_btnMcRefresh.GetSafeHwnd())
+		m_btnMcRefresh.ShowWindow(SW_HIDE);
 	UpdateModeButtons();
 	UpdatePeriodComboVisibility();
 	UpdateIndicatorButtons();
@@ -483,12 +492,14 @@ void CFloatingWnd::OnPaint()
 		memDC.FillSolidRect(0, 0, mcW, mcHeaderH, COLOR_BG_HEADER);
 		memDC.FillSolidRect(0, mcHeaderH, mcW, 1, COLOR_DARK_GRAY_BORDER);
 		// 顶栏仅显示设置+关闭两个按钮：设置紧贴关闭（展开/收起分组按钮在此视图隐藏）
+		// 手动刷新按钮显示在设置左侧（仅行情中心视图进入时 ShowWindow 显示）
 		{
 			const int mcBtnW = g_data.RDPI(20);
 			const int mcBtnH = g_data.RDPI(18);
 			const int mcBtnTop = g_data.RDPI(2);
 			SafeSetWindowPos(m_btnClose, mcW - mcBtnW, mcBtnTop, mcBtnW, mcBtnH);
 			SafeSetWindowPos(m_btnSettings, mcW - mcBtnW * 2, mcBtnTop, mcBtnW, mcBtnH);
+			SafeSetWindowPos(m_btnMcRefresh, mcW - mcBtnW * 3, mcBtnTop, mcBtnW, mcBtnH);
 		}
 		// 标题条中央：开市/休市状态时钟（面板状态，随秒级定时器刷新）
 		m_marketCenterPanel.DrawHeaderClock(memDC, CRect(0, 0, mcW, mcHeaderH));
@@ -2358,6 +2369,17 @@ void CFloatingWnd::ToggleMarketCenter()
 			SetStockId(saved);
 		// 进入：隐藏所有图表视图按钮（模式标签/指标/盘口/筹码/ETF持仓/展开/列表开关），只留关闭
 		HideChartButtons(true);
+		// 手动刷新按钮：进入行情中心时显示并排到设置左侧（每帧位置仍由 OnPaint 校准）
+		if (m_btnMcRefresh.GetSafeHwnd())
+		{
+			CRect rcClient;
+			GetClientRect(&rcClient);
+			const int rBtnW = g_data.RDPI(20);
+			const int rBtnH = g_data.RDPI(18);
+			m_btnMcRefresh.SetWindowPos(nullptr, rcClient.Width() - rBtnW * 3, g_data.RDPI(2),
+				rBtnW, rBtnH, SWP_NOZORDER | SWP_NOACTIVATE);
+			m_btnMcRefresh.ShowWindow(SW_SHOW);
+		}
 		// 设置数据到达通知窗口并立即拉取当前页数据
 			m_marketCenterPanel.SetNotifyWnd(GetSafeHwnd());
 			m_marketCenterPanel.OnTimerTick();
@@ -2366,6 +2388,8 @@ void CFloatingWnd::ToggleMarketCenter()
 	{
 		// 退出：恢复图表视图按钮
 		HideChartButtons(false);
+		if (m_btnMcRefresh.GetSafeHwnd())
+			m_btnMcRefresh.ShowWindow(SW_HIDE);
 		UpdateModeButtons();
 		UpdatePeriodComboVisibility();
 		UpdateIndicatorButtons();
@@ -2391,6 +2415,15 @@ void CFloatingWnd::HideChartButtons(bool hide)
 void CFloatingWnd::OnBnClickedSettingsBtn()
 {
 	ToggleSettingsView();
+}
+
+void CFloatingWnd::OnBnClickedMcRefreshBtn()
+{
+	// 行情中心顶栏手动刷新：无视新鲜度与失败退避，立即重拉当前页数据集
+	//（数据到达仍由 WM_MC_DATA_UPDATED 触发整窗重绘，这里只需让按钮露出"拉取中"点亮态）
+	m_marketCenterPanel.RequestManualRefresh();
+	if (m_btnMcRefresh.GetSafeHwnd())
+		m_btnMcRefresh.Invalidate();
 }
 
 void CFloatingWnd::ShowSettingsView()
@@ -3822,7 +3855,7 @@ void CFloatingWnd::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 
 
 	// 顶栏操作图标由统一 Lucide 模块渲染，避免在窗口内维护自定义几何。
-	if (isCloseBtn || nID == IDC_EXPAND_BTN || nID == IDC_TOGGLE_STOCK_LIST_BTN || nID == IDC_SETTINGS_BTN)
+	if (isCloseBtn || nID == IDC_EXPAND_BTN || nID == IDC_TOGGLE_STOCK_LIST_BTN || nID == IDC_SETTINGS_BTN || nID == IDC_MC_REFRESH_BTN)
 	{
 		Gdiplus::Graphics graphics(dc.GetSafeHdc());
 		graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
@@ -3835,7 +3868,10 @@ void CFloatingWnd::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 			(nID == IDC_EXPAND_BTN ? (m_expandedMode ? Icons::Id::ChevronsUp : Icons::Id::ChevronsDown) :
 				(nID == IDC_TOGGLE_STOCK_LIST_BTN ?
 					(m_showStockList ? Icons::Id::PanelLeftClose : Icons::Id::PanelLeftOpen) :
-					Icons::Id::Settings));
+					(nID == IDC_MC_REFRESH_BTN ? Icons::Id::RefreshCw : Icons::Id::Settings)));
+		// 手动刷新按钮：当前页数据集拉取在途/排队时图标点亮为强调蓝，提示刷新进行中
+		if (nID == IDC_MC_REFRESH_BTN && m_marketCenterPanel.IsRefreshing())
+			textColor = COLOR_ACCENT_BLUE;
 		Icons::Draw(graphics, icon, iconBounds, textColor);
 
 		dc.Detach();

@@ -96,6 +96,7 @@ protected:
 	afx_msg void OnBnClickedExpandBtn();
 	afx_msg void OnBnClickedToggleStockListBtn();
 	afx_msg void OnBnClickedSettingsBtn();
+	afx_msg void OnBnClickedMcRefreshBtn();
 	afx_msg void OnBnClickedCallAuctionBtn();
 	afx_msg void OnBnClickedKLineSourceBtn();
 
@@ -162,6 +163,7 @@ private:
 	CButton m_btnExpand;      // 放大按钮（隐藏副图，走势图占3/4）
 	CButton m_btnToggleStockList;  // 股票列表显示/隐藏按钮
 	CButton m_btnSettings;        // 设置按钮（收起分组左侧，点击原地切入内嵌设置视图）
+	CButton m_btnMcRefresh;       // 行情中心手动刷新按钮（设置左侧，仅行情中心视图可见；无视新鲜度强制重拉当前页数据）
 	CButton m_btnCallAuction;     // 集合竞价按钮
 	CButton m_btnIndicatorCJL;  // CJL指标按钮
 	CButton m_btnIndicatorMACD;  // MACD信号按钮

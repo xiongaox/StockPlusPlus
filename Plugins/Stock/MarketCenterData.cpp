@@ -243,6 +243,21 @@ void CMarketCenterData::Retry(DataSet ds, HWND notifyWnd)
 	m_fail_until[ds] = 0;
 }
 
+void CMarketCenterData::ForceRefresh(DataSet ds, HWND notifyWnd)
+{
+	// 手动刷新无视新鲜度强制投递（数据看起来不准、自动更新未触发时的用户通道）：
+	// 一并清除失败退避让请求总能发出；在途任务不重复并发，等它完成后再点即再拉。
+	// 锁与 RequestIfStale 同款两段式：不得持 m_sched_mutex 调 EnqueueRequest（内部会再取）。
+	{
+		std::lock_guard<std::mutex> schedLock(m_sched_mutex);
+		m_fail_until[ds] = 0;
+		if (m_inflight[ds])
+			return;
+		m_inflight[ds] = true;
+	}
+	EnqueueRequest(ds, notifyWnd, RequestPriority::Foreground);
+}
+
 bool CMarketCenterData::IsStale(DataSet ds, int staleSec) const
 {
 	time_t t = 0;
@@ -262,6 +277,8 @@ bool CMarketCenterData::IsStale(DataSet ds, int staleSec) const
 bool CMarketCenterData::ApplySnapshot(DataSet ds, const std::string& payload, time_t fetchedAt, const std::string& tradeDate, int schemaVersion)
 {
 	if (schemaVersion != 1 || payload.empty() || fetchedAt <= 0 || tradeDate.empty()) return false;
+	// 跨日快照不得当作"今日"数据（否则次日早盘会把上一交易日的全天成交额当作"当日"显示）
+	if (tradeDate != CurrentTradeDate()) return false;
 	yyjson_doc* doc = yyjson_read(payload.data(), payload.size(), 0);
 	if (!doc) return false;
 	yyjson_val* root = yyjson_doc_get_root(doc);
@@ -1186,7 +1203,8 @@ namespace
 		return ok;
 	}
 
-	// 指数日K（lmt=2）：row0=昨日全天成交额，row1=今日实时累计成交额（盘中为部分量）
+	// 指数日K（lmt=2）：按行首日期严格区分昨日/今日。今日K线在开市后才生成，
+	// 开市初期末行仍是最近一个已完成交易日的全天成交额，不能按"最后一行=今日"的固定槽位理解。
 	bool FetchIndexTurnover(const wchar_t* secid, double& todayTurnover, double& prevTurnover)
 	{
 		std::wstring url = L"https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=" + std::wstring(secid)
@@ -1201,8 +1219,8 @@ namespace
 		yyjson_val* klines = data ? yyjson_obj_get(data, "klines") : nullptr;
 		if (klines && yyjson_is_arr(klines) && yyjson_arr_size(klines) >= 1)
 		{
-			// lmt=2 返回的两行中最后一行是今日（盘中为部分成交额），倒数第二行是昨日全天成交额
-			std::vector<double> amounts;
+			// 逐行取（日期, 成交额）；klines 按时间升序，行首日期形如 2026-09-15
+			std::vector<std::pair<std::string, double>> bars;
 			yyjson_val* item;
 			yyjson_arr_iter iter;
 			yyjson_arr_iter_init(klines, &iter);
@@ -1212,18 +1230,27 @@ namespace
 				if (!str) continue;
 				std::vector<std::string> parts = CCommon::split(str, ',');
 				if (parts.size() < 7) continue;
-				amounts.push_back(atof(parts[6].c_str()));
+				bars.push_back({ parts[0], atof(parts[6].c_str()) });
 			}
-			if (amounts.size() >= 2)
+			if (!bars.empty())
 			{
-				prevTurnover = amounts[amounts.size() - 2];
-				todayTurnover = amounts[amounts.size() - 1];
-				ok = true;
-			}
-			else if (amounts.size() == 1)
-			{
-				todayTurnover = amounts[0];
-				ok = true;
+				const std::string today = CurrentTradeDate();
+				if (bars.back().first == today)
+				{
+					// 今日K线已生成：今日=末行（盘中为部分成交额），昨日=其前一根
+					todayTurnover = bars.back().second;
+					if (bars.size() >= 2 && bars[bars.size() - 2].first != today)
+					{
+						prevTurnover = bars[bars.size() - 2].second;
+						ok = true;
+					}
+				}
+				else
+				{
+					// 今日K线尚未生成（盘前/竞价）：今日成交额保持 0，末行即昨日全天成交额
+					prevTurnover = bars.back().second;
+					ok = true;
+				}
 			}
 		}
 		yyjson_doc_free(doc);

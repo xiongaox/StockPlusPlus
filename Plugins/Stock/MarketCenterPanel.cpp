@@ -255,12 +255,12 @@ void CMarketCenterPanel::DrawHeaderClock(CDC& memDC, const CRect& rc)
 		const auto state = CMarketCenterData::Instance().GetDataSetState(CurrentDataSet(),
 			CurrentDataSet() == CMarketCenterData::DS_ETFS ? 300 : (CurrentDataSet() == CMarketCenterData::DS_SECTORS || CurrentDataSet() == CMarketCenterData::DS_MAINFLOW ? 120 : 60));
 		if (state.failed) cacheStatus = L"更新失败";
-		else if (state.inflight || state.queued) cacheStatus = state.hasData ? L"后台数据缓存中" : L"正在获取数据";
-		else if (state.hasData) cacheStatus = L"正在使用本地数据";
+		else if (state.inflight || state.queued) cacheStatus = state.hasData ? L"后台缓存" : L"获取数据";
+		else if (state.hasData) cacheStatus = L"本地数据";
 		else cacheStatus = L"暂无缓存";
 		CSize szCache = MeasureStr(g, fCache.get(), cacheStatus);
-		// 缓存状态右边界避开顶栏 2 个图标按钮（设置紧贴关闭，共 2*RDPI(20)）+ 4px 间隙
-		int cacheRight = rc.right - g_data.RDPI(44);
+		// 缓存状态右边界避开顶栏 3 个图标按钮（刷新+设置紧贴关闭，共 3*RDPI(20)）+ 4px 间隙
+		int cacheRight = rc.right - g_data.RDPI(64);
 		int cacheLeft = max(rc.left + g_data.DPI(4), cacheRight - szCache.cx);
 		DrawStrSingle(g, cacheStatus, fCache.get(), CRect(cacheLeft, rc.top, cacheRight, rc.bottom), RGB(255, 255, 255), 128, Gdiplus::StringAlignmentFar);
 	int dotD = g_data.DPI(8);
@@ -305,29 +305,54 @@ void CMarketCenterPanel::UpdateClock()
 
 void CMarketCenterPanel::RequestData()
 {
+	RequestDatasets(false);
+}
+
+// 顶栏手动刷新：无视新鲜度与失败退避，强制重拉当前页数据集（数据到达后 WM_MC_DATA_UPDATED 触发重绘）
+void CMarketCenterPanel::RequestManualRefresh()
+{
+	RequestDatasets(true);
+}
+
+bool CMarketCenterPanel::IsRefreshing() const
+{
+	CMarketCenterData::DataSet ds = CurrentDataSet();
+	const auto state = CMarketCenterData::Instance().GetDataSetState(ds, 60);
+	return state.inflight || state.queued;
+}
+
+// 拉取数据集（force=false 时过期才拉；force=true 由 CMarketCenterData::ForceRefresh 无视新鲜度强制重拉）
+void CMarketCenterPanel::RequestDatasets(bool force)
+{
 	HWND hWnd = m_notify_wnd;
 	CMarketCenterData& mc = CMarketCenterData::Instance();
 	// 只拉当前页需要的数据（懒加载）：避免一进行情中心就把 ETF 全量 14 页等全部拉完，
 	// 拖慢首页（气泡图只需 2 个请求）。切页时 SwitchPage 会再触发对应数据集拉取。
+	auto request = [&](CMarketCenterData::DataSet ds, int staleSec) {
+		if (force)
+			mc.ForceRefresh(ds, hWnd);
+		else
+			mc.RequestIfStale(ds, staleSec, hWnd, CMarketCenterData::RequestPriority::Foreground);
+	};
 	switch (m_page)
 	{
 		case PAGE_BUBBLE:
-			mc.RequestIfStale(CMarketCenterData::DS_SECTORS, 120, hWnd, CMarketCenterData::RequestPriority::Foreground);
+			request(CMarketCenterData::DS_SECTORS, 120);
 			if (m_sector_view_mode == 1)
-				mc.RequestIfStale(CMarketCenterData::DS_SECTOR_TIMELINES, 120, hWnd, CMarketCenterData::RequestPriority::Foreground);
+				request(CMarketCenterData::DS_SECTOR_TIMELINES, 120);
 		break;
 	case PAGE_ETF_INFLOW:
 		case PAGE_ETF_RANK:
-			mc.RequestIfStale(CMarketCenterData::DS_ETFS, 300, hWnd, CMarketCenterData::RequestPriority::Foreground);
+			request(CMarketCenterData::DS_ETFS, 300);
 		break;
 		case PAGE_MONEY_FLOW:
 		case PAGE_MAINFLOW:
-			mc.RequestIfStale(CMarketCenterData::DS_MAINFLOW, 120, hWnd, CMarketCenterData::RequestPriority::Foreground);
+			request(CMarketCenterData::DS_MAINFLOW, 120);
 		break;
 		case PAGE_TREND:
-			mc.RequestIfStale(CMarketCenterData::DS_TREND, 60, hWnd, CMarketCenterData::RequestPriority::Foreground);
+			request(CMarketCenterData::DS_TREND, 60);
 		break;
-	default:
+		default:
 		break;
 	}
 }
@@ -2149,42 +2174,64 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 	FillCard(g, blockRc);
 	m_trend_stat_rects.clear();
 	// 交易中按当日进度外推；收盘后显示最终全天成交额，避免把最终值伪装成预测。
+	// 午休时段也按盘中口径处理（轴上无对应分钟，用上午收盘的进度外推），否则会误标"全天成交"。
 	const auto& axis = CMarketCenterData::TimeAxis();
 	time_t now = time(nullptr);
 	struct tm localTm{};
 	localtime_s(&localTm, &now);
 	wchar_t nowBuf[8];
 	swprintf_s(nowBuf, L"%02d:%02d", localTm.tm_hour, localTm.tm_min);
+	int minsToday = localTm.tm_hour * 60 + localTm.tm_min;
+	bool lunchBreak = minsToday >= 11 * 60 + 30 && minsToday < 13 * 60;
 	int nowIdx = CMarketCenterData::TimeIndex(nowBuf);
+	if (nowIdx < 0 && lunchBreak)
+		nowIdx = 120;   // 午休：按上午收盘进度（120点）外推
+	bool tradingLive = (m_clock_status == 0) || lunchBreak;
 	double forecast = 0;
 	bool forecastOk = false;
-	if (nowIdx > 10 && turnoverToday > 0 && m_clock_status == 0)
+	if (nowIdx > 10 && turnoverToday > 0 && tradingLive)
 	{
 		forecast = turnoverToday / ((nowIdx + 1.0) / axis.size());
 		forecastOk = true;
 	}
-	const bool finalTurnover = turnoverToday > 0 && m_clock_status != 0;
+	const bool finalTurnover = turnoverToday > 0 && !tradingLive;
 	double delta = turnoverToday - turnoverYday;
 
-	struct TrendCell { const wchar_t* label; std::wstring value; COLORREF color; };
+	struct TrendCell { std::wstring label; std::wstring value; COLORREF color; };
 	wchar_t numBuf[32];
-	swprintf_s(numBuf, L"%.0f亿", turnoverToday / 1e8);
-	std::wstring todayStr = numBuf;
-	swprintf_s(numBuf, L"%.0f亿", turnoverYday / 1e8);
-	std::wstring ydayStr = numBuf;
-	swprintf_s(numBuf, L"%s%.0f亿", delta >= 0 ? L"+" : L"-", fabs(delta) / 1e8);
-	std::wstring deltaStr = numBuf;
+	auto turnoverCellVal = [&](double v) {
+		if (v <= 0) return std::wstring(L"--");
+		swprintf_s(numBuf, L"%.0f亿", v / 1e8);
+		return std::wstring(numBuf);
+	};
+	std::wstring todayStr = turnoverCellVal(turnoverToday);
+	std::wstring ydayStr = turnoverCellVal(turnoverYday);
+	// "较昨日全天"（东财涨跌统计同款口径）：收盘后为真实差额，显示增量/缩量；
+	// 盘中今日累计远小于昨日全天，直接相减只会得到吓人的大负数，
+	// 有可靠进度时改看"预测全天 vs 昨日"，开市初期连预测都不可靠时显示 --。
+	std::wstring deltaLabel = L"较昨日全天";
+	std::wstring deltaStr = L"--";
+	COLORREF deltaColor = MC_TEXT_DIM;
+	if (turnoverYday > 0 && (finalTurnover || forecastOk))
+	{
+		double d = finalTurnover ? delta : (forecast - turnoverYday);
+		swprintf_s(numBuf, L"%s%.0f亿", d >= 0 ? L"增量" : L"缩量", fabs(d) / 1e8);
+		deltaStr = numBuf;
+		deltaColor = UpDownColor(d);
+		if (forecastOk && !finalTurnover)
+			deltaLabel = L"预测较昨日";
+	}
 	TrendCell tCells[9] = {
 		{ L"上涨", FormatInt(upCnt), MC_UP },
 		{ L"平盘", FormatInt(flatCnt), MC_TEXT_SUB },
 		{ L"下跌", FormatInt(downCnt), MC_DOWN },
 		{ L"涨停", FormatInt(dist.zt), MC_UP },
 		{ L"跌停", FormatInt(dist.dt), MC_DOWN },
-		{ L"当日成交额", todayStr, MC_TEXT },
-		{ L"昨日成交", ydayStr, MC_TEXT },
-		{ L"较昨日全天", deltaStr, UpDownColor(delta) },
-		{ finalTurnover ? L"全天成交" : L"预测全天",
-			forecastOk ? (swprintf_s(numBuf, L"%.0f亿", forecast / 1e8), numBuf) : (finalTurnover ? todayStr : std::wstring(L"--")),
+		{ L"当日成交额", todayStr, turnoverToday > 0 ? MC_TEXT : MC_TEXT_DIM },
+		{ L"昨日成交", ydayStr, turnoverYday > 0 ? MC_TEXT : MC_TEXT_DIM },
+		{ deltaLabel, deltaStr, deltaColor },
+		{ finalTurnover ? L"全天成交" : (tradingLive ? L"预测全天" : L"全天成交"),
+			finalTurnover ? todayStr : (forecastOk ? turnoverCellVal(forecast) : std::wstring(L"--")),
 			finalTurnover ? COLOR_GOLDEN : MC_TEXT },
 	};
 	// 列宽按内容加权：大数列（成交额类）多占，避免右侧大数挤压左侧涨跌家数格
