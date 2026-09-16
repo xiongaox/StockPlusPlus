@@ -94,6 +94,8 @@
 #define ID_UPDATE                       40004
 #define ID_OPTIONS                      40005
 #define ID_Menu                         40006
+// TEMP-PREVIEW：方案A预览临时菜单项，验证后连同菜单项一起删除
+#define ID_TEST_NOTIFY                  40007
 
 #define IDC_MGR_EDIT_BTN                1055
 #define IDC_GROUP_TAB                   1056
@@ -127,7 +129,7 @@
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        111
-#define _APS_NEXT_COMMAND_VALUE         40007
+#define _APS_NEXT_COMMAND_VALUE         40008
 #define _APS_NEXT_CONTROL_VALUE         1095
 #define _APS_NEXT_SYMED_VALUE           130
 #endif

@@ -252,6 +252,8 @@ private:
 
 	// 内部辅助方法
 	std::wstring GetStockName(const std::wstring& code);
+	// 「阈值提醒」列文本：形如 "+5% | -5%"，未设置的展示 "--"
+	std::wstring FormatAlertPercentText(const std::wstring& code);
 
 	// ===== 方案B：右侧内容区隐藏式滚动（无滚动条，滚轮驱动） =====
 	void GetScrollContentRect(CRect& contentRect) const; // 右侧内容可视区（未含滚动偏移）

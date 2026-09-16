@@ -168,6 +168,11 @@ public:
 	double GetAlertHighPrice(const std::wstring& code);
 	void SetAlertPrice(const std::wstring& code, double low, double high);
 
+	// 阈值提醒（每日涨跌幅百分比）：up/down 均为正数，分别表示涨幅/跌幅阈值，0 表示该方向不提醒
+	double GetAlertUpPercent(const std::wstring& code);
+	double GetAlertDownPercent(const std::wstring& code);
+	void SetAlertPercent(const std::wstring& code, double up, double down);
+
 	// 自定义分组管理
 	void AddCustomGroup(const std::wstring& name);
 	void DeleteCustomGroup(size_t index);
@@ -257,6 +262,9 @@ private:
 
 	// 关注价格映射表: code -> (low_price, high_price)
 	std::map<std::wstring, std::pair<double, double>> m_stock_alert_prices;
+
+	// 阈值提醒映射表: code -> (up_percent, down_percent)，均为正数，每日涨跌幅达标时提醒
+	std::map<std::wstring, std::pair<double, double>> m_stock_alert_pcts;
 
 	// 持仓配置映射表: code -> (cost_price, holding_count, buy_date)
 	std::map<std::wstring, std::tuple<double, double, std::wstring>> m_stock_positions;

@@ -286,6 +286,8 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 	m_stock_statusbar.clear();
 	// 加载每个股票的关联股票配置
 	m_stock_related.clear();
+	// 加载每个股票的每日涨跌幅阈值提醒配置
+	m_stock_alert_pcts.clear();
 	// 遍历全部已知代码（自选股/持仓/自定义分组），保证各组代码的独立配置都能读写
 	for (const auto& code : GetAllKnownStockCodes())
 	{
@@ -295,6 +297,14 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 		if (!low_str.empty()) low = std::stod(low_str);
 		if (!high_str.empty()) high = std::stod(high_str);
 		m_stock_alert_prices[code] = std::make_pair(low, high);
+
+		std::wstring up_pct_str = ini.GetString(code.c_str(), L"alert_up_pct", L"");
+		std::wstring down_pct_str = ini.GetString(code.c_str(), L"alert_down_pct", L"");
+		double up_pct = 0.0, down_pct = 0.0;
+		if (!up_pct_str.empty()) up_pct = std::stod(up_pct_str);
+		if (!down_pct_str.empty()) down_pct = std::stod(down_pct_str);
+		if (up_pct > 0 || down_pct > 0)
+			m_stock_alert_pcts[code] = std::make_pair(up_pct > 0 ? up_pct : 0.0, down_pct > 0 ? down_pct : 0.0);
 
 		std::wstring cost_str = ini.GetString(code.c_str(), L"cost_price", L"");
 		std::wstring count_str = ini.GetString(code.c_str(), L"holding_count", L"");
@@ -798,6 +808,16 @@ void CDataManager::SaveConfig()
 			}
 		}
 
+		// 保存每个股票的每日涨跌幅阈值提醒（均为正数，0 表示该方向不提醒）
+		for (const auto& pct : m_stock_alert_pcts)
+		{
+			const std::wstring& code = pct.first;
+			double up = pct.second.first;
+			double down = pct.second.second;
+			ini.WriteString(code.c_str(), L"alert_up_pct", up > 0 ? std::to_wstring(up) : L"");
+			ini.WriteString(code.c_str(), L"alert_down_pct", down > 0 ? std::to_wstring(down) : L"");
+		}
+
 		// 保存每个股票的持仓配置到 CIniHelper 缓冲区
 		for (const auto& position : m_stock_positions)
 		{
@@ -1044,6 +1064,9 @@ int CDataManager::UpdateRealtimeFromQuotes(const std::vector<QuoteItem>& items)
 		// 更新显示字段（价格/涨跌幅/涨跌额）
 		info.UpdateDisplayFields();
 
+		// 每日涨跌幅阈值提醒：行情更新后检查是否达标（方案A：宿主托盘气泡）
+		Stock::Instance().CheckDailyPercentAlertForStock(code);
+
 		validCount++;
 	}
 
@@ -1057,7 +1080,14 @@ int CDataManager::UpdateRealtimeFromQuotes(const std::vector<QuoteItem>& items)
 void CDataManager::ApplyRealtimeData(const std::vector<std::wstring>& codes, const std::string& resp)
 {
 	stockMarket.LoadRealtimeDataByJson(resp, codes);
-	
+
+	// 每日涨跌幅阈值提醒：HTTP 实时行情写入后逐只检查
+	for (const auto& code : codes)
+	{
+		if (!code.empty())
+			Stock::Instance().CheckDailyPercentAlertForStock(code);
+	}
+
 	UpdateRelatedStocksAvgDiff();
 }
 
@@ -1551,6 +1581,42 @@ void CDataManager::SetAlertPrice(const std::wstring& code, double low, double hi
 		if (it != m_stock_alert_prices.end())
 		{
 			m_stock_alert_prices.erase(it);
+		}
+	}
+}
+
+double CDataManager::GetAlertUpPercent(const std::wstring& code)
+{
+	auto it = m_stock_alert_pcts.find(code);
+	if (it != m_stock_alert_pcts.end())
+	{
+		return it->second.first;
+	}
+	return 0.0;
+}
+
+double CDataManager::GetAlertDownPercent(const std::wstring& code)
+{
+	auto it = m_stock_alert_pcts.find(code);
+	if (it != m_stock_alert_pcts.end())
+	{
+		return it->second.second;
+	}
+	return 0.0;
+}
+
+void CDataManager::SetAlertPercent(const std::wstring& code, double up, double down)
+{
+	if (up > 0 || down > 0)
+	{
+		m_stock_alert_pcts[code] = std::make_pair(up > 0 ? up : 0.0, down > 0 ? down : 0.0);
+	}
+	else
+	{
+		auto it = m_stock_alert_pcts.find(code);
+		if (it != m_stock_alert_pcts.end())
+		{
+			m_stock_alert_pcts.erase(it);
 		}
 	}
 }

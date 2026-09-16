@@ -74,10 +74,12 @@ int StockItem::GetSingleStockWidth(CDC* pDC, const std::wstring& code) const
 	width += priceWidth;
 
 	// 3. 价格与涨跌幅间隔 (3px) + 涨跌幅百分比
+	// 计算涨跌幅百分比（昨收缺失时沿用最近一次有效昨收兜底）
+	Price effPrev = data->info.EffectivePrevClose();
 	float fluctuation_percent = 0.0f;
-	if (data->info.prevClosePrice != 0)
+	if (effPrev != 0)
 	{
-		fluctuation_percent = (data->info.currentPrice - data->info.prevClosePrice) / data->info.prevClosePrice * 100;
+		fluctuation_percent = (data->info.currentPrice - effPrev) / effPrev * 100;
 	}
 
 	CString strDiff;
@@ -94,8 +96,8 @@ int StockItem::GetSingleStockWidth(CDC* pDC, const std::wstring& code) const
 
 	if (showTodayProfit)
 	{
-		double curPrice = (data->info.currentPrice > 0.0001 ? data->info.currentPrice : data->info.prevClosePrice);
-		double todayProfit = (curPrice - data->info.prevClosePrice) * holdingCount;
+		double curPrice = (data->info.currentPrice > 0.0001 ? data->info.currentPrice : effPrev);
+		double todayProfit = (curPrice - effPrev) * holdingCount;
 		CString strProfit;
 		if (todayProfit > 0.0001)
 			strProfit.Format(_T("【+%s】"), CCommon::FormatAmount(todayProfit).GetString());
@@ -286,15 +288,26 @@ int StockItem::DrawSingleStock(CDC* pDC, const std::wstring& code, int x, int y,
 		rect_value.left = rect_name.right;
 	}
 
-	// 计算涨跌幅百分比
+	// 计算涨跌幅百分比（昨收缺失时沿用最近一次有效昨收兜底）
 	float fluctuation_percent = 0.0f;
-	if (data && data->info.is_ok && data->info.prevClosePrice != 0)
+	bool has_prev_basis = false;
+	if (data && data->info.is_ok)
 	{
-		fluctuation_percent = (data->info.currentPrice - data->info.prevClosePrice) / data->info.prevClosePrice * 100;
+		Price effPrev = data->info.EffectivePrevClose();
+		if (effPrev != 0)
+		{
+			fluctuation_percent = (data->info.currentPrice - effPrev) / effPrev * 100;
+			has_prev_basis = true;
+		}
 	}
 
-	// 根据涨跌幅幅度设置颜色
-	COLORREF price_color = CCommon::GetProfitLossColor(fluctuation_percent);
+	// 配色：有昨收基准时按涨跌幅红涨绿跌；
+	// 无基准（未开盘/行情无效）时用默认文字色，避免误用橙色“持平”色与滞留的显示文本脱节
+	COLORREF price_color = color_default;
+	if (has_prev_basis)
+	{
+		price_color = CCommon::GetProfitLossColor(fluctuation_percent);
+	}
 
 	// 绘制价格（左对齐）
 	pDC->SetTextColor(price_color);
@@ -333,8 +346,9 @@ int StockItem::DrawSingleStock(CDC* pDC, const std::wstring& code, int x, int y,
 
 	if (showTodayProfit && data && data->info.is_ok)
 	{
-		double curPrice = (data->info.currentPrice > 0.0001 ? data->info.currentPrice : data->info.prevClosePrice);
-		double todayProfit = (curPrice - data->info.prevClosePrice) * holdingCount;
+		Price effPrevToday = data->info.EffectivePrevClose();
+		double curPrice = (data->info.currentPrice > 0.0001 ? data->info.currentPrice : effPrevToday);
+		double todayProfit = (curPrice - effPrevToday) * holdingCount;
 		CString strProfit;
 		if (todayProfit > 0.0001)
 			strProfit.Format(_T("【+%s】"), CCommon::FormatAmount(todayProfit).GetString());

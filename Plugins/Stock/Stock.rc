@@ -241,8 +241,8 @@ IDR_MENU1 MENU
 BEGIN
     POPUP "1"
     BEGIN
-        MENUITEM "管理股票列表(&O)...", ID_OPTIONS
         MENUITEM "更新股票信息(&U)", ID_UPDATE
+        MENUITEM "提醒预览(&P)", ID_TEST_NOTIFY
     END
 END
 
