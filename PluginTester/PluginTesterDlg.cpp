@@ -684,7 +684,7 @@ void CPluginTesterDlg::OnBnClickedBrowseButton()
 
 void CPluginTesterDlg::OnDestroy()
 {
-    CDialog::OnDestroy();
+        CDialog::OnDestroy();
 
     SaveConfig();
 }

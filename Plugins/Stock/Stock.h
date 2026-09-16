@@ -63,6 +63,9 @@ public:
 	bool IsPriceInSafeZone(double current_price, double bid1_price, double ask1_price, double low, double high);
 	void CheckPriceAlertForStock(const std::wstring& code);
 
+	// 每日涨跌幅阈值提醒：行情更新后由取数线程调用（当日涨跌幅达标即提醒，跨日自动重置）
+	void CheckDailyPercentAlertForStock(const std::wstring& code);
+
 	// 通知浮动窗口刷新显示（线程安全，可从工作线程调用）
 	void NotifyFloatingWndUpdate();
 	void NotifyFloatingWndOrderBookUpdate();  // 通知盘口数据更新
@@ -125,6 +128,17 @@ private:
 	std::mutex m_cost_alert_mutex;
 
 	void CheckCostPriceAlertForStock(const std::wstring& code);
+
+	// 每日涨跌幅阈值提醒：按「自然日」维度，当日涨幅/跌幅首次达到设定阈值时提醒一次，
+	// 跨日自动重置（今天到 3% 提醒，明天再到 3% 也会提醒）
+	struct DailyPctAlertState
+	{
+		std::wstring date;          // 已记录的日期 YYYY-MM-DD
+		bool up_fired{ false };     // 当日涨幅提醒是否已触发
+		bool down_fired{ false };   // 当日跌幅提醒是否已触发
+	};
+	std::map<std::wstring, DailyPctAlertState> m_daily_pct_alert_states;
+	std::mutex m_daily_pct_alert_mutex;
 
 	enum class HistoryPeriod {
 		YEAR_1,

@@ -79,11 +79,16 @@ void COverviewPanel::DrawIndexSection(CDC& memDC, int x, int y, int w, const std
 		int colX = x + i * colWidth;
 		int centerX = colX + colWidth / 2;
 
-		double displayPrice = info.currentPrice > 0 ? info.currentPrice : info.prevClosePrice;
-		double diff = displayPrice - info.prevClosePrice;
-		double diffPercent = info.prevClosePrice != 0 ? (diff / info.prevClosePrice) * 100 : 0;
+		// 昨收缺失（竞价前/刷新间隙）时沿用最近一次有效昨收兜底
+		double effPrev = info.EffectivePrevClose();
+		double displayPrice = info.currentPrice > 0 ? info.currentPrice : effPrev;
+		double diff = displayPrice - effPrev;
+		double diffPercent = effPrev != 0 ? (diff / effPrev) * 100 : 0;
 
-		COLORREF priceColor = CCommon::GetProfitLossColor(diffPercent);
+		// 无昨收基准时用名称同款主色，避免误用橙色“持平”色
+		COLORREF priceColor = COLOR_TEXT_PRIMARY;
+		if (effPrev != 0)
+			priceColor = CCommon::GetProfitLossColor(diffPercent);
 
 		// 均匀分配垂直空间：名称、价格、涨跌幅三者等间距排列
 		int totalTextHeight = normalFontHeight + largeFontHeight + normalFontHeight;

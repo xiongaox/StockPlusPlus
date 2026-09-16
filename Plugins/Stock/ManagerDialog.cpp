@@ -73,6 +73,9 @@ namespace
 	const UINT WM_APP_SEARCH_RESULT_READY = WM_APP + 132;
 	const UINT IDC_API_TEST_BTN = 1197;
 
+	// 分组管理三个列表的「阈值提醒」列索引（7 列布局：交易所/代码/名称/阈值提醒/...）
+	const int ALERT_PERCENT_COLUMN = 3;
+
 	struct WebDavAsyncResult
 	{
 		int op{ WEBDAV_OP_TEST };
@@ -1525,6 +1528,305 @@ public:
 	}
 };
 
+// 每日涨跌幅阈值提醒设置（暗色弹窗，双击分组管理列表「阈值提醒」列时打开）
+// 语义：按自然日统计当日涨跌幅，涨幅/跌幅首次达到阈值时提醒一次，跨日自动重置
+class CDarkPercentAlertInputDlg : public CDialog
+{
+public:
+	std::wstring m_exchange;
+	std::wstring m_code;
+	std::wstring m_name;
+	std::wstring m_full_code;
+	double m_up_percent{ 0.0 };    // 涨幅阈值（正数，%）
+	double m_down_percent{ 0.0 };  // 跌幅阈值（正数，%）
+
+	CEdit m_up_edit;
+	CEdit m_down_edit;
+	CButton m_btn_ok;
+	CButton m_btn_cancel;
+
+	CFont m_font;
+	CFont m_font_bold;
+	CBrush m_bg_brush;
+	CBrush m_edit_brush;
+
+	CDarkPercentAlertInputDlg(const std::wstring& fullCode, CWnd* pParent = nullptr)
+		: CDialog(), m_full_code(fullCode)
+	{
+		m_exchange = CCommon::GetExchangeName(fullCode);
+		m_code = CCommon::GetPureCode(fullCode);
+		auto stockData = g_data.GetStockData(fullCode);
+		if (stockData && !stockData->info.displayName.empty())
+			m_name = stockData->info.displayName;
+		else
+			m_name = m_code;
+		m_up_percent = g_data.GetAlertUpPercent(fullCode);
+		m_down_percent = g_data.GetAlertDownPercent(fullCode);
+	}
+
+	INT_PTR DoModal(CWnd* pParent = nullptr)
+	{
+		BYTE buffer[512] = { 0 };
+		DLGTEMPLATE* pDlg = (DLGTEMPLATE*)buffer;
+		pDlg->style = WS_POPUP | WS_CAPTION | WS_SYSMENU | DS_MODALFRAME | DS_CENTER;
+		pDlg->dwExtendedStyle = 0;
+		pDlg->cdit = 0;
+		pDlg->x = 0;
+		pDlg->y = 0;
+		pDlg->cx = 215;
+		pDlg->cy = 140;
+
+		InitModalIndirect(pDlg, pParent);
+		return CDialog::DoModal();
+	}
+
+	virtual BOOL OnInitDialog() override
+	{
+		CDialog::OnInitDialog();
+		SetWindowText(L"阈值提醒");
+
+		BOOL darkCaption = TRUE;
+		::DwmSetWindowAttribute(GetSafeHwnd(), 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &darkCaption, sizeof(darkCaption));
+
+		m_font.CreatePointFont(100, _T("微软雅黑"));
+		m_font_bold.CreatePointFont(105, _T("微软雅黑"));
+		SetFont(&m_font);
+
+		m_bg_brush.CreateSolidBrush(RGB(18, 20, 26));      // #12141A
+		m_edit_brush.CreateSolidBrush(RGB(13, 15, 21));
+
+		CRect cr;
+		GetClientRect(&cr);
+
+		int marginX = g_data.DPI(16);
+		int editH = g_data.DPI(26);
+		int editBoxH = g_data.DPI(18);
+		int editOffset = g_data.DPI(4);
+		int editBorderLeft = marginX + g_data.DPI(92);
+		int editInnerLeft = editBorderLeft + g_data.DPI(6);
+		int editInnerRight = cr.right - marginX - g_data.DPI(6);
+
+		int upY = g_data.DPI(64);
+		m_up_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+			CRect(editInnerLeft, upY + editOffset, editInnerRight, upY + editOffset + editBoxH), this, 1101);
+		m_up_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
+		::SetWindowTheme(m_up_edit.GetSafeHwnd(), L"", L"");
+		m_up_edit.SetFont(&m_font);
+		if (m_up_percent > 0)
+		{
+			CString s;
+			s.Format(_T("%g"), m_up_percent);
+			m_up_edit.SetWindowText(s);
+		}
+		m_up_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"输入涨幅提醒(%)，如 5");
+
+		int downY = upY + editH + g_data.DPI(12);
+		m_down_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+			CRect(editInnerLeft, downY + editOffset, editInnerRight, downY + editOffset + editBoxH), this, 1102);
+		m_down_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
+		::SetWindowTheme(m_down_edit.GetSafeHwnd(), L"", L"");
+		m_down_edit.SetFont(&m_font);
+		if (m_down_percent > 0)
+		{
+			CString s;
+			s.Format(_T("%g"), m_down_percent);
+			m_down_edit.SetWindowText(s);
+		}
+		m_down_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"输入跌幅提醒(%)，如 3");
+
+		int btnW = g_data.DPI(70);
+		int btnH = g_data.DPI(26);
+		int btnY = cr.bottom - btnH - g_data.DPI(12);
+
+		m_btn_ok.Create(_T("确定"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON | BS_OWNERDRAW,
+			CRect(cr.right - btnW * 2 - marginX - g_data.DPI(10), btnY, cr.right - btnW - marginX - g_data.DPI(10), btnY + btnH), this, IDOK);
+		m_btn_ok.SetFont(&m_font_bold);
+
+		m_btn_cancel.Create(_T("取消"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW,
+			CRect(cr.right - btnW - marginX, btnY, cr.right - marginX, btnY + btnH), this, IDCANCEL);
+		m_btn_cancel.SetFont(&m_font);
+
+		m_up_edit.SetFocus();
+		m_up_edit.SetSel(0, -1);
+
+		return FALSE;
+	}
+
+	virtual LRESULT WindowProc(UINT message, WPARAM wParam, LPARAM lParam) override
+	{
+		if (message == WM_ERASEBKGND)
+		{
+			return TRUE;
+		}
+		else if (message == WM_CTLCOLOREDIT)
+		{
+			HDC hdc = (HDC)wParam;
+			::SetTextColor(hdc, RGB(255, 255, 255));
+			::SetBkColor(hdc, RGB(13, 15, 21));
+			return (LRESULT)(HBRUSH)m_edit_brush;
+		}
+		else if (message == WM_COMMAND)
+		{
+			WORD wNotifyCode = HIWORD(wParam);
+			if (wNotifyCode == EN_SETFOCUS || wNotifyCode == EN_KILLFOCUS)
+			{
+				InvalidateRect(nullptr, FALSE);
+			}
+		}
+		else if (message == WM_CTLCOLORSTATIC)
+		{
+			HDC hdc = (HDC)wParam;
+			::SetTextColor(hdc, RGB(226, 232, 240));
+			::SetBkColor(hdc, RGB(18, 20, 26));
+			return (LRESULT)(HBRUSH)m_bg_brush;
+		}
+		else if (message == WM_DRAWITEM)
+		{
+			LPDRAWITEMSTRUCT pDI = (LPDRAWITEMSTRUCT)lParam;
+			if (pDI->CtlType == ODT_BUTTON)
+			{
+				CDC dc;
+				dc.Attach(pDI->hDC);
+				CRect rect = pDI->rcItem;
+				UINT state = pDI->itemState;
+				CString text = (pDI->CtlID == IDOK) ? _T("确定") : _T("取消");
+
+				COLORREF bgColor = (pDI->CtlID == IDOK) ? RGB(37, 99, 235) : RGB(30, 35, 46);
+				if (state & ODS_SELECTED) bgColor = (pDI->CtlID == IDOK) ? RGB(29, 78, 216) : RGB(20, 25, 35);
+
+				dc.FillSolidRect(rect, bgColor);
+
+				dc.SetBkMode(TRANSPARENT);
+				dc.SetTextColor(RGB(255, 255, 255));
+				CFont* pFont = (pDI->CtlID == IDOK) ? &m_font_bold : &m_font;
+				CFont* pOldFont = dc.SelectObject(pFont);
+				dc.DrawText(text, rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+				dc.SelectObject(pOldFont);
+				dc.Detach();
+				return TRUE;
+			}
+		}
+		else if (message == WM_PAINT)
+		{
+			CPaintDC dc(this);
+			CRect rc;
+			GetClientRect(rc);
+
+			CDC memDC;
+			memDC.CreateCompatibleDC(&dc);
+			CBitmap memBmp;
+			memBmp.CreateCompatibleBitmap(&dc, rc.Width(), rc.Height());
+			CBitmap* pOldBmp = memDC.SelectObject(&memBmp);
+
+			Gdiplus::Graphics g(memDC.GetSafeHdc());
+			g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+			g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+
+			// 1. 底色
+			Gdiplus::SolidBrush bg(Gdiplus::Color(255, 18, 20, 26));
+			g.FillRectangle(&bg, 0, 0, rc.Width(), rc.Height());
+
+			int marginX = g_data.DPI(16);
+
+			// 2. 股票信息展示卡片
+			int cardTop = g_data.DPI(12);
+			int cardBottom = cardTop + g_data.DPI(34);
+			CRect cardRc(marginX, cardTop, rc.right - marginX, cardBottom);
+			Gdiplus::SolidBrush cardBg(Gdiplus::Color(255, 24, 27, 34));
+			g.FillRectangle(&cardBg, cardRc.left, cardRc.top, cardRc.Width(), cardRc.Height());
+			Gdiplus::Pen cardBorder(Gdiplus::Color(255, 42, 48, 63), 1.0f);
+			g.DrawRectangle(&cardBorder, cardRc.left, cardRc.top, cardRc.Width(), cardRc.Height());
+
+			Gdiplus::SolidBrush whiteTxt(Gdiplus::Color(255, 255, 255, 255));
+
+			// 交易所 Badge
+			int badgeW = g_data.DPI(50);
+			int badgeH = g_data.DPI(18);
+			int badgeX = cardRc.left + g_data.DPI(12);
+			int badgeY = cardRc.top + g_data.DPI(8);
+			Gdiplus::RectF badgeRf(static_cast<Gdiplus::REAL>(badgeX), static_cast<Gdiplus::REAL>(badgeY), static_cast<Gdiplus::REAL>(badgeW), static_cast<Gdiplus::REAL>(badgeH));
+			Gdiplus::SolidBrush badgeBg(Gdiplus::Color(255, 37, 99, 235));
+			g.FillRectangle(&badgeBg, badgeRf);
+
+			Gdiplus::Font badgeFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+			Gdiplus::StringFormat sfCenter;
+			sfCenter.SetAlignment(Gdiplus::StringAlignmentCenter);
+			sfCenter.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+			Gdiplus::RectF badgeTxtRf = badgeRf;
+			badgeTxtRf.Y += static_cast<Gdiplus::REAL>(g_data.DPI(1));
+			g.DrawString(m_exchange.c_str(), -1, &badgeFont, badgeTxtRf, &sfCenter, &whiteTxt);
+
+			// 代码
+			int codeX = badgeX + badgeW + g_data.DPI(8);
+			Gdiplus::Font codeFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(12)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+			Gdiplus::SolidBrush codeTxt(Gdiplus::Color(255, 148, 163, 184));
+			g.DrawString(m_code.c_str(), -1, &codeFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(codeX), static_cast<Gdiplus::REAL>(badgeY + g_data.DPI(1))), &codeTxt);
+
+			// 股票名称
+			int nameX = codeX + g_data.DPI(50);
+			Gdiplus::Font nameFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(13)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+			g.DrawString(m_name.c_str(), -1, &nameFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(nameX), static_cast<Gdiplus::REAL>(badgeY + 1)), &whiteTxt);
+
+			// 3. 标签文字（涨幅提醒 / 跌幅提醒）
+			Gdiplus::Font labelFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(12)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+			Gdiplus::SolidBrush labelBrush(Gdiplus::Color(255, 203, 213, 225));
+
+			int upY = g_data.DPI(64);
+			g.DrawString(L"涨幅提醒 (%):", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(upY + g_data.DPI(5))), &labelBrush);
+
+			int downY = upY + g_data.DPI(26) + g_data.DPI(12);
+			g.DrawString(L"跌幅提醒 (%):", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(downY + g_data.DPI(5))), &labelBrush);
+
+			// 输入框字段边框
+			auto drawEdit = [&](CWnd& edit, int y) {
+				if (!edit.GetSafeHwnd()) return;
+
+				int editBorderLeft = marginX + g_data.DPI(92);
+				CRect editRc(editBorderLeft, y, rc.right - marginX, y + g_data.DPI(26));
+
+				Gdiplus::SolidBrush editBg(Gdiplus::Color(255, 13, 15, 21));
+				g.FillRectangle(&editBg, editRc.left, editRc.top, editRc.Width(), editRc.Height());
+
+				CWnd* pFocus = GetFocus();
+				bool focused = (pFocus && pFocus->GetSafeHwnd() == edit.GetSafeHwnd());
+				Gdiplus::Pen pen(focused ? Gdiplus::Color(255, 37, 99, 235) : Gdiplus::Color(255, 52, 58, 72), 1.0f);
+				g.DrawRectangle(&pen, editRc.left, editRc.top, editRc.Width() - 1, editRc.Height() - 1);
+			};
+			drawEdit(m_up_edit, upY);
+			drawEdit(m_down_edit, downY);
+
+			dc.BitBlt(0, 0, rc.Width(), rc.Height(), &memDC, 0, 0, SRCCOPY);
+			memDC.SelectObject(pOldBmp);
+			return 0;
+		}
+
+		return CDialog::WindowProc(message, wParam, lParam);
+	}
+
+	virtual void OnOK() override
+	{
+		CString strUp, strDown;
+		if (m_up_edit.GetSafeHwnd())
+			m_up_edit.GetWindowText(strUp);
+		if (m_down_edit.GetSafeHwnd())
+			m_down_edit.GetWindowText(strDown);
+
+		strUp.Trim();
+		strDown.Trim();
+
+		double up = strUp.IsEmpty() ? 0.0 : _ttof(strUp);
+		double down = strDown.IsEmpty() ? 0.0 : _ttof(strDown);
+		if (up < 0) up = 0;
+		if (down < 0) down = 0;
+		if (up > 100) up = 100;
+		if (down > 100) down = 100;
+		m_up_percent = up;
+		m_down_percent = down;
+
+		CDialog::OnOK();
+	}
+};
+
 // CManagerDialog 对话框
 
 IMPLEMENT_DYNAMIC(CManagerDialog, CDialog)
@@ -1939,6 +2241,7 @@ BOOL CManagerDialog::OnInitDialog()
 		{ L"交易所", LVCFMT_CENTER, g_data.DPI(65) },
 		{ L"代码", LVCFMT_CENTER, g_data.DPI(75) },
 		{ L"名称", LVCFMT_LEFT, g_data.DPI(130) },
+		{ L"阈值提醒", LVCFMT_CENTER, g_data.DPI(95) },
 		{ L"关注低价", LVCFMT_CENTER, g_data.DPI(75) },
 		{ L"关注高价", LVCFMT_CENTER, g_data.DPI(75) },
 		{ L"状态栏显示", LVCFMT_CENTER, g_data.DPI(75) }
@@ -1949,6 +2252,7 @@ BOOL CManagerDialog::OnInitDialog()
 		{ L"交易所", LVCFMT_CENTER, g_data.DPI(65) },
 		{ L"代码", LVCFMT_CENTER, g_data.DPI(75) },
 		{ L"股票名称", LVCFMT_LEFT, g_data.DPI(130) },
+		{ L"阈值提醒", LVCFMT_CENTER, g_data.DPI(95) },
 		{ L"成本价", LVCFMT_CENTER, g_data.DPI(80) },
 		{ L"持股数", LVCFMT_CENTER, g_data.DPI(80) },
 		{ L"状态栏显示", LVCFMT_CENTER, g_data.DPI(75) }
@@ -1959,6 +2263,7 @@ BOOL CManagerDialog::OnInitDialog()
 		{ L"交易所", LVCFMT_CENTER, g_data.DPI(65) },
 		{ L"代码", LVCFMT_CENTER, g_data.DPI(75) },
 		{ L"名称", LVCFMT_LEFT, g_data.DPI(130) },
+		{ L"阈值提醒", LVCFMT_CENTER, g_data.DPI(95) },
 		{ L"关注低价", LVCFMT_CENTER, g_data.DPI(75) },
 		{ L"关注高价", LVCFMT_CENTER, g_data.DPI(75) },
 		{ L"状态栏显示", LVCFMT_CENTER, g_data.DPI(75) }
@@ -1969,9 +2274,12 @@ BOOL CManagerDialog::OnInitDialog()
 		HWND hHeader = list.GetHeaderCtrl() ? list.GetHeaderCtrl()->GetSafeHwnd() : nullptr;
 		if (hHeader && hdr.GetSafeHwnd() == nullptr)
 			hdr.SubclassWindow(hHeader);
+		// 禁止拖动表头分隔线调整列宽：列宽始终由 AdjustListColumns 自动分配并精确填满列表
+		if (hHeader)
+			::SetWindowLong(hHeader, GWL_STYLE, ::GetWindowLong(hHeader, GWL_STYLE) | HDS_NOSIZING);
 		SetWindowTheme(list.GetSafeHwnd(), L"DarkMode_Explorer", nullptr);
 		list.SetExtendedStyle(list.GetExtendedStyle() | LVS_EX_DOUBLEBUFFER);
-		list.ModifyStyle(WS_BORDER, 0);
+		list.ModifyStyle(WS_BORDER | WS_HSCROLL, 0);
 		list.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
 		::SetWindowPos(list.GetSafeHwnd(), nullptr, 0, 0, 0, 0,
 			SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
@@ -2134,6 +2442,27 @@ std::wstring CManagerDialog::GetStockName(const std::wstring& code)
 	return code;
 }
 
+// 「阈值提醒」列文本：形如 "+5% | -5%"，某一方向未设置时该侧显示 "--"，两侧都未设置为空
+std::wstring CManagerDialog::FormatAlertPercentText(const std::wstring& code)
+{
+	double up = g_data.GetAlertUpPercent(code);
+	double down = g_data.GetAlertDownPercent(code);
+	if (up <= 0 && down <= 0)
+		return std::wstring();
+
+	CString up_part, down_part, text;
+	if (up > 0)
+		up_part.Format(_T("+%g%%"), up);
+	else
+		up_part = _T("--");
+	if (down > 0)
+		down_part.Format(_T("-%g%%"), down);
+	else
+		down_part = _T("--");
+	text.Format(_T("%s|%s"), (LPCTSTR)up_part, (LPCTSTR)down_part);
+	return std::wstring(text.GetString());
+}
+
 void CManagerDialog::RefreshStockList()
 {
 	m_stock_listctrl.DeleteAllItems();
@@ -2148,31 +2477,32 @@ void CManagerDialog::RefreshStockList()
 		m_stock_listctrl.SetItemText(nItem, 1, pureCode.c_str());
 		m_stock_listctrl.SetItemText(nItem, 2, name.c_str());
 
+		m_stock_listctrl.SetItemText(nItem, 3, FormatAlertPercentText(code).c_str());
+
 		double low = g_data.GetAlertLowPrice(code);
 		double high = g_data.GetAlertHighPrice(code);
 		if (low > 0)
 		{
 			CString lowStr;
 			lowStr.Format(_T("%.2f"), low);
-			m_stock_listctrl.SetItemText(nItem, 3, lowStr);
+			m_stock_listctrl.SetItemText(nItem, 4, lowStr);
 		}
 		if (high > 0)
 		{
 			CString highStr;
 			highStr.Format(_T("%.2f"), high);
-			m_stock_listctrl.SetItemText(nItem, 4, highStr);
+			m_stock_listctrl.SetItemText(nItem, 5, highStr);
 		}
 
 		if (g_data.GetShowInStatusBar(code))
 		{
-			m_stock_listctrl.SetItemText(nItem, 5, L"√");
+			m_stock_listctrl.SetItemText(nItem, 6, L"√");
 		}
 		else
 		{
-			m_stock_listctrl.SetItemText(nItem, 5, L"");
+			m_stock_listctrl.SetItemText(nItem, 6, L"");
 		}
 	}
-	AdjustListColumns(m_stock_listctrl, 0);
 }
 
 void CManagerDialog::RefreshPositionList()
@@ -2200,21 +2530,21 @@ void CManagerDialog::RefreshPositionList()
 		strCost.Format(_T("%.2f"), cost);
 		strCount.Format(_T("%.0f"), count);
 
-		m_pos_listctrl.SetItemText(nItem, 3, strCost);
-		m_pos_listctrl.SetItemText(nItem, 4, strCount);
+		m_pos_listctrl.SetItemText(nItem, 3, FormatAlertPercentText(code).c_str());
+		m_pos_listctrl.SetItemText(nItem, 4, strCost);
+		m_pos_listctrl.SetItemText(nItem, 5, strCount);
 
 		if (g_data.GetShowInStatusBar(code))
 		{
-			m_pos_listctrl.SetItemText(nItem, 5, L"√");
+			m_pos_listctrl.SetItemText(nItem, 6, L"√");
 		}
 		else
 		{
-			m_pos_listctrl.SetItemText(nItem, 5, L"");
+			m_pos_listctrl.SetItemText(nItem, 6, L"");
 		}
 
 		nItem++;
 	}
-	AdjustListColumns(m_pos_listctrl, 1);
 }
 
 void CManagerDialog::RefreshCustomList()
@@ -2235,32 +2565,33 @@ void CManagerDialog::RefreshCustomList()
 			m_custom_listctrl.SetItemText(nItem, 1, pureCode.c_str());
 			m_custom_listctrl.SetItemText(nItem, 2, name.c_str());
 
+			m_custom_listctrl.SetItemText(nItem, 3, FormatAlertPercentText(code).c_str());
+
 			double low = g_data.GetAlertLowPrice(code);
 			double high = g_data.GetAlertHighPrice(code);
 			if (low > 0)
 			{
 				CString lowStr;
 				lowStr.Format(_T("%.2f"), low);
-				m_custom_listctrl.SetItemText(nItem, 3, lowStr);
+				m_custom_listctrl.SetItemText(nItem, 4, lowStr);
 			}
 			if (high > 0)
 			{
 				CString highStr;
 				highStr.Format(_T("%.2f"), high);
-				m_custom_listctrl.SetItemText(nItem, 4, highStr);
+				m_custom_listctrl.SetItemText(nItem, 5, highStr);
 			}
 
 			if (g_data.GetShowInStatusBar(code))
 			{
-				m_custom_listctrl.SetItemText(nItem, 5, L"√");
+				m_custom_listctrl.SetItemText(nItem, 6, L"√");
 			}
 			else
 			{
-				m_custom_listctrl.SetItemText(nItem, 5, L"");
+				m_custom_listctrl.SetItemText(nItem, 6, L"");
 			}
 		}
 	}
-	AdjustListColumns(m_custom_listctrl, 2);
 }
 
 void CManagerDialog::AdjustListColumns(CListCtrl& list, int tabType)
@@ -2271,49 +2602,45 @@ void CManagerDialog::AdjustListColumns(CListCtrl& list, int tabType)
 	int totalW = clientRc.Width();
 	if (totalW <= 0) return;
 
-	if (tabType == 1) // 持仓 (6 列: 交易所, 代码, 股票名称, 成本价, 持股数, 状态栏显示)
+	if (tabType == 1) // 持仓 (7 列: 交易所, 代码, 股票名称, 阈值提醒, 成本价, 持股数, 状态栏显示)
 	{
-		int w0 = max(g_data.DPI(55), totalW * 12 / 100);  // 交易所
-		int w1 = max(g_data.DPI(70), totalW * 14 / 100);  // 代码
-		int w2 = max(g_data.DPI(110), totalW * 30 / 100); // 股票名称
-		int w3 = max(g_data.DPI(65), totalW * 14 / 100);  // 成本价
-		int w4 = max(g_data.DPI(65), totalW * 14 / 100);  // 持股数
-		int w5 = max(g_data.DPI(70), totalW - (w0 + w1 + w2 + w3 + w4)); // 状态栏显示
-		if (w5 < g_data.DPI(50)) w5 = g_data.DPI(50);
+		int w0 = max(g_data.DPI(46), totalW * 10 / 100);   // 交易所
+		int w1 = max(g_data.DPI(56), totalW * 11 / 100);   // 代码
+		int w2 = max(g_data.DPI(84), totalW * 22 / 100);   // 股票名称
+		int w3 = max(g_data.DPI(112), totalW * 16 / 100);  // 阈值提醒（容纳 "+5.01%|-5.01%"）
+		int w4 = max(g_data.DPI(56), totalW * 11 / 100);   // 成本价
+		int w5 = max(g_data.DPI(56), totalW * 11 / 100);   // 持股数
+		int w6 = max(g_data.DPI(80), totalW - (w0 + w1 + w2 + w3 + w4 + w5)); // 状态栏显示
+		if (w6 < g_data.DPI(80)) w6 = g_data.DPI(80);
 
-		list.SetColumnWidth(0, w0);
-		list.SetColumnWidth(1, w1);
-		list.SetColumnWidth(2, w2);
-		list.SetColumnWidth(3, w3);
-		list.SetColumnWidth(4, w4);
-		list.SetColumnWidth(5, w5);
+		const int widths[7] = { w0, w1, w2, w3, w4, w5, w6 };
+		for (int i = 0; i < 7; ++i)
+			list.SetColumnWidth(i, widths[i]);
 	}
-	else // 自选股 / 自定义分组 (6 列)
+	else // 自选股 / 自定义分组 (7 列: 交易所, 代码, 名称, 阈值提醒, 关注低价, 关注高价, 状态栏显示)
 	{
-		int w0 = max(g_data.DPI(55), totalW * 14 / 100);
-		int w1 = max(g_data.DPI(70), totalW * 16 / 100);
-		int w2 = max(g_data.DPI(100), totalW * 28 / 100);
-		int w3 = max(g_data.DPI(65), totalW * 14 / 100);
-		int w4 = max(g_data.DPI(65), totalW * 14 / 100);
-		int w5 = max(g_data.DPI(70), totalW - (w0 + w1 + w2 + w3 + w4));
-		if (w5 < g_data.DPI(50)) w5 = g_data.DPI(50);
+		int w0 = max(g_data.DPI(46), totalW * 10 / 100);
+		int w1 = max(g_data.DPI(56), totalW * 11 / 100);
+		int w2 = max(g_data.DPI(84), totalW * 22 / 100);
+		int w3 = max(g_data.DPI(112), totalW * 16 / 100);  // 阈值提醒（容纳 "+5.01%|-5.01%"）
+		int w4 = max(g_data.DPI(56), totalW * 11 / 100);   // 关注低价
+		int w5 = max(g_data.DPI(56), totalW * 11 / 100);   // 关注高价
+		int w6 = max(g_data.DPI(80), totalW - (w0 + w1 + w2 + w3 + w4 + w5));
+		if (w6 < g_data.DPI(80)) w6 = g_data.DPI(80);
 
-		list.SetColumnWidth(0, w0);
-		list.SetColumnWidth(1, w1);
-		list.SetColumnWidth(2, w2);
-		list.SetColumnWidth(3, w3);
-		list.SetColumnWidth(4, w4);
-		list.SetColumnWidth(5, w5);
+		const int widths[7] = { w0, w1, w2, w3, w4, w5, w6 };
+		for (int i = 0; i < 7; ++i)
+			list.SetColumnWidth(i, widths[i]);
 	}
 
 	// 末列吸收累计误差：回读各列实际生效宽度，把与客户区的差值全部补给
 	// 最后一列，确保「状态栏显示」右缘精确贴合列表右边框（消除末列后空隙）
 	int applied = 0;
-	for (int i = 0; i < 5; ++i)
+	for (int i = 0; i < 6; ++i)
 		applied += list.GetColumnWidth(i);
-	int diff = totalW - applied - list.GetColumnWidth(5);
+	int diff = totalW - applied - list.GetColumnWidth(6);
 	if (diff != 0)
-		list.SetColumnWidth(5, max(g_data.DPI(50), list.GetColumnWidth(5) + diff));
+		list.SetColumnWidth(6, max(g_data.DPI(50), list.GetColumnWidth(6) + diff));
 }
 
 void CManagerDialog::SwitchPage(PageIndex page)
@@ -5584,6 +5911,26 @@ void CManagerDialog::OnListItemClick(NMHDR* pNMHDR, LRESULT* pResult)
 
 void CManagerDialog::OnLbnDblclkMgrList(NMHDR* pNMHDR, LRESULT* pResult)
 {
+	LPNMITEMACTIVATE pNMItem = reinterpret_cast<LPNMITEMACTIVATE>(pNMHDR);
+	// 双击「阈值提醒」列：设置每日涨跌幅阈值；其余列沿用关注价格设置
+	if (pNMItem->iSubItem == ALERT_PERCENT_COLUMN)
+	{
+		int idx = pNMItem->iItem;
+		if (idx >= 0 && idx < static_cast<int>(m_data.m_stock_codes.size()))
+		{
+			const auto& code = m_data.m_stock_codes[idx];
+			CDarkPercentAlertInputDlg dlg(code, this);
+			if (dlg.DoModal(this) == IDOK)
+			{
+				g_data.SetAlertPercent(code, dlg.m_up_percent, dlg.m_down_percent);
+				g_data.SaveConfig();
+				RefreshStockList();
+			}
+		}
+		*pResult = 0;
+		return;
+	}
+
 	int index = m_stock_listctrl.GetNextItem(-1, LVNI_SELECTED);
 	if (index >= 0 && index < static_cast<int>(m_data.m_stock_codes.size()))
 	{
@@ -5601,6 +5948,26 @@ void CManagerDialog::OnLbnDblclkMgrList(NMHDR* pNMHDR, LRESULT* pResult)
 
 void CManagerDialog::OnLbnDblclkPosList(NMHDR* pNMHDR, LRESULT* pResult)
 {
+	LPNMITEMACTIVATE pNMItem = reinterpret_cast<LPNMITEMACTIVATE>(pNMHDR);
+	// 双击「阈值提醒」列：设置每日涨跌幅阈值；其余列沿用持仓成本编辑
+	if (pNMItem->iSubItem == ALERT_PERCENT_COLUMN)
+	{
+		DWORD_PTR codeIdx = (pNMItem->iItem >= 0) ? m_pos_listctrl.GetItemData(pNMItem->iItem) : static_cast<DWORD_PTR>(-1);
+		if (codeIdx < m_data.m_position_codes.size())
+		{
+			const auto& code = m_data.m_position_codes[codeIdx];
+			CDarkPercentAlertInputDlg dlg(code, this);
+			if (dlg.DoModal(this) == IDOK)
+			{
+				g_data.SetAlertPercent(code, dlg.m_up_percent, dlg.m_down_percent);
+				g_data.SaveConfig();
+				RefreshPositionList();
+			}
+		}
+		*pResult = 0;
+		return;
+	}
+
 	int index = m_pos_listctrl.GetNextItem(-1, LVNI_SELECTED);
 	if (index >= 0)
 	{
@@ -5623,8 +5990,31 @@ void CManagerDialog::OnLbnDblclkPosList(NMHDR* pNMHDR, LRESULT* pResult)
 
 void CManagerDialog::OnLbnDblclkCustomList(NMHDR* pNMHDR, LRESULT* pResult)
 {
-	int index = m_custom_listctrl.GetNextItem(-1, LVNI_SELECTED);
+	LPNMITEMACTIVATE pNMItem = reinterpret_cast<LPNMITEMACTIVATE>(pNMHDR);
 	size_t groupIdx = (m_current_group_tab >= 2) ? static_cast<size_t>(m_current_group_tab - 2) : 0;
+	// 双击「阈值提醒」列：设置每日涨跌幅阈值；其余列沿用关注价格设置
+	if (pNMItem->iSubItem == ALERT_PERCENT_COLUMN)
+	{
+		if (groupIdx < m_data.m_custom_groups.size())
+		{
+			auto& codes = m_data.m_custom_groups[groupIdx].codes;
+			if (pNMItem->iItem >= 0 && pNMItem->iItem < static_cast<int>(codes.size()))
+			{
+				const auto& code = codes[pNMItem->iItem];
+				CDarkPercentAlertInputDlg dlg(code, this);
+				if (dlg.DoModal(this) == IDOK)
+				{
+					g_data.SetAlertPercent(code, dlg.m_up_percent, dlg.m_down_percent);
+					g_data.SaveConfig();
+					RefreshCustomList();
+				}
+			}
+		}
+		*pResult = 0;
+		return;
+	}
+
+	int index = m_custom_listctrl.GetNextItem(-1, LVNI_SELECTED);
 	if (groupIdx < m_data.m_custom_groups.size())
 	{
 		auto& codes = m_data.m_custom_groups[groupIdx].codes;

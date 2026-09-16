@@ -1,11 +1,15 @@
 
-// PluginTester.cpp : å®šä¹‰åº”ç”¨ç¨‹åºçš„ç±»è¡Œä¸ºã€‚
+// PluginTester.cpp : ¶¨ÒåÓ¦ÓÃ³ÌĞòµÄÀàĞĞÎª¡£
 //
 
 #include "stdafx.h"
 #include "PluginTester.h"
 #include "PluginTesterDlg.h"
 #include "../utilities/IniHelper.h"
+#include <shellapi.h>
+#include <thread>
+#include <chrono>
+#include <fstream>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -19,12 +23,12 @@ BEGIN_MESSAGE_MAP(CPluginTesterApp, CWinApp)
 END_MESSAGE_MAP()
 
 
-// CPluginTesterApp æ„é€ 
+// CPluginTesterApp ¹¹Ôì
 
 CPluginTesterApp::CPluginTesterApp()
 {
-    // TODO: åœ¨æ­¤å¤„æ·»åŠ æ„é€ ä»£ç ï¼Œ
-    // å°†æ‰€æœ‰é‡è¦çš„åˆå§‹åŒ–æ”¾ç½®åœ¨ InitInstance ä¸­
+    // TODO: ÔÚ´Ë´¦Ìí¼Ó¹¹Ôì´úÂë£¬
+    // ½«ËùÓĞÖØÒªµÄ³õÊ¼»¯·ÅÖÃÔÚ InitInstance ÖĞ
 }
 
 
@@ -68,12 +72,12 @@ void CPluginTesterApp::SaveConfig() const
     ini.Save();
 }
 
-// å”¯ä¸€çš„ä¸€ä¸ª CPluginTesterApp å¯¹è±¡
+// Î¨Ò»µÄÒ»¸ö CPluginTesterApp ¶ÔÏó
 
 CPluginTesterApp theApp;
 
 
-// CPluginTesterApp åˆå§‹åŒ–
+// CPluginTesterApp ³õÊ¼»¯
 
 BOOL CPluginTesterApp::InitInstance()
 {
@@ -83,7 +87,7 @@ BOOL CPluginTesterApp::InitInstance()
 
     LoadConfig();
 
-    //åˆå§‹åŒ–ç•Œé¢è¯­è¨€
+    //³õÊ¼»¯½çÃæÓïÑÔ
     switch (m_language)
     {
     case Language::ENGLISH:
@@ -99,23 +103,23 @@ BOOL CPluginTesterApp::InitInstance()
     CWinApp::InitInstance();
 
 
-    // åˆ›å»º shell ç®¡ç†å™¨ï¼Œä»¥é˜²å¯¹è¯æ¡†åŒ…å«
-    // ä»»ä½• shell æ ‘è§†å›¾æ§ä»¶æˆ– shell åˆ—è¡¨è§†å›¾æ§ä»¶ã€‚
+    // ´´½¨ shell ¹ÜÀíÆ÷£¬ÒÔ·À¶Ô»°¿ò°üº¬
+    // ÈÎºÎ shell Ê÷ÊÓÍ¼¿Ø¼ş»ò shell ÁĞ±íÊÓÍ¼¿Ø¼ş¡£
     CShellManager *pShellManager = new CShellManager;
 
-    // æ¿€æ´»â€œWindows Nativeâ€è§†è§‰ç®¡ç†å™¨ï¼Œä»¥ä¾¿åœ¨ MFC æ§ä»¶ä¸­å¯ç”¨ä¸»é¢˜
+    // ¼¤»î¡°Windows Native¡±ÊÓ¾õ¹ÜÀíÆ÷£¬ÒÔ±ãÔÚ MFC ¿Ø¼şÖĞÆôÓÃÖ÷Ìâ
     CMFCVisualManager::SetDefaultManager(RUNTIME_CLASS(CMFCVisualManagerWindows));
 
-    // æ ‡å‡†åˆå§‹åŒ–
-    // å¦‚æœæœªä½¿ç”¨è¿™äº›åŠŸèƒ½å¹¶å¸Œæœ›å‡å°
-    // æœ€ç»ˆå¯æ‰§è¡Œæ–‡ä»¶çš„å¤§å°ï¼Œåˆ™åº”ç§»é™¤ä¸‹åˆ—
-    // ä¸éœ€è¦çš„ç‰¹å®šåˆå§‹åŒ–ä¾‹ç¨‹
-    // æ›´æ”¹ç”¨äºå­˜å‚¨è®¾ç½®çš„æ³¨å†Œè¡¨é¡¹
-    // TODO: åº”é€‚å½“ä¿®æ”¹è¯¥å­—ç¬¦ä¸²ï¼Œ
-    // ä¾‹å¦‚ä¿®æ”¹ä¸ºå…¬å¸æˆ–ç»„ç»‡å
-    //SetRegistryKey(_T("åº”ç”¨ç¨‹åºå‘å¯¼ç”Ÿæˆçš„æœ¬åœ°åº”ç”¨ç¨‹åº"));
+    // ±ê×¼³õÊ¼»¯
+    // Èç¹ûÎ´Ê¹ÓÃÕâĞ©¹¦ÄÜ²¢Ï£Íû¼õĞ¡
+    // ×îÖÕ¿ÉÖ´ĞĞÎÄ¼şµÄ´óĞ¡£¬ÔòÓ¦ÒÆ³ıÏÂÁĞ
+    // ²»ĞèÒªµÄÌØ¶¨³õÊ¼»¯Àı³Ì
+    // ¸ü¸ÄÓÃÓÚ´æ´¢ÉèÖÃµÄ×¢²á±íÏî
+    // TODO: Ó¦ÊÊµ±ĞŞ¸Ä¸Ã×Ö·û´®£¬
+    // ÀıÈçĞŞ¸ÄÎª¹«Ë¾»ò×éÖ¯Ãû
+    //SetRegistryKey(_T("Ó¦ÓÃ³ÌĞòÏòµ¼Éú³ÉµÄ±¾µØÓ¦ÓÃ³ÌĞò"));
 
-    //åˆå§‹åŒ–DPI
+    //³õÊ¼»¯DPI
     HDC hDC = ::GetDC(HWND_DESKTOP);
     m_dpi = GetDeviceCaps(hDC, LOGPIXELSY);
     ::ReleaseDC(HWND_DESKTOP, hDC);
@@ -127,21 +131,21 @@ BOOL CPluginTesterApp::InitInstance()
     INT_PTR nResponse = dlg.DoModal();
     if (nResponse == IDOK)
     {
-        // TODO: åœ¨æ­¤æ”¾ç½®å¤„ç†ä½•æ—¶ç”¨
-        //  â€œç¡®å®šâ€æ¥å…³é—­å¯¹è¯æ¡†çš„ä»£ç 
+        // TODO: ÔÚ´Ë·ÅÖÃ´¦ÀíºÎÊ±ÓÃ
+        //  ¡°È·¶¨¡±À´¹Ø±Õ¶Ô»°¿òµÄ´úÂë
     }
     else if (nResponse == IDCANCEL)
     {
-        // TODO: åœ¨æ­¤æ”¾ç½®å¤„ç†ä½•æ—¶ç”¨
-        //  â€œå–æ¶ˆâ€æ¥å…³é—­å¯¹è¯æ¡†çš„ä»£ç 
+        // TODO: ÔÚ´Ë·ÅÖÃ´¦ÀíºÎÊ±ÓÃ
+        //  ¡°È¡Ïû¡±À´¹Ø±Õ¶Ô»°¿òµÄ´úÂë
     }
     else if (nResponse == -1)
     {
-        TRACE(traceAppMsg, 0, "è­¦å‘Š: å¯¹è¯æ¡†åˆ›å»ºå¤±è´¥ï¼Œåº”ç”¨ç¨‹åºå°†æ„å¤–ç»ˆæ­¢ã€‚\n");
-        TRACE(traceAppMsg, 0, "è­¦å‘Š: å¦‚æœæ‚¨åœ¨å¯¹è¯æ¡†ä¸Šä½¿ç”¨ MFC æ§ä»¶ï¼Œåˆ™æ— æ³• #define _AFX_NO_MFC_CONTROLS_IN_DIALOGSã€‚\n");
+        TRACE(traceAppMsg, 0, "¾¯¸æ: ¶Ô»°¿ò´´½¨Ê§°Ü£¬Ó¦ÓÃ³ÌĞò½«ÒâÍâÖÕÖ¹¡£\n");
+        TRACE(traceAppMsg, 0, "¾¯¸æ: Èç¹ûÄúÔÚ¶Ô»°¿òÉÏÊ¹ÓÃ MFC ¿Ø¼ş£¬ÔòÎŞ·¨ #define _AFX_NO_MFC_CONTROLS_IN_DIALOGS¡£\n");
     }
 
-    // åˆ é™¤ä¸Šé¢åˆ›å»ºçš„ shell ç®¡ç†å™¨ã€‚
+    // É¾³ıÉÏÃæ´´½¨µÄ shell ¹ÜÀíÆ÷¡£
     if (pShellManager != NULL)
     {
         delete pShellManager;
@@ -149,8 +153,8 @@ BOOL CPluginTesterApp::InitInstance()
 
     SaveConfig();
 
-    // ç”±äºå¯¹è¯æ¡†å·²å…³é—­ï¼Œæ‰€ä»¥å°†è¿”å› FALSE ä»¥ä¾¿é€€å‡ºåº”ç”¨ç¨‹åºï¼Œ
-    //  è€Œä¸æ˜¯å¯åŠ¨åº”ç”¨ç¨‹åºçš„æ¶ˆæ¯æ³µã€‚
+    // ÓÉÓÚ¶Ô»°¿òÒÑ¹Ø±Õ£¬ËùÒÔ½«·µ»Ø FALSE ÒÔ±ãÍË³öÓ¦ÓÃ³ÌĞò£¬
+    //  ¶ø²»ÊÇÆô¶¯Ó¦ÓÃ³ÌĞòµÄÏûÏ¢±Ã¡£
     return FALSE;
 }
 
@@ -158,7 +162,7 @@ BOOL CPluginTesterApp::InitInstance()
 
 void CPluginTesterApp::OnHelp()
 {
-    // ç§»é™¤ F1 / å¸®åŠ©è·³è½¬ GitHub Wikiï¼Œé¿å…æˆªå›¾ç­‰å…¨å±€å¿«æ·é”®å†²çªä¸è¯¯è§¦
+    // ÒÆ³ı F1 / °ïÖúÌø×ª GitHub Wiki£¬±ÜÃâ½ØÍ¼µÈÈ«¾Ö¿ì½İ¼ü³åÍ»ÓëÎó´¥
 }
 
 
@@ -184,6 +188,33 @@ const wchar_t* CPluginTesterApp::GetMonitorValueString(MonitorItem item, int is_
 
 void CPluginTesterApp::ShowNotifyMessage(const wchar_t* strMsg)
 {
+    // ¡¾TEMP-PREVIEW¡¿¡°·½°¸A¡±£¨ËŞÖ÷ÍĞÅÌÆøÅİ£©µÄĞÎÌ¬Ô¤ÀÀ£º
+    // Õæ»ú TrafficMonitor ÓÉÆäÍĞÅÌÍ¼±ê·¢ Shell_NotifyIcon ÆøÅİ£»
+    // ²âÊÔÆ÷ÎŞ³£×¤ÍĞÅÌÍ¼±ê£¬´Ë´¦ÁÙÊ±´´½¨Òş²ØÍ¼±êµ¯Í¬¿îÆøÅİ£¬Ô¼5Ãëºó×Ô¶¯»ØÊÕ¡£
+    if (m_pMainWnd == nullptr || strMsg == nullptr)
+        return;
+
+    HWND hWnd = m_pMainWnd->GetSafeHwnd();
+    NOTIFYICONDATAW nid{};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = hWnd;
+    nid.uID = 0xA153;
+    nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_INFO | NIF_TIP;
+    nid.hIcon = m_plugin_icon != nullptr ? m_plugin_icon : ::LoadIcon(nullptr, IDI_INFORMATION);
+    nid.uCallbackMessage = WM_APP + 1;
+    lstrcpynW(nid.szInfoTitle, L"¹ÉÆ±ãĞÖµÌáĞÑÔ¤ÀÀ", 64);
+    lstrcpynW(nid.szInfo, strMsg, 256);
+    lstrcpynW(nid.szTip, L"PluginTester Ô¤ÀÀÍĞÅÌÍ¼±ê£¨ÁÙÊ±£©", 128);
+    Shell_NotifyIconW(NIM_ADD, &nid);
+
+    std::thread([hWnd]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+        NOTIFYICONDATAW nid_del{};
+        nid_del.cbSize = sizeof(nid_del);
+        nid_del.hWnd = hWnd;
+        nid_del.uID = 0xA153;
+        Shell_NotifyIconW(NIM_DELETE, &nid_del);
+    }).detach();
 }
 
 unsigned short CPluginTesterApp::GetLanguageId() const
@@ -211,7 +242,7 @@ unsigned int CPluginTesterApp::GetThemeColor() const
 
 const wchar_t* CPluginTesterApp::GetStringRes(const wchar_t* key, const wchar_t* section)
 {
-    // æµ‹è¯•å™¨æš‚ä¸æä¾›å¤šè¯­è¨€èµ„æºï¼Œè¿”å›ç©ºå­—ç¬¦ä¸²
+    // ²âÊÔÆ÷Ôİ²»Ìá¹©¶àÓïÑÔ×ÊÔ´£¬·µ»Ø¿Õ×Ö·û´®
     return L"";
 }
 
@@ -222,6 +253,6 @@ void* CPluginTesterApp::GetMainWindowHwnd()
 
 void* CPluginTesterApp::GetTaskbarWindowHwnd()
 {
-    // æµ‹è¯•å™¨æ²¡æœ‰ä»»åŠ¡æ çª—å£ï¼Œè¿”å›ä¸»çª—å£
+    // ²âÊÔÆ÷Ã»ÓĞÈÎÎñÀ¸´°¿Ú£¬·µ»ØÖ÷´°¿Ú
     return GetMainWnd()->GetSafeHwnd();
 }

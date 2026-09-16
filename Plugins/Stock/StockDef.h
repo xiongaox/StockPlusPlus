@@ -402,6 +402,7 @@ namespace STOCK
 
 		Price openPrice;      // 今日开盘价
 		Price prevClosePrice; // 昨日收盘价
+		mutable Price lastValidPrevClose = 0; // 最近一次有效昨收（数据源缺失昨收时的兜底缓存）
 		Price currentPrice;   // 当前价格
 		Price highPrice;      // 最高价
 		Price lowPrice;       // 最低价
@@ -507,6 +508,14 @@ namespace STOCK
 
 		// 涨跌额
 		double GetChangeAmount() const { return currentPrice - prevClosePrice; }
+		// 昨收兜底：竞价前/盘中刷新间隙数据源未提供昨收(=0)时，沿用最近一次有效昨收，
+		// 避免涨跌幅按0计成“持平”橙色、当日持仓收益误按 (现价-0)×持股 计算出荒谬数值
+		Price EffectivePrevClose() const
+		{
+			if (prevClosePrice != 0)
+				lastValidPrevClose = prevClosePrice;
+			return lastValidPrevClose;
+		}
 		// 涨跌幅
 		double GetChangePercent() const { return prevClosePrice != 0 ? (currentPrice - prevClosePrice) / prevClosePrice * 100 : 0; }
 		// 振幅

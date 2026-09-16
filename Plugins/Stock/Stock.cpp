@@ -381,6 +381,14 @@ void Stock::ShowContextMenu(CWnd* pWnd)
 		{
 			SendStockInfoRequest();
 		}
+		// 【TEMP-PREVIEW】方案A临时预览：模拟阈值提醒经宿主托盘气泡弹出的形态（验证后删除）
+		else if (id == ID_TEST_NOTIFY)
+		{
+			CString preview_msg;
+			preview_msg.Format(L"半导体ETF (SH512480) 到达关注高价↑\n当前 1.050（+3.35%%），阈值 1.020");
+			if (m_pMonitor != nullptr)
+				m_pMonitor->ShowNotifyMessage(preview_msg);
+		}
 	}
 }
 
@@ -797,6 +805,82 @@ void Stock::CheckCostPriceAlertForStock(const std::wstring& code)
 				m_pMonitor->ShowNotifyMessage(alert_msg);
 			last_alert_level = alert_level;
 		}
+	}
+}
+
+void Stock::CheckDailyPercentAlertForStock(const std::wstring& code)
+{
+	std::lock_guard<std::mutex> lock(m_daily_pct_alert_mutex);
+
+	double up_threshold = g_data.GetAlertUpPercent(code);
+	double down_threshold = g_data.GetAlertDownPercent(code);
+	if (up_threshold <= 0 && down_threshold <= 0)
+		return; // 未设置阈值提醒
+
+	auto stock_data = g_data.GetStockData(code);
+	if (!stock_data || !stock_data->info.is_ok)
+		return;
+
+	const auto& info = stock_data->info;
+	double current_price = info.currentPrice;
+	double prev_close = info.EffectivePrevClose();
+	if (current_price <= 0 || prev_close <= 0)
+		return;
+
+	double today_pct = (current_price - prev_close) / prev_close * 100;
+
+	// 当日状态：跨自然日（含首次）自动重置，保证「今天到 3% 提醒、明天再到 3% 也提醒」
+	time_t now = time(nullptr);
+	tm now_tm = {};
+	localtime_s(&now_tm, &now);
+	wchar_t date_buf[16] = { 0 };
+	swprintf_s(date_buf, L"%04d-%02d-%02d", now_tm.tm_year + 1900, now_tm.tm_mon + 1, now_tm.tm_mday);
+
+	DailyPctAlertState& state = m_daily_pct_alert_states[code];
+	if (state.date != date_buf)
+	{
+		state.date = date_buf;
+		state.up_fired = false;
+		state.down_fired = false;
+	}
+
+	// 展示用代码：交易所前缀统一大写（sh512480 -> SH512480）
+	std::wstring display_code = code;
+	for (size_t i = 0; i < display_code.size(); ++i)
+	{
+		wchar_t c = display_code[i];
+		if (c >= L'a' && c <= L'z')
+			display_code[i] = static_cast<wchar_t>(c - L'a' + L'A');
+		else if (c != L'_')
+			break;
+	}
+
+	const std::wstring& name = info.displayName.empty() ? display_code : info.displayName;
+	CString price_text(info.displayPrice.c_str());
+	price_text.Trim();
+	if (price_text.IsEmpty() || price_text == _T("--"))
+		price_text.Format(_T("%g"), current_price);
+
+	bool fired = false;
+	CString alert_msg;
+	if (up_threshold > 0 && !state.up_fired && today_pct >= up_threshold)
+	{
+		alert_msg.Format(L"%s (%s) 到达关注涨幅↑\n当前 %s（+%.2f%%），设置 +%g%%",
+			name.c_str(), display_code.c_str(), price_text.GetString(), today_pct, up_threshold);
+		state.up_fired = true;
+		fired = true;
+	}
+	else if (down_threshold > 0 && !state.down_fired && today_pct <= -down_threshold)
+	{
+		alert_msg.Format(L"%s (%s) 到达关注跌幅↓\n当前 %s（%.2f%%），设置 -%g%%",
+			name.c_str(), display_code.c_str(), price_text.GetString(), today_pct, down_threshold);
+		state.down_fired = true;
+		fired = true;
+	}
+
+	if (fired && m_pMonitor != nullptr)
+	{
+		m_pMonitor->ShowNotifyMessage(alert_msg);
 	}
 }
 
