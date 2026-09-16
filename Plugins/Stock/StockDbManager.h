@@ -4,6 +4,7 @@
 #include <vector>
 #include <ctime>
 #include <tuple>
+#include <mutex>
 #include "StockDef.h"
 
 struct sqlite3;
@@ -110,4 +111,8 @@ private:
 	sqlite3* m_db{ nullptr };
 	std::wstring m_db_path;
 	std::wstring m_config_path;
+	// SQLite 以 SQLITE_THREADSAFE=0 编译（内部完全无锁），而该连接同时被 UI 线程（图表/缓存读取）
+	// 与后台抓取线程（预加载、写入）访问：用递归锁把所有成员方法串行化，
+	// 杜绝并发 prepare/step 破坏 sqlite 内部结构（表现为随机在解析器处读空指针崩溃）。
+	mutable std::recursive_mutex m_db_mutex;
 };

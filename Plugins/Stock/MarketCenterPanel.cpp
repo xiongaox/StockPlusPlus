@@ -2212,12 +2212,16 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 
 	MC::UpDownDist dist;
 	double turnoverToday = 0, turnoverYday = 0;
+	std::vector<double> ydayCurve;
+	int turnoverSlot = -1;
 	{
 		CMarketCenterData& mc = CMarketCenterData::Instance();
 		std::lock_guard<std::mutex> lock(mc.m_mutex);
 		dist = mc.m_dist;
 		turnoverToday = mc.m_turnover_today;
 		turnoverYday = mc.m_turnover_yesterday;
+		ydayCurve = mc.m_turnover_yday_curve;
+		turnoverSlot = mc.m_turnover_slot;
 	}
 
 	long long upCnt = dist.UpCount(), downCnt = dist.DownCount(), flatCnt = dist.FlatCount();
@@ -2226,31 +2230,58 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 	CRect blockRc(rc.left + g_data.DPI(16), rc.top + g_data.DPI(16), rc.right - g_data.DPI(16), rc.top + g_data.DPI(16) + g_data.DPI(58));
 	FillCard(g, blockRc);
 	m_trend_stat_rects.clear();
-	// 交易中按当日进度外推；收盘后显示最终全天成交额，避免把最终值伪装成预测。
-	// 午休时段也按盘中口径处理（轴上无对应分钟，用上午收盘的进度外推），否则会误标"全天成交"。
+	// 同分钟口径（东财"较前一日同期"同款）：昨日分时累计曲线按同一时间轴槽与今日累计比。
+	// 今日累计额自带"覆盖到几点"（m_turnover_slot）；绘制时钟可能因 60s 刷新节奏略超前，
+	// 两者取较小槽号，保证分子分母对应同一段分钟。午休区间停在上午收盘 120 槽。
 	const auto& axis = CMarketCenterData::TimeAxis();
 	time_t now = time(nullptr);
 	struct tm localTm{};
 	localtime_s(&localTm, &now);
-	wchar_t nowBuf[8];
-	swprintf_s(nowBuf, L"%02d:%02d", localTm.tm_hour, localTm.tm_min);
 	int minsToday = localTm.tm_hour * 60 + localTm.tm_min;
 	bool lunchBreak = minsToday >= 11 * 60 + 30 && minsToday < 13 * 60;
-	int nowIdx = CMarketCenterData::TimeIndex(nowBuf);
-	if (nowIdx < 0 && lunchBreak)
-		nowIdx = 120;   // 午休：按上午收盘进度（120点）外推
+	wchar_t nowBuf[8];
+	swprintf_s(nowBuf, L"%02d:%02d", localTm.tm_hour, localTm.tm_min);
+	int wallIdx = CMarketCenterData::TimeIndex(nowBuf);
+	if (wallIdx < 0 && lunchBreak)
+		wallIdx = 120;   // 午休/上午收盘区间（时间轴上无 11:30~12:59）
 	bool tradingLive = (m_clock_status == 0) || lunchBreak;
+	const bool finalTurnover = turnoverToday > 0 && !tradingLive;
+	int slot = wallIdx;
+	if (turnoverSlot >= 0 && (slot < 0 || turnoverSlot < slot))
+		slot = turnoverSlot;   // 今日累计额只统计到数据已覆盖的分钟，往前贴齐
+
+	// 同分钟比较：曲线槽额与今日累计同槽；开市首分钟（竞价槽0）即可比
+	bool sameOk = ydayCurve.size() == axis.size() && turnoverYday > 0 && slot >= 0 && turnoverToday > 0;
+	double sameY = 0;
+	if (sameOk)
+	{
+		sameY = ydayCurve[static_cast<size_t>(slot)];
+		if (sameY <= 1e6)
+			sameOk = false;
+	}
+	// 预测全天：优先分时进度法（今日累计 ÷ 昨日同分钟进度，开市首分钟即可用，东财同款）；
+	// 曲线不可用时退回线性外推（旧逻辑，开市约5分钟后才可信）。
 	double forecast = 0;
 	bool forecastOk = false;
-	if (nowIdx > 10 && turnoverToday > 0 && tradingLive)
+	if (tradingLive && turnoverToday > 0)
 	{
-		forecast = turnoverToday / ((nowIdx + 1.0) / axis.size());
-		forecastOk = true;
+		if (sameOk)
+		{
+			double progress = sameY / turnoverYday;
+			if (progress > 0.002)
+			{
+				forecast = turnoverToday / progress;
+				forecastOk = true;
+			}
+		}
+		else if (slot > 10)
+		{
+			forecast = turnoverToday / ((slot + 1.0) / axis.size());
+			forecastOk = true;
+		}
 	}
-	const bool finalTurnover = turnoverToday > 0 && !tradingLive;
-	double delta = turnoverToday - turnoverYday;
 
-	struct TrendCell { std::wstring label; std::wstring value; COLORREF color; };
+	struct TrendCell { std::wstring label; std::wstring value; COLORREF color; std::wstring sub; COLORREF subColor{ MC_TEXT }; };
 	wchar_t numBuf[32];
 	auto turnoverCellVal = [&](double v) {
 		if (v <= 0) return std::wstring(L"--");
@@ -2258,65 +2289,93 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 		return std::wstring(numBuf);
 	};
 	std::wstring todayStr = turnoverCellVal(turnoverToday);
-	std::wstring ydayStr = turnoverCellVal(turnoverYday);
-	// "较昨日全天"（东财涨跌统计同款口径）：收盘后为真实差额，显示增量/缩量；
-	// 盘中今日累计远小于昨日全天，直接相减只会得到吓人的大负数，
-	// 有可靠进度时改看"预测全天 vs 昨日"，开市初期连预测都不可靠时显示 --。
+	// 差额格：盘中显示"较前一日同期"（同分钟缩量/放量，东财市场概况同款口径）；
+	// 收盘后为真实"较昨日全天"全额对比；分时曲线不可用时维持旧的"预测较昨日"兜底，再不行显示 --。
+	// 主值放整数亿差额，幅度作小号附注并排（GDI+ 自动折行会把长串折成两行，拆开画才能"拉平"）。
 	std::wstring deltaLabel = L"较昨日全天";
-	std::wstring deltaStr = L"--";
+	std::wstring deltaStr = L"--";        // 主值（放量/缩量 xx亿）
+	std::wstring deltaSub = L"";          // 幅度附注（与主值同排、同色）
 	COLORREF deltaColor = MC_TEXT_DIM;
-	if (turnoverYday > 0 && (finalTurnover || forecastOk))
-	{
-		double d = finalTurnover ? delta : (forecast - turnoverYday);
-		swprintf_s(numBuf, L"%s%.0f亿", d >= 0 ? L"增量" : L"缩量", fabs(d) / 1e8);
+	auto appendDelta = [&](double d, double denom) {
+		swprintf_s(numBuf, L"%s%.0f亿", d >= 0 ? L"放量" : L"缩量", fabs(d) / 1e8);
 		deltaStr = numBuf;
+		if (denom > 0)
+			deltaSub = FormatPct(d / denom * 100.0);
 		deltaColor = UpDownColor(d);
-		if (forecastOk && !finalTurnover)
-			deltaLabel = L"预测较昨日";
+	};
+	if (finalTurnover && turnoverYday > 0)
+	{
+		appendDelta(turnoverToday - turnoverYday, turnoverYday);
 	}
-	TrendCell tCells[9] = {
+	else if (sameOk)
+	{
+		deltaLabel = L"较前一日同期";
+		appendDelta(turnoverToday - sameY, sameY);
+	}
+	else if (forecastOk && turnoverYday > 0)
+	{
+		deltaLabel = L"预测较昨日";
+		appendDelta(forecast - turnoverYday, 0.0);
+	}
+	TrendCell tCells[8] = {
 		{ L"上涨", FormatInt(upCnt), MC_UP },
 		{ L"平盘", FormatInt(flatCnt), MC_TEXT_SUB },
 		{ L"下跌", FormatInt(downCnt), MC_DOWN },
 		{ L"涨停", FormatInt(dist.zt), MC_UP },
 		{ L"跌停", FormatInt(dist.dt), MC_DOWN },
 		{ L"当日成交额", todayStr, turnoverToday > 0 ? MC_TEXT : MC_TEXT_DIM },
-		{ L"昨日成交", ydayStr, turnoverYday > 0 ? MC_TEXT : MC_TEXT_DIM },
-		{ deltaLabel, deltaStr, deltaColor },
-		{ finalTurnover ? L"全天成交" : (tradingLive ? L"预测全天" : L"全天成交"),
+		{ deltaLabel, deltaStr, deltaColor, deltaSub, deltaColor },
+		{ finalTurnover ? L"全天成交" : L"预测全天",
 			finalTurnover ? todayStr : (forecastOk ? turnoverCellVal(forecast) : std::wstring(L"--")),
 			finalTurnover ? COLOR_GOLDEN : MC_TEXT },
 	};
 	// 列宽按内容加权：大数列（成交额类）多占，避免右侧大数挤压左侧涨跌家数格
-	int colW9[9];
+	int colW8[8];
 	{
 		int totalW = 0;
 		CSize szTmp;
-		for (int i = 0; i < 9; i++)
+		for (int i = 0; i < 8; i++)
 		{
 			auto fProbe = MkFont(15, true);
 			szTmp = MeasureStr(g, fProbe.get(), tCells[i].value);
+			if (!tCells[i].sub.empty())
+				szTmp.cx += g_data.DPI(4) + MeasureStr(g, f15b.get(), tCells[i].sub).cx;
 			int wv = max(szTmp.cx, MeasureStr(g, f10.get(), tCells[i].label).cx);
-			colW9[i] = max(wv + g_data.DPI(16), g_data.DPI(56));
-			totalW += colW9[i];
+			colW8[i] = max(wv + g_data.DPI(16), g_data.DPI(56));
+			totalW += colW8[i];
 		}
 		int avail = blockRc.Width();
 		if (totalW > 0)
-			for (int i = 0; i < 9; i++)
-				colW9[i] = colW9[i] * avail / totalW;   // 按比例拉伸到满宽
+			for (int i = 0; i < 8; i++)
+				colW8[i] = colW8[i] * avail / totalW;   // 按比例拉伸到满宽
 	}
 	int accX = blockRc.left;
-	for (int i = 0; i < 9; i++)
+	for (int i = 0; i < 8; i++)
 	{
-		CRect cell(accX, blockRc.top, accX + colW9[i], blockRc.bottom);
-		accX += colW9[i];
+		CRect cell(accX, blockRc.top, accX + colW8[i], blockRc.bottom);
+		accX += colW8[i];
 		if (i > 0)
 		{
 			Gdiplus::Pen sepPen(Gdi(MC_BORDER), 1.0f);
 			g.DrawLine(&sepPen, Gdiplus::REAL(cell.left), Gdiplus::REAL(cell.top + g_data.DPI(10)), Gdiplus::REAL(cell.left), Gdiplus::REAL(cell.bottom - g_data.DPI(10)));
 		}
 		DrawStrMid(g, tCells[i].label, f10.get(), CRect(cell.left, cell.top + g_data.DPI(8), cell.right, cell.top + g_data.DPI(22)), MC_TEXT_SUB);
-		DrawStrMid(g, tCells[i].value, f15b.get(), CRect(cell.left, cell.top + g_data.DPI(26), cell.right, cell.bottom - g_data.DPI(6)), tCells[i].color);
+		CRect valRc(cell.left, cell.top + g_data.DPI(26), cell.right, cell.bottom - g_data.DPI(6));
+		if (tCells[i].sub.empty())
+		{
+			DrawStrMid(g, tCells[i].value, f15b.get(), valRc, tCells[i].color);
+		}
+		else
+		{
+			// 主值 + 同行附注（较前一日同期的幅度，与主值同字号），整体居中基线对齐，StringFormat 默认折行不再出现
+			CSize wMain = MeasureStr(g, f15b.get(), tCells[i].value);
+			CSize wSub = MeasureStr(g, f15b.get(), tCells[i].sub);
+			int gap = g_data.DPI(4);
+			int total = wMain.cx + gap + wSub.cx;
+			int x0 = cell.CenterPoint().x - total / 2;
+			DrawStr(g, tCells[i].value, f15b.get(), CRect(x0, valRc.top, x0 + wMain.cx, valRc.bottom), tCells[i].color, 255, Gdiplus::StringAlignmentNear);
+			DrawStr(g, tCells[i].sub, f15b.get(), CRect(x0 + wMain.cx + gap, valRc.top, x0 + total, valRc.bottom), tCells[i].subColor, 255, Gdiplus::StringAlignmentNear);
+		}
 		m_trend_stat_rects.push_back({ cell, i });
 	}
 

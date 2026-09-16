@@ -163,6 +163,28 @@
 
 ---
 
+## ❓ 常见问题 (Q&A)
+
+### Q1：插件加载不出数据（一直空白、行情/行情中心转圈或显示"获取失败"）怎么办？
+
+东方财富的行情接口分布在 `push2 / push2his / push2ex.eastmoney.com` 这几个 CDN 域名上。部分地区运营商本地 DNS 会把它们解析到已失效的 CDN 节点，表现为**插件本身正常、但数据一直拉不下来**（浏览器/其它软件也可能同时访问东财变慢）。
+
+项目在 `tools/eastmoney-cdn/` 提供了现成脚本，把域名固定解析到一个测速可用的 CDN 节点：
+
+1. 双击运行 **`tools/eastmoney-cdn/fix_eastmoney_cdn.bat`**（会弹 UAC 请求管理员权限，请点"是"）。脚本首次运行会把原 `hosts` 备份为 `hosts.bak_eastmoney`，随后写入东财三个域名的固定解析并刷新 DNS 缓存。
+2. **重启 TrafficMonitor**（或重新加载插件），再看数据是否恢复。
+3. 想回滚：运行 **`tools/eastmoney-cdn/undo_eastmoney_cdn.bat`**，用备份还原 `hosts` 并刷新 DNS（注意：是整份还原备份，备份之后对 `hosts` 的其他改动会被一并还原）。
+
+如果过一段时间节点又失效（CDN 节点会变动），可以装一次"看门狗"让它自动巡检并切换到可用节点：
+
+- 安装：双击 **`tools/eastmoney-cdn/install_cdn_watchdog.bat`**（把脚本复制到 `C:\ProgramData\eastmoney_cdn_watchdog\`，并创建计划任务 `EastmoneyCDNWatchdog`：每小时以 SYSTEM 身份检测当前节点，失效则从候选节点中自动挑一个可用的重写 `hosts`，安装时会立即跑一次验证）。
+- 卸载：双击 **`tools/eastmoney-cdn/uninstall_cdn_watchdog.bat`**（删除该计划任务）。
+- 运行日志：`C:\ProgramData\eastmoney_cdn_watchdog\watchdog.log`。
+
+> 说明：以上脚本只改本机 `hosts` 的固定解析（首次运行自动备份），除"看门狗"外不安装任何常驻程序；不确定是否需要时可先只跑 `fix_eastmoney_cdn.bat`，恢复后随时 `undo` 回滚。
+
+---
+
 ## 📄 开源许可证
 
 本项目遵循 [MIT License](LICENSE) 协议。

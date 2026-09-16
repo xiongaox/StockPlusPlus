@@ -75,6 +75,8 @@ namespace
 
 	// 分组管理三个列表的「阈值提醒」列索引（7 列布局：交易所/代码/名称/阈值提醒/...）
 	const int ALERT_PERCENT_COLUMN = 3;
+	// 「状态栏显示」在三个列表中同为最后一列（阈值提醒列插入后右移而来的第7列）
+	const int STATUSBAR_SHOW_COLUMN = 6;
 
 	struct WebDavAsyncResult
 	{
@@ -2496,11 +2498,11 @@ void CManagerDialog::RefreshStockList()
 
 		if (g_data.GetShowInStatusBar(code))
 		{
-			m_stock_listctrl.SetItemText(nItem, 6, L"√");
+			m_stock_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, L"√");
 		}
 		else
 		{
-			m_stock_listctrl.SetItemText(nItem, 6, L"");
+			m_stock_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, L"");
 		}
 	}
 }
@@ -2527,7 +2529,7 @@ void CManagerDialog::RefreshPositionList()
 		m_pos_listctrl.SetItemText(nItem, 2, name.c_str());
 
 		CString strCost, strCount;
-		strCost.Format(_T("%.2f"), cost);
+		strCost.Format(_T("%.3f"), cost);   // 成本价按三位小数展示（ETF 成本常见 3 位报价）
 		strCount.Format(_T("%.0f"), count);
 
 		m_pos_listctrl.SetItemText(nItem, 3, FormatAlertPercentText(code).c_str());
@@ -2536,11 +2538,11 @@ void CManagerDialog::RefreshPositionList()
 
 		if (g_data.GetShowInStatusBar(code))
 		{
-			m_pos_listctrl.SetItemText(nItem, 6, L"√");
+			m_pos_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, L"√");
 		}
 		else
 		{
-			m_pos_listctrl.SetItemText(nItem, 6, L"");
+			m_pos_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, L"");
 		}
 
 		nItem++;
@@ -2584,11 +2586,11 @@ void CManagerDialog::RefreshCustomList()
 
 			if (g_data.GetShowInStatusBar(code))
 			{
-				m_custom_listctrl.SetItemText(nItem, 6, L"√");
+				m_custom_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, L"√");
 			}
 			else
 			{
-				m_custom_listctrl.SetItemText(nItem, 6, L"");
+				m_custom_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, L"");
 			}
 		}
 	}
@@ -2747,7 +2749,7 @@ int CManagerDialog::CalcPageContentHeight()
 		return g_data.DPI(86 + 10) + MeasureMetricCard2Height(rightWidth) + g_data.DPI(8);
 	}
 	case PAGE_ABOUT:
-		return g_data.DPI(1330);
+		return g_data.DPI(1440);
 	default:
 		return 0;
 	}
@@ -4907,6 +4909,11 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRec
 	};
 
 	const wchar_t* items_0916_v208[] = {
+		L"•  【新增】 K线族视图（日K/周K/月K）新增「区域」统计：周期行竞价按钮左侧新增区域开关，拖动框选后显示同花顺式区间卡片（区间涨幅/最高/最低/振幅 + 起止日期条 + ✕ 清除），左右边界手柄可逐柱微调；图表仍可平移，选区锚定柱子不随缩放/滚动丢失",
+		L"•  【修复】 修复运行中偶发闪退：崩溃点位于 SQLite 解析器，根因是 sqlite3 以 SQLITE_THREADSAFE=0 编译（内部无锁）而数据库连接被界面线程与后台抓取线程并发使用，现为数据库层全部方法加递归锁串行化访问",
+		L"•  【新增】 涨跌趋势成交额升级东财市场概况同款口径：盘中新增「较前一日同期」同分钟放量/缩量差额与幅度（幅度与主值同字号并排），预测全天改用昨日同分钟进度法，开市首分钟即出数，收盘后回落真实较昨日全天对比",
+		L"•  【修复】 分组管理「状态栏显示」列因阈值提醒列插入右移导致点击勾选/取消失效（自选股/持仓/自定义分组统一按常量列读写）；勾选即时落盘，双击勾选列不再叠加弹窗造成「确定后勾选丢失」错觉",
+		L"•  【优化】 持仓「成本价」列展示三位小数，与编辑弹窗口径一致",
 		L"•  【新增】 每日涨跌幅阈值提醒：分组管理新增「阈值提醒」列，双击暗色弹窗设置涨幅/跌幅阈值，当日首次达标经宿主托盘气泡提醒一次，跨日自动重置",
 		L"•  【新增】 悬浮窗销毁重建后完整恢复浏览状态（K线视图模式、指标、面板与行情中心页签全记忆）；分时图买卖点绘制信号名称小字；气泡页新增最强/最弱板块卡片，点击直达树图选区",
 		L"•  【新增】 行情中心顶栏新增手动刷新按钮，无视新鲜度与失败退避强制重拉当前页数据",
@@ -5872,17 +5879,25 @@ void CManagerDialog::OnListItemClick(NMHDR* pNMHDR, LRESULT* pResult)
 		int nItem = pNMItemActivate->iItem;
 		int nSubItem = pNMItemActivate->iSubItem;
 
-		// 检查是否点击了 "状态栏显示" 列 (第 5 列)
-		if (nSubItem == 5)
+		// 检查是否点击了 "状态栏显示" 列（7 列布局中位于最后一列，曾因阈值提醒列插入而比旧列号右移一位）
+		if (nSubItem == STATUSBAR_SHOW_COLUMN)
 		{
+			// 翻转并立即落盘：单击即生效，不再依赖页面后续的 SaveConfig 时机
+			auto flip = [&](const std::wstring& code) {
+				bool cur = g_data.GetShowInStatusBar(code);
+				g_data.SetShowInStatusBar(code, !cur);
+				g_data.SaveConfig();
+				// 记录每一次切换（tab/行/代码/翻转方向），便于与 ini 核对勾选链路
+				CCommon::WriteLog((std::wstring(L"[StatusbarToggle] tab=") + std::to_wstring(m_current_group_tab)
+					+ L" item=" + std::to_wstring(nItem) + L" code=" + code + (cur ? L" 1->0" : L" 0->1")).c_str(),
+					g_data.m_log_path.c_str());
+				return !cur;
+			};
 			if (m_current_group_tab == 0) // 自选股
 			{
 				if (nItem < static_cast<int>(m_data.m_stock_codes.size()))
 				{
-					const auto& code = m_data.m_stock_codes[nItem];
-					bool cur = g_data.GetShowInStatusBar(code);
-					g_data.SetShowInStatusBar(code, !cur);
-					m_stock_listctrl.SetItemText(nItem, 5, (!cur) ? L"√" : L"");
+					m_stock_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, flip(m_data.m_stock_codes[nItem]) ? L"√" : L"");
 				}
 			}
 			else if (m_current_group_tab == 1) // 持仓
@@ -5890,10 +5905,7 @@ void CManagerDialog::OnListItemClick(NMHDR* pNMHDR, LRESULT* pResult)
 				DWORD_PTR codeIdx = m_pos_listctrl.GetItemData(nItem);
 				if (codeIdx < m_data.m_position_codes.size())
 				{
-					const auto& code = m_data.m_position_codes[codeIdx];
-					bool cur = g_data.GetShowInStatusBar(code);
-					g_data.SetShowInStatusBar(code, !cur);
-					m_pos_listctrl.SetItemText(nItem, 5, (!cur) ? L"√" : L"");
+					m_pos_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, flip(m_data.m_position_codes[codeIdx]) ? L"√" : L"");
 				}
 			}
 			else if (m_current_group_tab >= 2) // 自定义分组
@@ -5904,10 +5916,7 @@ void CManagerDialog::OnListItemClick(NMHDR* pNMHDR, LRESULT* pResult)
 					auto& codes = m_data.m_custom_groups[groupIdx].codes;
 					if (nItem < static_cast<int>(codes.size()))
 					{
-						const auto& code = codes[nItem];
-						bool cur = g_data.GetShowInStatusBar(code);
-						g_data.SetShowInStatusBar(code, !cur);
-						m_custom_listctrl.SetItemText(nItem, 5, (!cur) ? L"√" : L"");
+						m_custom_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, flip(codes[nItem]) ? L"√" : L"");
 					}
 				}
 			}
@@ -5919,6 +5928,12 @@ void CManagerDialog::OnListItemClick(NMHDR* pNMHDR, LRESULT* pResult)
 void CManagerDialog::OnLbnDblclkMgrList(NMHDR* pNMHDR, LRESULT* pResult)
 {
 	LPNMITEMACTIVATE pNMItem = reinterpret_cast<LPNMITEMACTIVATE>(pNMHDR);
+	// 双击「状态栏显示」列直接忽略：双击的前半程单击已翻转过一次，再弹编辑框会被误读成"确定后勾选丢失"
+	if (pNMItem->iSubItem == STATUSBAR_SHOW_COLUMN)
+	{
+		*pResult = 0;
+		return;
+	}
 	// 双击「阈值提醒」列：设置每日涨跌幅阈值；其余列沿用关注价格设置
 	if (pNMItem->iSubItem == ALERT_PERCENT_COLUMN)
 	{
@@ -5956,6 +5971,12 @@ void CManagerDialog::OnLbnDblclkMgrList(NMHDR* pNMHDR, LRESULT* pResult)
 void CManagerDialog::OnLbnDblclkPosList(NMHDR* pNMHDR, LRESULT* pResult)
 {
 	LPNMITEMACTIVATE pNMItem = reinterpret_cast<LPNMITEMACTIVATE>(pNMHDR);
+	// 双击「状态栏显示」列直接忽略：双击的前半程单击已翻转过一次，再弹"设置持仓信息"会让用户觉得确定后勾选被取消
+	if (pNMItem->iSubItem == STATUSBAR_SHOW_COLUMN)
+	{
+		*pResult = 0;
+		return;
+	}
 	// 双击「阈值提醒」列：设置每日涨跌幅阈值；其余列沿用持仓成本编辑
 	if (pNMItem->iSubItem == ALERT_PERCENT_COLUMN)
 	{
@@ -5998,6 +6019,12 @@ void CManagerDialog::OnLbnDblclkPosList(NMHDR* pNMHDR, LRESULT* pResult)
 void CManagerDialog::OnLbnDblclkCustomList(NMHDR* pNMHDR, LRESULT* pResult)
 {
 	LPNMITEMACTIVATE pNMItem = reinterpret_cast<LPNMITEMACTIVATE>(pNMHDR);
+	// 双击「状态栏显示」列直接忽略：双击的前半程单击已翻转过一次，再弹关注价格编辑会被误读成勾选丢失
+	if (pNMItem->iSubItem == STATUSBAR_SHOW_COLUMN)
+	{
+		*pResult = 0;
+		return;
+	}
 	size_t groupIdx = (m_current_group_tab >= 2) ? static_cast<size_t>(m_current_group_tab - 2) : 0;
 	// 双击「阈值提醒」列：设置每日涨跌幅阈值；其余列沿用关注价格设置
 	if (pNMItem->iSubItem == ALERT_PERCENT_COLUMN)

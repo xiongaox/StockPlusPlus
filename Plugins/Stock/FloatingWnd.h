@@ -112,6 +112,7 @@ protected:
 	afx_msg void OnBnClickedKLineBtn();
 	afx_msg void OnBnClickedWeekKLineBtn();
 	afx_msg void OnBnClickedMonthKLineBtn();
+	afx_msg void OnBnClickedRegionStatsBtn();
 	afx_msg void OnBnClickedCloseBtn();
 	afx_msg void OnBnClickedMABtn();
 	afx_msg void OnBnClickedBollBtn();
@@ -157,6 +158,8 @@ private:
 	afx_msg HBRUSH OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor);
 	afx_msg void OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct);
 	void UpdateModeButtons();
+	void UpdateRegionStatsFromPixels();      // 根据选区像素范围换算bar区间并重算统计
+	void ClearRegionSelection(bool exitMode); // 退出选区（exitMode=true 时连「区域」开关一起关）
 	void UpdateIndicatorButtons();
 	void UpdatePeriodComboVisibility();
 	void ApplySignalColors(COLORREF bollColor, COLORREF macdColor, COLORREF kdjColor, COLORREF wrColor, COLORREF rsiColor, COLORREF maColor);
@@ -186,6 +189,7 @@ private:
 	CButton m_btnKLine;
 	CButton m_btnWeekKLine;
 	CButton m_btnMonthKLine;
+	CButton m_btnRegionStats;   // 区域统计开关（竞价胶囊左侧，仅K线族视图显示）
 	CButton m_btnKLineSource;   // K线数据源状态与刷新按钮
 	CButton m_btnMA;
 	CButton m_btnBoll;
@@ -228,6 +232,24 @@ private:
 	bool m_isKLineDragging{ false };
 	CPoint m_klineDragStartPos;
 	int m_klineDragStartOffset{ 0 };
+	// 区域统计模式（同花顺式K线区间选区，仅K线族视图；分时/竞价无此功能）
+	bool m_regionStatsMode{ false };      // 周期行「区域」开关
+	bool m_isRegionDragging{ false };     // 正在拖动选区
+	bool m_regionAdjustingLeft{ false };  // 按住选区左边缘微调（false=新选区或右边缘）
+	CRect m_regionLeftHandleRect;         // 左边界拖动手柄热区（客户区坐标，绘制时刷新）
+	CRect m_regionRightHandleRect;        // 右边界拖动手柄热区
+	int m_regionSelStartX{ 0 };           // 选区起点X（客户区坐标）
+	int m_regionSelEndX{ 0 };             // 选区当前X
+	bool m_regionHasSelection{ false };   // 当前有选区（拖动中或已定格）
+	int m_regionStartBar{ -1 };           // 选区起始bar（全局下标，含）
+	int m_regionEndBar{ -1 };             // 选区结束bar（全局下标，含）
+	std::wstring m_regionDateTitle;       // "2026-08-21 | 20日 | 2026-09-16"
+	std::wstring m_regionPctText;         // 区间涨幅（带符号）
+	std::wstring m_regionHighText;        // 区间最高
+	std::wstring m_regionLowText;         // 区间最低
+	std::wstring m_regionAmpText;         // 区间振幅（%）
+	double m_regionPctValue{ 0 };         // 区间涨幅数值（透明度/配色用）
+	CRect m_regionClearRect;              // 选区✕热区（客户区坐标，绘制时刷新）
 	HCURSOR m_hPrevCursor{ NULL };
 	volatile BOOL m_isDestroying;
 	CFont* m_pfont{};

@@ -1203,12 +1203,19 @@ namespace
 		return ok;
 	}
 
-	// 指数日K（lmt=2）：按行首日期严格区分昨日/今日。今日K线在开市后才生成，
+	// 指数日K（lmt=63）：按行首日期严格区分最近完成交易日/今日。今日K线在开市后才生成，
 	// 开市初期末行仍是最近一个已完成交易日的全天成交额，不能按"最后一行=今日"的固定槽位理解。
-	bool FetchIndexTurnover(const wchar_t* secid, double& todayTurnover, double& prevTurnover)
+	// 顺带摊得最近（≤）60 个已完成交易日的日均成交额，供"近60日平均"。
+	struct IndexDailyAmounts
+	{
+		double todayTurnover{ 0 };   // 今日（盘中为部分额，收盘后为全天）
+		double prevTurnover{ 0 };    // 最近一个已完成交易日的全天额
+		double avg60{ 0 };           // 最近（≤）60 个已完成交易日日均
+	};
+	bool FetchIndexDailyAmounts(const wchar_t* secid, IndexDailyAmounts& out)
 	{
 		std::wstring url = L"https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=" + std::wstring(secid)
-			+ L"&klt=101&fqt=1&end=20500101&lmt=2&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57";
+			+ L"&klt=101&fqt=1&end=20500101&lmt=63&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56,f57";
 		std::string resp;
 		if (!HttpGet(url, resp)) return false;
 		yyjson_doc* doc = yyjson_read(resp.c_str(), resp.size(), 0);
@@ -1237,18 +1244,100 @@ namespace
 				const std::string today = CurrentTradeDate();
 				if (bars.back().first == today)
 				{
-					// 今日K线已生成：今日=末行（盘中为部分成交额），昨日=其前一根
-					todayTurnover = bars.back().second;
-					if (bars.size() >= 2 && bars[bars.size() - 2].first != today)
+					// 今日K线已生成：今日=末行（盘中为部分成交额），此前各行为已完成交易日
+					out.todayTurnover = bars.back().second;
+					bars.pop_back();
+				}
+				// 此后 bars 只含已完成交易日的全天额；末行即最近一个已完成交易日（盘前即昨日）
+				if (!bars.empty())
+				{
+					out.prevTurnover = bars.back().second;
+					size_t n = min<size_t>(60, bars.size());
+					double sum = 0;
+					for (size_t i = bars.size() - n; i < bars.size(); i++)
+						sum += bars[i].second;
+					out.avg60 = sum / static_cast<double>(n);
+					ok = true;
+				}
+			}
+		}
+		yyjson_doc_free(doc);
+		return ok;
+	}
+
+	// 指数分时（trends2 ndays=2）：返回前一交易日与今日"逐分钟成交额"。
+	// 注意指数分时行 f56=分钟成交量、f57=分钟成交额(元)，是"每分钟"而非累计，需自行累加；
+	// "09:30" 行含集合竞价额；上午 11:30 收盘行在时间轴上按 120 槽处理（TimeAxis 无 11:30）。
+	struct ExchangeMinuteAmounts
+	{
+		std::wstring prevDate;           // 前一交易日（"2026-09-15"）
+		std::vector<double> ydayPerMin;  // 前一交易日逐分钟成交额，下标=时间轴槽号
+		std::vector<double> todayPerMin; // 今日逐分钟成交额（收盘后含 15:00 收盘竞价）
+	};
+	bool FetchIndexMinuteAmounts(const wchar_t* secid, ExchangeMinuteAmounts& out)
+	{
+		std::wstring url = L"https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=" + std::wstring(secid)
+			+ L"&ndays=2&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58&iscr=0";
+		std::string resp;
+		if (!HttpGet(url, resp)) return false;
+		yyjson_doc* doc = yyjson_read(resp.c_str(), resp.size(), 0);
+		if (!doc) return false;
+		bool ok = false;
+		yyjson_val* root = yyjson_doc_get_root(doc);
+		yyjson_val* data = root ? yyjson_obj_get(root, "data") : nullptr;
+		yyjson_val* trends = data ? yyjson_obj_get(data, "trends") : nullptr;
+		if (trends && yyjson_is_arr(trends))
+		{
+			size_t rows = yyjson_arr_size(trends);
+			if (rows >= 2 && rows <= 1000)
+			{
+				const auto& axis = CMarketCenterData::TimeAxis();
+				out.ydayPerMin.assign(axis.size(), 0.0);
+				out.todayPerMin.assign(axis.size(), 0.0);
+
+				auto minuteSlot = [](const std::string& hhmm) -> int {
+					if (hhmm.size() < 5) return -1;
+					std::wstring w = CCommon::StrToUnicode(hhmm.c_str(), false);
+					int idx = CMarketCenterData::TimeIndex(w);
+					if (idx >= 0) return idx;
+					int h = atoi(hhmm.substr(0, 2).c_str()), m = atoi(hhmm.substr(3, 2).c_str());
+					if (h * 60 + m == 690) return 120;  // 11:30 → 上午收盘槽
+					return -1;
+				};
+				// 行按时间升序，首行日期即前一交易日（盘前时同样成立：此时今日尚无行）
+				std::string firstDate;
+				size_t prevRows = 0;
+				bool firstDateSet = false;
+				yyjson_val* item;
+				yyjson_arr_iter iter;
+				yyjson_arr_iter_init(trends, &iter);
+				while ((item = yyjson_arr_iter_next(&iter)))
+				{
+					const char* str = yyjson_get_str(item);
+					if (!str) continue;
+					std::vector<std::string> parts = CCommon::split(str, ',');
+					if (parts.size() < 7 || parts[0].size() < 15) continue;
+					std::string date = parts[0].substr(0, 10);
+					std::string minute = parts[0].substr(11, 5);
+					double amount = atof(parts[6].c_str());
+					int slot = minuteSlot(minute);
+					if (slot < 0 || amount <= 0)
+						continue;
+					if (!firstDateSet) { firstDate = date; firstDateSet = true; }
+					if (date == firstDate)
 					{
-						prevTurnover = bars[bars.size() - 2].second;
-						ok = true;
+						out.ydayPerMin[slot] += amount;
+						prevRows++;
+					}
+					else
+					{
+						out.todayPerMin[slot] += amount;
 					}
 				}
-				else
+				// 前一交易日覆盖足够充分才可用（分钟行数门槛），覆盖率不足视同失败、走旧逻辑兜底
+				if (prevRows >= 200)
 				{
-					// 今日K线尚未生成（盘前/竞价）：今日成交额保持 0，末行即昨日全天成交额
-					prevTurnover = bars.back().second;
+					out.prevDate = CCommon::StrToUnicode(firstDate.c_str(), false);
 					ok = true;
 				}
 			}
@@ -1301,21 +1390,98 @@ bool CMarketCenterData::FetchTrendDist()
 	FetchZDPool("ZTPool", dist.zt);
 	FetchZDPool("DTPool", dist.dt);
 
-	// 沪深京成交额（今日 + 昨日，合并北交所北证50实现全市场口径）
-	double shT = 0, shPrev = 0, szT = 0, szPrev = 0, bjT = 0, bjPrev = 0;
-	bool okTurnover = FetchIndexTurnover(L"1.000001", shT, shPrev) && FetchIndexTurnover(L"0.399001", szT, szPrev);
-	bool okBj = FetchIndexTurnover(L"0.899050", bjT, bjPrev);
+	// 沪深京成交额：主口径为指数分时（今日累计 + 昨日全天 + 昨日分时累计曲线，东财"较前一日同期"同款数据基础）；
+	// 分时不可用时退回原日K口径（仅今日累计/昨日全天，无曲线）。北交所北证50为全市场口径补全。
+	ExchangeMinuteAmounts shMs, szMs, bjMs;
+	const bool okMsSh = FetchIndexMinuteAmounts(L"1.000001", shMs);
+	const bool okMsSz = FetchIndexMinuteAmounts(L"0.399001", szMs);
+	const bool okMsBj = FetchIndexMinuteAmounts(L"0.899050", bjMs);
+	IndexDailyAmounts shD{}, szD{}, bjD{};
+	const bool okShD = FetchIndexDailyAmounts(L"1.000001", shD);
+	const bool okSzD = FetchIndexDailyAmounts(L"0.399001", szD);
+	const bool okBjD = FetchIndexDailyAmounts(L"0.899050", bjD);
 
 	{
 		std::lock_guard<std::mutex> lock(m_mutex);
 		m_dist = dist;
 		m_dist_time = time(nullptr);
-		if (okTurnover)
+
+		// 当前时钟对应的槽号：午休/上午收盘区间停留在 120 槽（时间轴上无 11:30~12:59）
+		auto nowSlot = [&]() -> int {
+			time_t now = time(nullptr);
+			struct tm lt{};
+			localtime_s(&lt, &now);
+			int mins = lt.tm_hour * 60 + lt.tm_min;
+			if (mins >= 570 && mins <= 690) return mins - 570;   // 09:30~11:30 → 0~120
+			if (mins >= 780 && mins <= 900) return 120 + (mins - 780);  // 13:00~15:00 → 120~240
+			return -1;
+		};
+
+		// 分时口径：沪深两市齐全才生效；北证可选（缺失时曲线退化为沪深口径）
+		const bool msCore = okMsSh && okMsSz && !shMs.prevDate.empty() && shMs.prevDate == szMs.prevDate;
+		if (msCore)
 		{
-			m_turnover_today = shT + szT + (okBj ? bjT : 0.0);
-			m_turnover_yesterday = shPrev + szPrev + (okBj ? bjPrev : 0.0);
+			const size_t slots = CMarketCenterData::TimeAxis().size();
+			std::vector<double> ydayCurve(slots, 0.0);   // 时间轴槽累计(元)
+			double ydaySum = 0, todaySum = 0;            // 参与合市的昨日全天/今日累计
+			int todayLastSlot = -1;                      // 今日数据覆盖的最后槽号
+			auto mergeExchange = [&](const ExchangeMinuteAmounts& ms) -> bool {
+				if (ms.ydayPerMin.size() != slots)
+					return false;
+				// 前一交易日覆盖度：足够分钟行 + 上午全段覆盖
+				size_t stamps = 0, lastStamp = 0;
+				for (size_t i = 0; i < slots; i++)
+					if (ms.ydayPerMin[i] > 0)
+					{
+						stamps++;
+						lastStamp = i;
+					}
+				if (stamps < 200 || lastStamp < 120)
+					return false;
+				double run = 0;
+				for (size_t i = 0; i < slots; i++)
+				{
+					run += ms.ydayPerMin[i];
+					ydayCurve[i] += run;
+					todaySum += ms.todayPerMin[i];
+					if (ms.todayPerMin[i] > 0 && static_cast<int>(i) > todayLastSlot)
+						todayLastSlot = static_cast<int>(i);
+				}
+				ydaySum += run;
+				return true;
+			};
+			bool curveShOk = mergeExchange(shMs);
+			bool curveSzOk = mergeExchange(szMs);
+			bool curveBjMerged = okMsBj && bjMs.prevDate == shMs.prevDate && mergeExchange(bjMs);
+			if (curveShOk && curveSzOk)
+			{
+				m_turnover_yday_curve = std::move(ydayCurve);
+				m_turnover_yday_date = shMs.prevDate;
+			}
+			else
+			{
+				m_turnover_yday_curve.clear();
+			}
+			(void)curveBjMerged;
+			m_turnover_today = todaySum;
+			m_turnover_yesterday = ydaySum;
+			m_turnover_slot = todayLastSlot;
 			m_turnover_time = time(nullptr);
 		}
+		else if (okShD && okSzD)
+		{
+			// 旧日K口径兜底：无分时曲线，绘制端退回线性外推
+			m_turnover_today = shD.todayTurnover + szD.todayTurnover + (okBjD ? bjD.todayTurnover : 0.0);
+			m_turnover_yesterday = shD.prevTurnover + szD.prevTurnover + (okBjD ? bjD.prevTurnover : 0.0);
+			m_turnover_slot = nowSlot();
+			m_turnover_time = time(nullptr);
+			m_turnover_yday_curve.clear();
+		}
+
+		// 近60个已完成交易日日均（日线口径独立于分时成败，北证可选）
+		if (okShD && okSzD)
+			m_turnover_avg60 = shD.avg60 + szD.avg60 + (okBjD ? bjD.avg60 : 0.0);
+
 		MarkSuccess(DS_TREND);
 	}
 	AppendTrendSample();

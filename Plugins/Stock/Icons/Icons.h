@@ -17,6 +17,8 @@ namespace Icons
 		RefreshCw,
 		ChevronUp,
 		ChevronDown,
+		ChevronLeft,
+		ChevronRight,
 		ChevronsUp,
 		ChevronsDown,
 		PanelLeftOpen,
