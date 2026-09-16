@@ -82,39 +82,89 @@ static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLef
 	}
 }
 
-// 交易台账 B/S 标记：同花顺风格，在 (x, y) 处画「B」（红）/「S」（绿）实底方标。
-// 方标画在 y 上方，顶部放不下时自动翻到下方；isBuy 决定字母与配色。
-static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int chartBottom)
+// 交易台账 B/S 标记：同花顺风格，圆角小方标 + 细引线指向成交价。
+// 摆放方向跟随买卖语义（买入标在下方、卖出标在上方），避免同一天多笔方向相反时标记互相压住；
+// 传了 avoidTop/avoidBottom（当日K线高低点像素）时，方块绝不会与蜡烛实体重叠。
+static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int chartBottom,
+	int avoidTop = INT_MIN, int avoidBottom = INT_MIN)
 {
 	const CString txt = isBuy ? _T("B") : _T("S");
 	const COLORREF boxColor = isBuy ? COLOR_RED_UP : COLOR_GREEN_DOWN;
 	CSize txtSize = memDC.GetTextExtent(txt);
 
-	// 方块：略大于字宽字高，构成同花顺那种小徽标
-	const int padX = g_data.RDPI(3);
-	const int padY = g_data.RDPI(1);
+	const int padX = g_data.RDPI(4);
+	const int padY = g_data.RDPI(2);
 	const int boxW = txtSize.cx + padX * 2;
 	const int boxH = txtSize.cy + padY * 2;
+	const int gap = g_data.RDPI(6);
 
-	int boxTop = y - g_data.RDPI(2) - boxH;
-	if (boxTop < chartTop + g_data.RDPI(2))
-		boxTop = y + g_data.RDPI(2);   // 顶部放不下翻到下方
-	int boxBottom = boxTop + boxH;
-	if (boxBottom > chartBottom - g_data.RDPI(1))
+	const int minTop = chartTop + g_data.RDPI(2);
+	const int maxTop = (chartBottom - g_data.RDPI(1) - boxH) < minTop ? minTop : (chartBottom - g_data.RDPI(1) - boxH);
+
+	// 首选侧：买入在下、卖出在上（与蜡烛涨跌色无关，跟成交方向走）
+	int boxTop = isBuy ? (y + gap) : (y - gap - boxH);
+	// 首选侧越界则翻到另一侧
+	if (boxTop < minTop || boxTop > maxTop)
 	{
-		// 下方也放不下：贴底内收，保证标记始终可见
-		boxTop = max(chartTop + g_data.RDPI(2), chartBottom - g_data.RDPI(1) - boxH);
+		const int flipped = isBuy ? (y - gap - boxH) : (y + gap);
+		if (flipped >= minTop && flipped <= maxTop)
+			boxTop = flipped;
 	}
 
-	CBrush boxBrush(boxColor);
-	CBrush* pOldBrush = memDC.SelectObject(&boxBrush);
-	CPen boxPen(PS_SOLID, 1, boxColor);
-	CPen* pOldPen = memDC.SelectObject(&boxPen);
-	// GDI Rectangle 的右/下边界是闭区间，故各减 1 得到精确 boxW×boxH 的方块
+	// 与蜡烛实体不重叠：重叠时优先推到与首选侧相反的一边（保证不与蜡烛交叠）
+	if (avoidTop != INT_MIN && avoidBottom != INT_MIN)
+	{
+		if (boxTop < avoidBottom && boxTop + boxH > avoidTop)
+		{
+			const int above = avoidTop - gap - boxH;
+			const int below = avoidBottom + gap;
+			const bool aboveOk = (above >= minTop && above <= maxTop);
+			const bool belowOk = (below >= minTop && below <= maxTop);
+			if (isBuy)
+			{
+				if (belowOk) boxTop = below;
+				else if (aboveOk) boxTop = above;
+			}
+			else
+			{
+				if (aboveOk) boxTop = above;
+				else if (belowOk) boxTop = below;
+			}
+		}
+	}
+	boxTop = max(minTop, min(boxTop, maxTop));
+
 	const int boxLeft = x - boxW / 2;
-	memDC.Rectangle(boxLeft, boxTop, boxLeft + boxW - 1, boxTop + boxH - 1);
-	memDC.SelectObject(pOldPen);
-	memDC.SelectObject(pOldBrush);
+
+	// 引线：自方块朝向价格点的一侧中心，连到 (x, y)
+	{
+		CPen leadPen(PS_SOLID, 1, boxColor);
+		CPen* pOldPen = memDC.SelectObject(&leadPen);
+		const int leadFrom = (boxTop > y) ? boxTop : boxTop + boxH;
+		memDC.MoveTo(x, leadFrom);
+		memDC.LineTo(x, y);
+		memDC.SelectObject(pOldPen);
+	}
+
+	// 圆角实底方块（GDI 无圆角矩形，借 GDI+ 路径绘制；作用域确保结束前刷回 HDC）
+	{
+		Gdiplus::Graphics g(memDC.GetSafeHdc());
+		g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+		Gdiplus::GraphicsPath path;
+		const Gdiplus::REAL r = static_cast<Gdiplus::REAL>(g_data.RDPI(3));
+		const Gdiplus::REAL l = static_cast<Gdiplus::REAL>(boxLeft);
+		const Gdiplus::REAL t = static_cast<Gdiplus::REAL>(boxTop);
+		const Gdiplus::REAL w = static_cast<Gdiplus::REAL>(boxW);
+		const Gdiplus::REAL h = static_cast<Gdiplus::REAL>(boxH);
+		path.AddArc(l, t, r * 2, r * 2, 180.0f, 90.0f);
+		path.AddArc(l + w - r * 2, t, r * 2, r * 2, 270.0f, 90.0f);
+		path.AddArc(l + w - r * 2, t + h - r * 2, r * 2, r * 2, 0.0f, 90.0f);
+		path.AddArc(l, t + h - r * 2, r * 2, r * 2, 90.0f, 90.0f);
+		path.CloseFigure();
+
+		Gdiplus::SolidBrush brush(Gdiplus::Color(255, GetRValue(boxColor), GetGValue(boxColor), GetBValue(boxColor)));
+		g.FillPath(&brush, &path);
+	}
 
 	memDC.SetTextColor(RGB(255, 255, 255));
 	memDC.SetBkMode(TRANSPARENT);
@@ -1585,11 +1635,11 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 		memDC.SelectObject(pOldBrush);
 	}
 
-	// 交易台账 B/S 标记：按成交日期匹配可见 bar，买入标在最低价下方，卖出标在最高价上方
+	// 交易台账 B/S 标记：按成交日期匹配可见 bar，圆角标置于K线外侧并以引线指回成交价
 	if (!hover.stockId.empty())
 	{
 		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
-		std::map<std::string, int> sameDaySeq;   // 同一交易日的第几笔，用于横向错开避免圆标重叠
+		std::map<std::string, int> sameDaySeq;   // 同一交易日的第几笔，用于横向错开避免标注重叠
 		for (const auto& rec : trades)
 		{
 			if (rec.time.size() < 10)
@@ -1604,9 +1654,10 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 				int seq = sameDaySeq[tradeDay]++;
 				int centerX = static_cast<int>(ctx.chartWidth / static_cast<float>(totalPoints) * i)
 					+ static_cast<int>(barTotalWidth / 2) + (seq % 3 - 1) * g_data.RDPI(5);
-				// 标记锚定成交价：买入标在下方（避免遮住当日K线实体），卖出标在上方
 				int anchorY = rec.price > 0 ? priceToY(rec.price) : (rec.isSell ? priceToY(kp.high) : priceToY(kp.low));
-				DrawBsMarker(memDC, centerX, anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight);
+				// 传入当日蜡烛高低点：标记不与K线实体重叠，买入落在下沿之外、卖出落在上沿之外
+				DrawBsMarker(memDC, centerX, anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight,
+					priceToY(kp.high), priceToY(kp.low));
 				break;
 			}
 		}
