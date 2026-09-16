@@ -88,6 +88,15 @@ void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLeft, int 
 
 #define ORDER_BOOK_WIDTH          g_data.RDPI(168)     // 右侧信息面板宽度
 
+// 右侧信息按钮簇（自右向左：CM 筹码峰 / PK 盘口 / CC ETF持仓 / BS 交易台账）占用格数。
+// CC 仅基金显示，其余恒显示；最左格决定汇总行需预留的宽度，与布局必须同源，否则会遮挡盈亏数字。
+static int InfoBtnSlotCount(const std::wstring& stockId, bool showObBtns)
+{
+	if (!showObBtns)
+		return 0;
+	return CCommon::IsFundCode(stockId) ? 4 : 3;
+}
+
 enum {
 	IDC_TIMELINE_BTN = 1001,
 	IDC_KLINE_BTN = 1002,
@@ -655,21 +664,12 @@ void CFloatingWnd::OnPaint()
 			SafeSetWindowPos(m_btnExpand, w - closeBtnW * 2, headerBtnTop, closeBtnW, closeBtnH);
 			SafeSetWindowPos(m_btnToggleStockList, w - closeBtnW * 3, headerBtnTop, closeBtnW, closeBtnH);
 			SafeSetWindowPos(m_btnSettings, w - closeBtnW * 4, headerBtnTop, closeBtnW, closeBtnH);
-			// 筹码峰/盘口/持仓按钮定位到盘口标题栏
+			// 筹码峰/盘口/持仓/台账按钮定位到盘口标题栏
 			int obTitleH = g_data.RDPI(16);
 			int obBtnW = g_data.RDPI(34);
 			int obBtnH = min(obTitleH, g_data.RDPI(16));
 			int obBtnTop = headerHeight + relatedBarHeight + (obTitleH - obBtnH) / 2;
-			bool showObBtns = !isIndexKLine;
-			bool isEtf = CCommon::IsFundCode(m_stock_id);
-			SafeSetWindowPos(m_btnChipPeak, w - obBtnW, obBtnTop, obBtnW, obBtnH);
-			SafeShowWindow(m_btnChipPeak, showObBtns);
-			SafeSetWindowPos(m_btnOrderBook, w - obBtnW * 2, obBtnTop, obBtnW, obBtnH);
-			SafeShowWindow(m_btnOrderBook, showObBtns);
-			SafeSetWindowPos(m_btnEtfHoldings, w - obBtnW * 3, obBtnTop, obBtnW, obBtnH);
-			SafeShowWindow(m_btnEtfHoldings, showObBtns && isEtf);
-			SafeSetWindowPos(m_btnBsTrades, w - obBtnW * 4, obBtnTop, obBtnW, obBtnH);
-			SafeShowWindow(m_btnBsTrades, showObBtns);
+			LayoutInfoButtons(w, obBtnTop, obBtnW, obBtnH, !isIndexKLine);
 		}
 
 		// 左侧股票列表面板（无论分时数据是否加载都绘制）
@@ -693,11 +693,10 @@ void CFloatingWnd::OnPaint()
 			int textY = summaryY + max(0, (positionSummaryHeight - textH) / 2);
 			memDC.SetBkMode(TRANSPARENT);
 
-			const bool isEtf = CCommon::IsFundCode(m_stock_id);
 			// 背景/描边铺满整个图表区宽度；文本内容区为右上角按钮预留空间（无按钮则铺满）
 			const int obBtnW = g_data.RDPI(34);
 			const bool showObBtns = !isIndexKLine;
-			const int rightBtnsW = showObBtns ? ((isEtf ? 3 : 2) * obBtnW) : 0;
+			const int rightBtnsW = InfoBtnSlotCount(m_stock_id, showObBtns) * obBtnW;
 			const int summaryContentRight = min(chartWidth, showObBtns ? (w - rightBtnsW) : w);
 			const int summaryContentW = max(0, summaryContentRight - summaryX);
 
@@ -1238,16 +1237,7 @@ void CFloatingWnd::OnPaint()
 				int obBtnW = g_data.RDPI(34);
 				int obBtnH = min(obTitleH, g_data.RDPI(16));
 				int obBtnTop = headerHeight + relatedBarHeight + (obTitleH - obBtnH) / 2;
-				bool showObBtns = !isIndexKLine;
-				bool isEtf = CCommon::IsFundCode(m_stock_id);
-				SafeSetWindowPos(m_btnChipPeak, w - obBtnW, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnChipPeak, showObBtns);
-				SafeSetWindowPos(m_btnOrderBook, w - obBtnW * 2, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnOrderBook, showObBtns);
-				SafeSetWindowPos(m_btnEtfHoldings, w - obBtnW * 3, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnEtfHoldings, showObBtns && isEtf);
-				SafeSetWindowPos(m_btnBsTrades, w - obBtnW * 4, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnBsTrades, showObBtns);
+				LayoutInfoButtons(w, obBtnTop, obBtnW, obBtnH, !isIndexKLine);
 			}
 			// 定位模式切换标签到副图标题栏右侧 [竞价] [分时] [日K] [周K] [月K]
 			int modeTabW = g_data.RDPI(38);
@@ -1851,22 +1841,13 @@ void CFloatingWnd::OnPaint()
 				SafeSetWindowPos(m_btnSettings, w - closeBtnW * 4, top, closeBtnW, closeBtnH);
 			}
 
-			// 盘口标题栏右侧按钮定位（筹码峰、盘口、持仓按钮）
+			// 盘口标题栏右侧按钮定位（筹码峰、盘口、持仓、台账按钮）
 			{
 				int obTitleH = g_data.RDPI(16);
 				int obBtnW = g_data.RDPI(34);
 				int obBtnH = min(obTitleH, g_data.RDPI(16));
 				int obBtnTop = headerHeight + relatedBarHeight + (obTitleH - obBtnH) / 2;
-				bool showObBtns = !isIndexKLine;
-				bool isEtf = CCommon::IsFundCode(m_stock_id);
-				SafeSetWindowPos(m_btnChipPeak, w - obBtnW, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnChipPeak, showObBtns);
-				SafeSetWindowPos(m_btnOrderBook, w - obBtnW * 2, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnOrderBook, showObBtns);
-				SafeSetWindowPos(m_btnEtfHoldings, w - obBtnW * 3, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnEtfHoldings, showObBtns && isEtf);
-				SafeSetWindowPos(m_btnBsTrades, w - obBtnW * 4, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnBsTrades, showObBtns);
+				LayoutInfoButtons(w, obBtnTop, obBtnW, obBtnH, !isIndexKLine);
 			}
 
 			// 右侧盘口高度：不减xAxisLabelHeight（那是左侧走势图的时间标签，右侧不需要）
@@ -4440,6 +4421,25 @@ void CFloatingWnd::SafeShowWindow(CWnd& wnd, bool show)
 	{
 		wnd.ShowWindow(show ? SW_SHOW : SW_HIDE);
 	}
+}
+
+// 右侧信息按钮簇自右向左排布：CM(1) PK(2) [CC(3) 仅基金] BS(末格)。
+// CC 隐藏时 BS 顶替其格位，避免 BS 与 PK 之间留空档；末格序号即汇总行需预留的宽格数。
+void CFloatingWnd::LayoutInfoButtons(int w, int obBtnTop, int obBtnW, int obBtnH, bool showObBtns)
+{
+	SafeSetWindowPos(m_btnChipPeak, w - obBtnW, obBtnTop, obBtnW, obBtnH);
+	SafeShowWindow(m_btnChipPeak, showObBtns);
+	SafeSetWindowPos(m_btnOrderBook, w - obBtnW * 2, obBtnTop, obBtnW, obBtnH);
+	SafeShowWindow(m_btnOrderBook, showObBtns);
+
+	const bool isEtf = CCommon::IsFundCode(m_stock_id);
+	SafeSetWindowPos(m_btnEtfHoldings, w - obBtnW * 3, obBtnTop, obBtnW, obBtnH);
+	SafeShowWindow(m_btnEtfHoldings, showObBtns && isEtf);
+
+	// BS 占最左格：格序号与汇总行预留格数同源（基金 4，非基金 3）
+	const int bsSlot = InfoBtnSlotCount(m_stock_id, showObBtns);
+	SafeSetWindowPos(m_btnBsTrades, w - obBtnW * bsSlot, obBtnTop, obBtnW, obBtnH);
+	SafeShowWindow(m_btnBsTrades, showObBtns);
 }
 
 HBRUSH CFloatingWnd::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)

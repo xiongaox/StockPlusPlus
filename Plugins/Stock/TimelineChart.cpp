@@ -82,31 +82,43 @@ static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLef
 	}
 }
 
-// 交易台账 B/S 标记：在给定横坐标与价格纵坐标处画「买」（红）/「卖」（绿）圆标。
-// isBuy 决定文案与配色；price 为标记价格（成交价，无成交价时传 0 由调用方回退到该 bar 高低点）。
-// 圆标画在 (x, y) 正上方，超界时自动翻到下方，与「买」标记原有风格保持一致。
+// 交易台账 B/S 标记：同花顺风格，在 (x, y) 处画「B」（红）/「S」（绿）实底方标。
+// 方标画在 y 上方，顶部放不下时自动翻到下方；isBuy 决定字母与配色。
 static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int chartBottom)
 {
-	const CString txt = isBuy ? _T("买") : _T("卖");
-	const COLORREF circleColor = isBuy ? COLOR_RED_UP : COLOR_GREEN_DOWN;
+	const CString txt = isBuy ? _T("B") : _T("S");
+	const COLORREF boxColor = isBuy ? COLOR_RED_UP : COLOR_GREEN_DOWN;
 	CSize txtSize = memDC.GetTextExtent(txt);
-	int circleRadius = max(txtSize.cx, txtSize.cy) / 2 + g_data.RDPI(1);
 
-	int circleY = y - g_data.RDPI(2) - circleRadius;
-	if (circleY - circleRadius < chartTop + g_data.RDPI(2))
-		circleY = y + g_data.RDPI(2) + circleRadius;  // 顶部放不下翻到下方
+	// 方块：略大于字宽字高，构成同花顺那种小徽标
+	const int padX = g_data.RDPI(3);
+	const int padY = g_data.RDPI(1);
+	const int boxW = txtSize.cx + padX * 2;
+	const int boxH = txtSize.cy + padY * 2;
 
-	CPen circlePen(PS_SOLID, 1, circleColor);
-	CPen* pOldPen = memDC.SelectObject(&circlePen);
-	CBrush circleBrush(circleColor);
-	CBrush* pOldBrush = memDC.SelectObject(&circleBrush);
-	memDC.Ellipse(x - circleRadius, circleY - circleRadius, x + circleRadius, circleY + circleRadius);
-	memDC.SelectObject(pOldBrush);
+	int boxTop = y - g_data.RDPI(2) - boxH;
+	if (boxTop < chartTop + g_data.RDPI(2))
+		boxTop = y + g_data.RDPI(2);   // 顶部放不下翻到下方
+	int boxBottom = boxTop + boxH;
+	if (boxBottom > chartBottom - g_data.RDPI(1))
+	{
+		// 下方也放不下：贴底内收，保证标记始终可见
+		boxTop = max(chartTop + g_data.RDPI(2), chartBottom - g_data.RDPI(1) - boxH);
+	}
+
+	CBrush boxBrush(boxColor);
+	CBrush* pOldBrush = memDC.SelectObject(&boxBrush);
+	CPen boxPen(PS_SOLID, 1, boxColor);
+	CPen* pOldPen = memDC.SelectObject(&boxPen);
+	// GDI Rectangle 的右/下边界是闭区间，故各减 1 得到精确 boxW×boxH 的方块
+	const int boxLeft = x - boxW / 2;
+	memDC.Rectangle(boxLeft, boxTop, boxLeft + boxW - 1, boxTop + boxH - 1);
 	memDC.SelectObject(pOldPen);
+	memDC.SelectObject(pOldBrush);
 
 	memDC.SetTextColor(RGB(255, 255, 255));
 	memDC.SetBkMode(TRANSPARENT);
-	memDC.TextOut(x - txtSize.cx / 2, circleY - txtSize.cy / 2, txt);
+	memDC.TextOut(x - txtSize.cx / 2, boxTop + (boxH - txtSize.cy) / 2, txt);
 }
 
 void CTimelineChart::DrawTimelineHeader(CDC& memDC, const TimelineDrawContext& ctx, const HoverState& hover)

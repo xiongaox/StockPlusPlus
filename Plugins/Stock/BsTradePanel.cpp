@@ -226,99 +226,132 @@ void CBsTradePanel::Draw(CDC& memDC, int left, int right, int height,
 
 // ── 暗色成交录入/编辑弹窗 ────────────────────────────────────────────
 
+namespace
+{
+	const COLORREF kTradeDlgBg = RGB(18, 20, 26);        // 弹窗底色
+	const COLORREF kTradeDlgEditBg = RGB(13, 15, 21);    // 输入框底色
+
+	// 用四条实心边条画 1px 描边：GDI+ 的 DrawRectangle 1px 笔会跨半像素抗锯齿，
+	// 把颜色溢到矩形外 1px，而 CPaintDC 只重绘失效区导致残留（方向按钮切换后的红边即此）
+	void FillRectOutline(Gdiplus::Graphics& g, const CRect& rect, const Gdiplus::Color& color, int thickness = 1)
+	{
+		Gdiplus::SolidBrush brush(color);
+		g.FillRectangle(&brush, rect.left, rect.top, rect.Width(), thickness);                       // 上
+		g.FillRectangle(&brush, rect.left, rect.bottom - thickness, rect.Width(), thickness);        // 下
+		g.FillRectangle(&brush, rect.left, rect.top, thickness, rect.Height());                      // 左
+		g.FillRectangle(&brush, rect.right - thickness, rect.top, thickness, rect.Height());         // 右
+	}
+
+	// 标签右对齐绘制，使各行冒号成一列
+	void DrawRightAlignedLabel(Gdiplus::Graphics& g, const wchar_t* text, Gdiplus::Font& font,
+		const CRect& cell, const Gdiplus::SolidBrush& brush)
+	{
+		Gdiplus::StringFormat fmt;
+		fmt.SetAlignment(Gdiplus::StringAlignmentFar);
+		fmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+		fmt.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+		Gdiplus::RectF rf(static_cast<Gdiplus::REAL>(cell.left), static_cast<Gdiplus::REAL>(cell.top),
+			static_cast<Gdiplus::REAL>(cell.Width()), static_cast<Gdiplus::REAL>(cell.Height()));
+		g.DrawString(text, -1, &font, rf, &fmt, &brush);
+	}
+}
+
 BOOL CDarkTradeEditDlg::OnInitDialog()
 {
 	CDialog::OnInitDialog();
-	CString title;
-	title.Format(_T("%s %s · 成交录入"), CString(m_code.c_str()), CString(m_name.c_str()));
-	SetWindowText(title);
+	// 标题带上代码与名称，便于在同名标的间区分
+	if (m_name.empty())
+		SetWindowText(_T("成交录入"));
+	else
+	{
+		CString title;
+		title.Format(_T("%s %s · 成交录入"), CString(m_code.c_str()), CString(m_name.c_str()));
+		SetWindowText(title);
+	}
 
 	BOOL darkCaption = TRUE;
 	::DwmSetWindowAttribute(GetSafeHwnd(), 20 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &darkCaption, sizeof(darkCaption));
 
 	m_font.CreatePointFont(100, _T("微软雅黑"));
-	m_font_bold.CreatePointFont(105, _T("微软雅黑"));
+	m_font_bold.CreatePointFont(100, _T("微软雅黑"));
 	SetFont(&m_font);
 
-	m_bg_brush.CreateSolidBrush(RGB(18, 20, 26));      // #12141A
-	m_edit_brush.CreateSolidBrush(RGB(13, 15, 21));
+	m_bg_brush.CreateSolidBrush(kTradeDlgBg);
+	m_edit_brush.CreateSolidBrush(kTradeDlgEditBg);
+
+	// 五种行共用同一左边界；标签右对齐，输入框左边界统一
+	const int marginX = g_data.DPI(18);
+	const int labelW = g_data.DPI(46);
+	const int labelRight = marginX + labelW;
+	const int contentLeft = labelRight + g_data.DPI(12);
+	const int rowH = g_data.DPI(26);
+	const int rowGap = g_data.DPI(8);
+	const int editBoxH = g_data.DPI(20);
+	const int editOffset = (rowH - editBoxH) / 2;
+	// 数量/价格行尾部留出单位字位置，避免单位压到输入框上或被挤出客户区
+	const int unitW = g_data.DPI(20);
 
 	CRect cr;
 	GetClientRect(&cr);
-	const int marginX = g_data.DPI(16);
-	const int editH = g_data.DPI(26);
-	const int editBoxH = g_data.DPI(18);
-	const int editOffset = g_data.DPI(4);
-	const int labelColW = g_data.DPI(58);
-	const int editBorderLeft = marginX + labelColW;
-	const int editInnerLeft = editBorderLeft + g_data.RDPI(6);
-	const int editInnerRight = cr.right - marginX - g_data.DPI(6);
+	const int contentRight = cr.right - marginX;
+	const int contentRightUnit = contentRight - unitW;
 
-	// 行布局：方向 / 日期 + 时间 / 数量 / 价格
-	const int dirY = g_data.DPI(52);
-	const int dateY = dirY + editH + g_data.DPI(10);
-	const int amountY = dateY + editH + g_data.DPI(10);
-	const int priceY = amountY + editH + g_data.DPI(10);
+	// 逐行排布：方向 / 日期时间 / 数量 / 价格（日期与时间同排，弹窗更紧凑）
+	int y = g_data.DPI(16);
+	const int dirY = y;       y += rowH + rowGap;
+	const int dateTimeY = y;  y += rowH + rowGap;
+	const int amountY = y;    y += rowH + rowGap;
+	const int priceY = y;     y += rowH + rowGap;
 
-	// 模板高度（140 对话框单位）在 96DPI 下不足以放下四行内容，按实际内容补高；底部按钮坐标由客户区底边推导会自动跟随
-	const int neededClientH = priceY + editH + g_data.DPI(14) + editH + g_data.DPI(12);
-	if (cr.Height() < neededClientH)
+	const int btnW = g_data.DPI(64);
+	const int btnH = g_data.DPI(28);
+	const int btnY = y + g_data.DPI(2);
+
+	// 模板高度按两行内容设计，这里按实际五行补高并保持窗口居中
+	const int neededClientH = btnY + btnH + g_data.DPI(16);
+	if (cr.Height() != neededClientH)
 	{
 		CRect wr;
 		GetWindowRect(&wr);
-		SetWindowPos(nullptr, 0, 0, wr.Width(), wr.Height() + (neededClientH - cr.Height()),
-			SWP_NOMOVE | SWP_NOZORDER);
+		const int delta = neededClientH - cr.Height();
+		SetWindowPos(nullptr, wr.left, max(0, wr.top - delta / 2), wr.Width(), wr.Height() + delta,
+			SWP_NOZORDER | SWP_NOACTIVATE);
 		GetClientRect(&cr);
 	}
 
 	// 方向切换按钮（买红 / 卖绿），绘制与命中共用矩形
-	const int dirBtnW = g_data.DPI(70);
-	const int dirBtnH = g_data.DPI(24);
-	m_buy_btn_rect = CRect(editBorderLeft, dirY, editBorderLeft + dirBtnW, dirY + dirBtnH);
-	m_sell_btn_rect = CRect(editBorderLeft + dirBtnW + g_data.DPI(10), dirY,
-		editBorderLeft + dirBtnW * 2 + g_data.DPI(10), dirY + dirBtnH);
+	const int dirBtnW = g_data.DPI(68);
+	m_buy_btn_rect = CRect(contentLeft, dirY, contentLeft + dirBtnW, dirY + rowH);
+	m_sell_btn_rect = CRect(m_buy_btn_rect.right + g_data.DPI(8), dirY,
+		m_buy_btn_rect.right + g_data.DPI(8) + dirBtnW, dirY + rowH);
 
-	// 日期 + 时间：两个并排小框
-	const int dateW = (editInnerRight - editInnerLeft - g_data.DPI(10)) / 2;
-	m_date_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-		CRect(editInnerLeft, dateY + editOffset, editInnerLeft + dateW, dateY + editOffset + editBoxH), this, 1101);
-	m_date_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
-	::SetWindowTheme(m_date_edit.GetSafeHwnd(), L"", L"");
-	m_date_edit.SetFont(&m_font);
-	m_date_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"yyyy-MM-dd");
+	auto createEdit = [&](CEdit& edit, int rowY, int left, int right, UINT id, const wchar_t* cue) {
+		edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+			CRect(left, rowY + editOffset, right, rowY + editOffset + editBoxH), this, id);
+		edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
+		::SetWindowTheme(edit.GetSafeHwnd(), L"", L"");
+		edit.SetFont(&m_font);
+		edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)cue);
+	};
+	// 日期时间同排：日期占 2/3，时间占剩余（"HH:mm" 五字符足够）
+	const int dateTimeW = contentRight - contentLeft;
+	const int dateW = dateTimeW * 2 / 3 - g_data.DPI(4);
+	const int timeLeft = contentLeft + dateW + g_data.DPI(8);
+	createEdit(m_date_edit, dateTimeY, contentLeft, contentLeft + dateW, 1101, L"yyyy-MM-dd");
+	createEdit(m_time_edit, dateTimeY, timeLeft, contentRight, 1102, L"HH:mm");
+	createEdit(m_amount_edit, amountY, contentLeft, contentRightUnit, 1103, L"输入数量");
+	createEdit(m_price_edit, priceY, contentLeft, contentRightUnit, 1104, L"输入成交价");
 
-	m_time_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-		CRect(editInnerLeft + dateW + g_data.DPI(10), dateY + editOffset, editInnerRight, dateY + editOffset + editBoxH), this, 1102);
-	m_time_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
-	::SetWindowTheme(m_time_edit.GetSafeHwnd(), L"", L"");
-	m_time_edit.SetFont(&m_font);
-	m_time_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"HH:mm");
-
-	m_amount_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-		CRect(editInnerLeft, amountY + editOffset, editInnerRight, amountY + editOffset + editBoxH), this, 1103);
-	m_amount_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
-	::SetWindowTheme(m_amount_edit.GetSafeHwnd(), L"", L"");
-	m_amount_edit.SetFont(&m_font);
-	m_amount_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"输入数量(股)");
-
-	m_price_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-		CRect(editInnerLeft, priceY + editOffset, editInnerRight, priceY + editOffset + editBoxH), this, 1104);
-	m_price_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
-	::SetWindowTheme(m_price_edit.GetSafeHwnd(), L"", L"");
-	m_price_edit.SetFont(&m_font);
-	m_price_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"输入成交价(元)");
-
-	// 底部按钮：编辑模式插入删除按钮（红描边文案），三钮等宽
-	const int btnW = g_data.DPI(70);
-	const int btnH = g_data.DPI(26);
-	const int btnY = cr.bottom - btnH - g_data.DPI(12);
+	// 底部按钮：确定/取消靠右成组，编辑模式在左侧插入删除按钮
+	const int okLeft = cr.right - marginX - btnW;
+	const int cancelLeft = okLeft - g_data.DPI(8) - btnW;
 
 	m_btn_ok.Create(_T("确定"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON | BS_OWNERDRAW,
-		CRect(cr.right - btnW - marginX, btnY, cr.right - marginX, btnY + btnH), this, IDOK);
+		CRect(okLeft, btnY, cr.right - marginX, btnY + btnH), this, IDOK);
 	m_btn_ok.SetFont(&m_font_bold);
 
 	m_btn_cancel.Create(_T("取消"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW,
-		CRect(cr.right - btnW * 2 - marginX - g_data.DPI(10), btnY, cr.right - btnW - marginX - g_data.DPI(10), btnY + btnH), this, IDCANCEL);
+		CRect(cancelLeft, btnY, cancelLeft + btnW, btnY + btnH), this, IDCANCEL);
 	m_btn_cancel.SetFont(&m_font);
 
 	if (!m_is_new)
@@ -381,8 +414,11 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 		CPoint pt(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 		if (HitTestDirectionButtons(pt))
 		{
-			InvalidateRect(m_buy_btn_rect);
-			InvalidateRect(m_sell_btn_rect);
+			// 两个按钮整体一起失效（含各自外扩 1px 的余量），确保切换后无旧色残留
+			CRect dirty = m_buy_btn_rect;
+			dirty.UnionRect(dirty, m_sell_btn_rect);
+			dirty.InflateRect(1, 1);
+			InvalidateRect(dirty);
 			return 0;
 		}
 	}
@@ -459,60 +495,66 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 		Gdiplus::SolidBrush bg(Gdiplus::Color(255, 18, 20, 26));
 		g.FillRectangle(&bg, 0, 0, rc.Width(), rc.Height());
 
-		const int marginX = g_data.DPI(16);
+		const int marginX = g_data.DPI(18);
+		const int labelW = g_data.DPI(46);
 
-		// 2. 标签文字（行 y 取各输入框实际位置，标签基线略上移）
+		// 2. 标签：右对齐到同一列，冒号成一条竖线；标签行高与输入框行高一致
 		Gdiplus::Font labelFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(12)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 		Gdiplus::SolidBrush labelBrush(Gdiplus::Color(255, 203, 213, 225));
 
-		auto editTopY = [&](CWnd& edit) -> int {
-			CRect er;
-			if (!edit.GetSafeHwnd()) return 0;
+		auto editRectInClient = [&](CWnd& edit) -> CRect {
+			CRect er(0, 0, 0, 0);
+			if (!edit.GetSafeHwnd()) return er;
 			edit.GetWindowRect(er);
 			ScreenToClient(er);
-			return er.top;
+			return er;
 		};
-		const int dirY = m_buy_btn_rect.top;
-		CRect dateRc, amountRc, priceRc;
-		int dateY = 0, amountY = 0, priceY = 0;
-		if (m_date_edit.GetSafeHwnd())
-		{
-			m_date_edit.GetWindowRect(dateRc);
-			ScreenToClient(dateRc);
-			dateY = dateRc.top;
-		}
-		if (m_amount_edit.GetSafeHwnd())
-		{
-			m_amount_edit.GetWindowRect(amountRc);
-			ScreenToClient(amountRc);
-			amountY = amountRc.top;
-		}
-		if (m_price_edit.GetSafeHwnd())
-		{
-			m_price_edit.GetWindowRect(priceRc);
-			ScreenToClient(priceRc);
-			priceY = priceRc.top;
-		}
 
-		g.DrawString(L"方向:", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(dirY + g_data.DPI(3))), &labelBrush);
-		g.DrawString(L"时间:", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(dateY + g_data.DPI(1))), &labelBrush);
-		g.DrawString(L"数量(股):", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(amountY + g_data.DPI(1))), &labelBrush);
-		g.DrawString(L"价格(元):", -1, &labelFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(marginX), static_cast<Gdiplus::REAL>(priceY + g_data.DPI(1))), &labelBrush);
+		// 标签在各自行内垂直居中：以对应输入框（或方向按钮）的垂直中线为基准
+		auto drawRowLabel = [&](const wchar_t* text, const CRect& anchorRow) {
+			CRect cell(marginX, anchorRow.top, marginX + labelW, anchorRow.bottom);
+			DrawRightAlignedLabel(g, text, labelFont, cell, labelBrush);
+		};
 
-		// 3. 输入框底色与边框（含焦点高亮），按各控件实际矩形绘制
+		CRect dateRc = editRectInClient(m_date_edit);
+		CRect amountRc = editRectInClient(m_amount_edit);
+		CRect priceRc = editRectInClient(m_price_edit);
+
+		// 日期与时间同排，故只用一行标签（"日期" 同时统辖两个框）
+		drawRowLabel(L"方向:", m_buy_btn_rect);
+		drawRowLabel(L"日期:", dateRc);
+		drawRowLabel(L"数量:", amountRc);
+		drawRowLabel(L"价格:", priceRc);
+
+		// 3. 行尾单位（画在输入框右侧预留的 unitW 区域内）
+		Gdiplus::Font unitFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+		Gdiplus::SolidBrush unitBrush(Gdiplus::Color(255, 100, 116, 139));
+		auto drawUnit = [&](const wchar_t* text, const CRect& editRc) {
+			if (editRc.IsRectEmpty()) return;
+			Gdiplus::StringFormat fmt;
+			fmt.SetAlignment(Gdiplus::StringAlignmentFar);
+			fmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+			fmt.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+			Gdiplus::RectF rf(static_cast<Gdiplus::REAL>(editRc.right + g_data.DPI(2)),
+				static_cast<Gdiplus::REAL>(editRc.top),
+				static_cast<Gdiplus::REAL>(rc.right - marginX - editRc.right - g_data.DPI(2)),
+				static_cast<Gdiplus::REAL>(editRc.Height()));
+			g.DrawString(text, -1, &unitFont, rf, &fmt, &unitBrush);
+		};
+		drawUnit(L"股", amountRc);
+		drawUnit(L"元", priceRc);
+
+		// 4. 输入框底色与边框（含焦点高亮）
 		auto drawEdit = [&](CWnd& edit) {
-			if (!edit.GetSafeHwnd()) return;
-			CRect er;
-			edit.GetWindowRect(er);
-			ScreenToClient(er);
+			CRect er = editRectInClient(edit);
+			if (er.IsRectEmpty()) return;
 
 			Gdiplus::SolidBrush editBg(Gdiplus::Color(255, 13, 15, 21));
 			g.FillRectangle(&editBg, er.left, er.top, er.Width(), er.Height());
 
 			CWnd* pFocus = GetFocus();
 			bool focused = (pFocus && pFocus->GetSafeHwnd() == edit.GetSafeHwnd());
-			Gdiplus::Pen pen(focused ? Gdiplus::Color(255, 37, 99, 235) : Gdiplus::Color(255, 52, 58, 72), 1.0f);
-			g.DrawRectangle(&pen, er.left, er.top, er.Width() - 1, er.Height() - 1);
+			FillRectOutline(g, er, focused ? Gdiplus::Color(255, 37, 99, 235) : Gdiplus::Color(255, 52, 58, 72));
 		};
 		drawEdit(m_date_edit);
 		drawEdit(m_time_edit);
@@ -531,23 +573,25 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 
 void CDarkTradeEditDlg::DrawDirectionButtons(Gdiplus::Graphics& g)
 {
+	// 未选中：深底 + 灰描边；选中：语义色实底，不再额外描边（避免描边跨像素溢出）
 	auto drawDir = [&](const CRect& rect, bool isBuy) {
 		bool isSel = (m_is_sell != isBuy);
-		Gdiplus::Color bgCol = isSel ? (isBuy ? Gdiplus::Color(255, 246, 70, 93) : Gdiplus::Color(255, 14, 203, 129))
+		Gdiplus::Color bgCol = isSel
+			? (isBuy ? Gdiplus::Color(255, 246, 70, 93) : Gdiplus::Color(255, 14, 203, 129))
 			: Gdiplus::Color(255, 24, 27, 34);
 		Gdiplus::SolidBrush bgBrush(bgCol);
 		g.FillRectangle(&bgBrush, rect.left, rect.top, rect.Width(), rect.Height());
 
-		Gdiplus::Color borderCol = isSel ? bgCol : Gdiplus::Color(255, 52, 58, 72);
-		Gdiplus::Pen borderPen(borderCol, 1.0f);
-		g.DrawRectangle(&borderPen, rect.left, rect.top, rect.Width() - 1, rect.Height() - 1);
+		if (!isSel)
+			FillRectOutline(g, rect, Gdiplus::Color(255, 52, 58, 72));
 
-		Gdiplus::Font dirFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)),
+		Gdiplus::Font dirFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(12)),
 			isSel ? Gdiplus::FontStyleBold : Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-		Gdiplus::SolidBrush txtBrush(isSel ? Gdiplus::Color(255, 255, 255, 255) : Gdiplus::Color(255, 148, 163, 184));
+		Gdiplus::SolidBrush txtBrush(isSel ? Gdiplus::Color(255, 255, 255) : Gdiplus::Color(255, 148, 163, 184));
 		Gdiplus::StringFormat sf;
 		sf.SetAlignment(Gdiplus::StringAlignmentCenter);
 		sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+		sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
 		const wchar_t* label = isBuy ? L"买入" : L"卖出";
 		Gdiplus::RectF rf(static_cast<Gdiplus::REAL>(rect.left), static_cast<Gdiplus::REAL>(rect.top),
 			static_cast<Gdiplus::REAL>(rect.Width()), static_cast<Gdiplus::REAL>(rect.Height()));

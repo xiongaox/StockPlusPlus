@@ -145,6 +145,8 @@ private:
 	void SetMonthKLineModeDefaults(); // 设置月K模式默认参数
 	static void SafeSetWindowPos(CWnd& wnd, int x, int y, int cx, int cy);
 	static void SafeShowWindow(CWnd& wnd, bool show);
+	// 右侧信息按钮簇（CM/PK/CC/BS）统一布局：CC 仅基金显示，BS 自动补到左侧不留空档
+	void LayoutInfoButtons(int w, int obBtnTop, int obBtnW, int obBtnH, bool showObBtns);
 
 	// TimelineDrawContext / KLineDrawData / LabelInfo 已移至 ChartContext.h，供各图表模块共享
 	// MACDData/MACDCrossSignal/KDJData/WRData/RSIData/PeriodPoint 类型别名已移至各模块类
