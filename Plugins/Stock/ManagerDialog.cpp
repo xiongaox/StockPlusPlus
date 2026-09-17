@@ -63,6 +63,8 @@ namespace
 	const int ABOUT_LOG_PAD = 22;     // 日志区内容上/左/右内边距
 	const int ABOUT_STATUS_H = 16;    // 状态文字行高
 	const int ABOUT_STATUS_GAP = 6;   // 状态文字与按钮之间的间距
+	// 状态文案须与按钮等宽区间内可容纳（约 108px），这样「文字在按钮正上方居中」成立；
+	// 文案比按钮宽时会被边界收口、居中失效，那种偏移比右对齐更别扭
 	const int ABOUT_BTN_W = 108;      // 「检查更新」按钮宽
 	const int ABOUT_BTN_H = 28;       // 「检查更新」按钮高
 }
@@ -4961,8 +4963,14 @@ namespace
 
 void CManagerDialog::OnBnClickedUpdateCheckBtn()
 {
+	// 查到新版本后按钮转为「前往下载」：此时点击是跳转下载页而不是再查一次
 	if (m_update_checking)
 		return;
+	if (!m_update_download_url.empty())
+	{
+		ShellExecute(nullptr, L"open", m_update_download_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+		return;
+	}
 
 	m_update_checking = true;
 	// 重新检查时先清空上一次结果：状态文字与它的点击区一起失效，避免「检查中…」期间
@@ -5006,9 +5014,19 @@ LRESULT CManagerDialog::OnUpdateCheckFinished(WPARAM wParam, LPARAM lParam)
 		reinterpret_cast<std::pair<std::wstring, std::wstring>*>(lParam));
 
 	m_update_checking = false;
+	// 按钮文案随结果切换：发现新版本时直接标成「前往下载」，点击动作由按钮承担，
+	// 状态文字只报结论（短文案才能在按钮正上方居中）
+	bool hasNewer = false;
+	if (wParam != 0 && payload && !payload->first.empty())
+	{
+		std::wstring tag = payload->first;
+		if (!tag.empty() && (tag[0] == L'v' || tag[0] == L'V'))
+			tag = tag.substr(1);
+		hasNewer = IsVersionNewer(tag, STOCK_VERSION_STR);
+	}
 	if (m_about_update_btn.GetSafeHwnd())
 	{
-		m_about_update_btn.SetWindowText(L"检查更新");
+		m_about_update_btn.SetWindowText(hasNewer ? L"前往下载" : L"检查更新");
 		m_about_update_btn.EnableWindow(TRUE);
 	}
 
@@ -5016,7 +5034,8 @@ LRESULT CManagerDialog::OnUpdateCheckFinished(WPARAM wParam, LPARAM lParam)
 	m_update_failed = !ok;
 	if (!ok)
 	{
-		m_update_status_text = L"检查失败，请检查网络后重试";
+		// 文案须与按钮等宽区间内可容纳（约 108px），保证在按钮正上方居中
+		m_update_status_text = L"检查失败，请重试";
 		m_update_latest_version.clear();
 		m_update_download_url.clear();
 	}
@@ -5030,7 +5049,8 @@ LRESULT CManagerDialog::OnUpdateCheckFinished(WPARAM wParam, LPARAM lParam)
 		m_update_download_url = payload->second;
 		if (IsVersionNewer(tag, STOCK_VERSION_STR))
 		{
-			m_update_status_text = L"发现新版本 v" + tag + L"，点击前往下载";
+			// 只报版本号：点击动作由下方按钮承担，文案再长会顶出按钮宽度、居中失效
+			m_update_status_text = L"发现新版本 v" + tag;
 		}
 		else
 		{
@@ -5059,7 +5079,7 @@ namespace
 		L"•  【修复】 修复连续切换股票时新股票 K 线加载缓慢：后台焦点任务在切换后立即退出，不再让新股票排队等待旧任务跑完",
 		L"•  【修复】 分时缓存交易日改用数据自身日期，修正凌晨拉取把上一交易日数据重复写进今天的问题",
 		L"•  【优化】 分时图去掉基金净值紫线；鼠标悬停卡片新增「均价」与「偏离」行（价格相对当日均价线的百分比）",
-		L"•  【新增】 关于页新增「检查更新」按钮：位于插件信息卡右侧，后台查询 GitHub 最新 Release，发现新版本时按钮上方提示可直接点击前往下载",
+		L"•  【新增】 关于页新增「检查更新」按钮：位于插件信息卡右侧，后台查询 GitHub 最新 Release，状态文字居中显示在按钮上方，发现新版本时按钮转为「前往下载」",
 		L"•  【优化】 关于页改为固定信息卡 + 独立滚动日志两段式：插件信息与「检查更新」按钮始终可见，更新日志再多也不挤占它们"
 	};
 	const wchar_t* kItems_0916_v208[] = {
@@ -5290,9 +5310,8 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
 		static_cast<int>(curPt.X + boundRect.Width), textY + g_data.DPI(18));
 	leftColRight = max(leftColRight, static_cast<int>(curPt.X + boundRect.Width + 0.5f));
 
-	// 更新状态文字：贴在按钮正上方，右缘与按钮对齐（构成「状态在上、按钮在下」）
-	// 可用宽度受左侧名称/版本行限制；不够时按省略号截断而不是整条不画，
-	// 保证「发现新版本…」这类关键前缀在任何窗口宽度下都看得见
+	// 更新状态文字：画在按钮正上方，以按钮水平中心居中（与下方按钮构成对称的上下结构）。
+	// 三种文案都控制在按钮宽度内，居中是真正的居中；仅当版本号异常长时才按边界收口
 	m_about_update_rect.SetRectEmpty();
 	if (!m_update_status_text.empty())
 	{
@@ -5302,26 +5321,25 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
 			: (m_update_failed ? Gdiplus::Color(255, 245, 158, 11)                         // 暖黄：查询失败
 				: Gdiplus::Color(255, 148, 163, 184)));
 
-		const int stRight = btnRect.right;
 		const int stTop = btnRect.top - g_data.DPI(ABOUT_STATUS_GAP) - g_data.DPI(ABOUT_STATUS_H);
-		const int availW = stRight - (leftColRight + g_data.DPI(12));
-		if (availW > g_data.DPI(30))
+		const int leftBound = leftColRight + g_data.DPI(12);
+		const int rightBound = cardRect.right - g_data.DPI(ABOUT_LOG_PAD);
+		const int bandW = rightBound - leftBound;
+		if (bandW > g_data.DPI(30))
 		{
-			// 右缘贴住按钮右缘，视觉上落在按钮正上方（不右对齐会飘到左侧标题旁边）。
-			// 宽度自己算：GenericTypographic 带 NoClip，靠它做省略号裁剪语义不确定，
-			// 明确走「量宽 → 放得下就精确右对齐，放不下才逐字截断」两条路径
+			// 宽度自己算：GenericTypographic 带 NoClip，靠它做省略号裁剪语义不确定
 			Gdiplus::RectF stBound;
 			g.MeasureString(m_update_status_text.c_str(), -1, &stFont, Gdiplus::PointF(0.0f, 0.0f), &strFmt, &stBound);
 			std::wstring shown = m_update_status_text;
 			int textW = static_cast<int>(stBound.Width + 0.5f);
-			if (textW > availW)
+			if (textW > bandW)
 			{
 				while (!shown.empty())
 				{
 					shown.pop_back();
 					std::wstring cand = shown + L"…";
 					g.MeasureString(cand.c_str(), -1, &stFont, Gdiplus::PointF(0.0f, 0.0f), &strFmt, &stBound);
-					if (static_cast<int>(stBound.Width + 0.5f) <= availW)
+					if (static_cast<int>(stBound.Width + 0.5f) <= bandW)
 					{
 						shown = cand;
 						break;
@@ -5330,15 +5348,16 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
 				textW = static_cast<int>(stBound.Width + 0.5f);
 			}
 
-			const int textLeft = stRight - textW;
+			const int btnCenter = (btnRect.left + btnRect.right) / 2;
+			const int textLeft = max(leftBound, min(btnCenter - textW / 2, rightBound - textW));
 			g.DrawString(shown.c_str(), -1, &stFont,
 				Gdiplus::PointF(static_cast<Gdiplus::REAL>(textLeft), static_cast<Gdiplus::REAL>(stTop)), &strFmt, &stBrush);
 
 			if (clickable)
 			{
-				// 点击区只覆盖文字实际范围：短文案时左侧空白不该也算成热区
+				// 点击区只覆盖文字实际范围：两侧留白不该也算成热区
 				m_about_update_rect = CRect(textLeft - g_data.DPI(4), stTop - g_data.DPI(2),
-					stRight, stTop + g_data.DPI(ABOUT_STATUS_H));
+					textLeft + textW, stTop + g_data.DPI(ABOUT_STATUS_H));
 			}
 		}
 	}
