@@ -43,6 +43,35 @@ static std::string GetCacheCutoffDateString()
 	return GetLocalDateString(GetLocalMidnightTime(-7));
 }
 
+// 从分时数据里取出真实交易日（"yyyy-MM-dd"）：优先 fullTime（东财等源逐行带日期），
+// 其次用 time 里可能存在的完整日期；都取不到返回空串，由调用方回退系统日期
+static std::string ExtractTradeDate(const std::vector<STOCK::TimelinePoint>& data)
+{
+	auto isValidDate = [](const std::string& s) {
+		if (s.size() != 10 || s[4] != '-' || s[7] != '-') return false;
+		for (int i = 0; i < 10; ++i)
+		{
+			if (i == 4 || i == 7) continue;
+			if (s[i] < '0' || s[i] > '9') return false;
+		}
+		return true;
+	};
+	for (const auto& item : data)
+	{
+		if (item.fullTime.size() >= 10)
+		{
+			std::string d = item.fullTime.substr(0, 10);
+			if (isValidDate(d)) return d;
+		}
+		if (item.time.size() >= 10)
+		{
+			std::string d = item.time.substr(0, 10);
+			if (isValidDate(d)) return d;
+		}
+	}
+	return std::string();
+}
+
 static const char* GetKLineCacheTable(STOCK::Period period)
 {
 	switch (period)
@@ -742,7 +771,11 @@ bool CStockDbManager::SaveTimelineCache(const std::wstring& stockCode, const std
 	bool isSecid = CCommon::IsEmSecidCode(stockCode);
 	bool isHK = (stockCode.find(kHK) == 0);
 	bool isUS = CCommon::IsUSStockCode(stockCode);
-	std::string tradeDate = GetTodayDateString();
+	// 交易日必须取自数据本身（fullTime 形如 "2026-09-17 09:30"），不能用写入时刻的系统日期：
+	// 凌晨/盘前拉取时接口返回的仍是上一交易日的分时，用系统日期会把同一天数据重复写进两天
+	std::string dataDate = ExtractTradeDate(data);
+	const std::string fallbackDate = GetTodayDateString();
+	const std::string tradeDate = dataDate.empty() ? fallbackDate : dataDate;
 	time_t now = time(nullptr);
 	bool ok = true;
 	for (const auto& item : data)

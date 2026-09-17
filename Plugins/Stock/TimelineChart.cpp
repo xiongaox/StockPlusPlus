@@ -1309,6 +1309,7 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 		rows.push_back({ _T("成交额"), amountStr, COLOR_TEXT_PRIMARY });
 
 		// 7. 均价（当日累计成交均价，即图上那条暖金色均价线；与标题栏"均:"同源）
+		//    并给出「偏离」= 该分钟价格相对均价的百分比，供判断买点/卖点
 		{
 			STOCK::Price avgPrice = item.averagePrice;
 			// 量纲自愈：旧缓存可能把均价缩小了约100倍，与现价偏差过大时乘回（与均价线绘制同一判据）
@@ -1321,6 +1322,17 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 			{
 				CString avgStr = isEtf ? CCommon::FormatETFPrice(avgPrice) : CCommon::FormatFloat(avgPrice);
 				rows.push_back({ _T("均价"), avgStr, RGB(255, 179, 0) });
+
+				if (item.price > 0)
+				{
+					const double dev = (item.price - avgPrice) / avgPrice * 100.0;
+					CString devStr;
+					devStr.Format(_T("%+.2f%%"), dev);
+					// 高于均价（正偏离）用红、低于用绿，与涨跌配色一致；接近 0 时用中性色
+					COLORREF devColor = (std::abs(dev) < 0.005) ? COLOR_TEXT_MUTED
+						: (dev > 0 ? COLOR_RED_UP : COLOR_GREEN_DOWN);
+					rows.push_back({ _T("偏离"), devStr, devColor });
+				}
 			}
 		}
 	}
