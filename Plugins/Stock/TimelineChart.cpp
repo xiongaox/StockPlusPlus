@@ -21,6 +21,11 @@ struct TimeMarker {
 	int minutesFromStart;
 };
 
+// B/S 成交标记配色：刻意避开 K 线的涨跌红绿（红/绿是蜡烛专用），
+// 改用蓝（买入）与橙（卖出），在白字标记上对比清晰且不会与蜡烛混淆
+static const COLORREF kBsBuyColor = RGB(59, 130, 246);
+static const COLORREF kBsSellColor = RGB(249, 115, 22);
+
 // 辅助函数：绘制价格点标签（最高/最低价标注）
 static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLeft, int chartTop, int chartWidth, int chartHeight,
 	STOCK::Price price, bool isHigh, COLORREF color)
@@ -82,21 +87,24 @@ static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLef
 	}
 }
 
-// 交易台账 B/S 标记：同花顺风格，圆角小方标 + 细引线指向成交价。
+// 交易台账 B/S 标记：正方形圆角小方标 + 细引线自柱子中心延伸出来。
 // 摆放方向跟随买卖语义（买入标在下方、卖出标在上方），避免同一天多笔方向相反时标记互相压住；
 // 传了 avoidTop/avoidBottom（当日K线高低点像素）时，方块绝不会与蜡烛实体重叠。
 static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int chartBottom,
 	int avoidTop = INT_MIN, int avoidBottom = INT_MIN)
 {
 	const CString txt = isBuy ? _T("B") : _T("S");
-	const COLORREF boxColor = isBuy ? COLOR_RED_UP : COLOR_GREEN_DOWN;
+	const COLORREF boxColor = isBuy ? kBsBuyColor : kBsSellColor;
 	CSize txtSize = memDC.GetTextExtent(txt);
 
-	const int padX = g_data.RDPI(4);
-	const int padY = g_data.RDPI(2);
-	const int boxW = txtSize.cx + padX * 2;
-	const int boxH = txtSize.cy + padY * 2;
-	const int gap = g_data.RDPI(6);
+	// 正方形外框：边长取字形长短边中的较大者，再加等量内边距，
+	// 保证任何字形下都是正方形（原先按宽高分别加内边距会得到竖长条）
+	const int pad = g_data.RDPI(4);
+	const int side = max(txtSize.cx, txtSize.cy) + pad * 2;
+	const int boxW = side;
+	const int boxH = side;
+	// 引线加长：标记与蜡烛拉开更明显的距离，指向关系靠引线表达
+	const int gap = g_data.RDPI(14);
 
 	const int minTop = chartTop + g_data.RDPI(2);
 	const int maxTop = (chartBottom - g_data.RDPI(1) - boxH) < minTop ? minTop : (chartBottom - g_data.RDPI(1) - boxH);
@@ -1635,7 +1643,7 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 		memDC.SelectObject(pOldBrush);
 	}
 
-	// 交易台账 B/S 标记：按成交日期匹配可见 bar，圆角标置于K线外侧并以引线指回成交价
+	// 交易台账 B/S 标记：按成交日期匹配可见 bar，方块置于K线外侧、引线从柱子中心延伸出来
 	if (!hover.stockId.empty())
 	{
 		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
@@ -1654,7 +1662,10 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 				int seq = sameDaySeq[tradeDay]++;
 				int centerX = static_cast<int>(ctx.chartWidth / static_cast<float>(totalPoints) * i)
 					+ static_cast<int>(barTotalWidth / 2) + (seq % 3 - 1) * g_data.RDPI(5);
-				int anchorY = rec.price > 0 ? priceToY(rec.price) : (rec.isSell ? priceToY(kp.high) : priceToY(kp.low));
+				// 引线锚点取柱子实体的中心（开盘收盘价中点），标记看起来是从这根柱子里延伸出来的
+				const double bodyMid = (kp.open > 0 && kp.close > 0) ? (kp.open + kp.close) / 2.0
+					: (kp.high + kp.low) / 2.0;
+				int anchorY = priceToY(bodyMid);
 				// 传入当日蜡烛高低点：标记不与K线实体重叠，买入落在下沿之外、卖出落在上沿之外
 				DrawBsMarker(memDC, centerX, anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight,
 					priceToY(kp.high), priceToY(kp.low));
