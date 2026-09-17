@@ -87,9 +87,9 @@ static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLef
 	}
 }
 
-// 交易台账 B/S 标记：正方形圆角小方标 + 细引线自柱子中心延伸出来。
-// 摆放方向跟随买卖语义（买入标在下方、卖出标在上方），避免同一天多笔方向相反时标记互相压住；
-// 传了 avoidTop/avoidBottom（当日K线高低点像素）时，方块绝不会与蜡烛实体重叠。
+// 交易台账 B/S 标记：正方形圆角小方标 + 细引线自影线端点向外延伸。
+// 买入接下影线（标在下方）、卖出接上影线（标在上方），标记再向外让开 gap，尽量远离K线不与之挤在一起。
+// 传了 avoidTop/avoidBottom（当日K线高低点像素）时，方块绝不会与蜡烛实体或影线重叠。
 static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int chartBottom,
 	int avoidTop = INT_MIN, int avoidBottom = INT_MIN)
 {
@@ -103,8 +103,8 @@ static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int
 	const int side = txtSize.cy + padY * 2;
 	const int boxW = side;
 	const int boxH = side;
-	// 引线再拉长：标记尽量远离K线，避免与蜡烛挤成一堆
-	const int gap = g_data.RDPI(22);
+	// 引线长度：y 已是影线端点，标记再让开这么远，保证与K线拉开明显距离
+	const int gap = g_data.RDPI(26);
 
 	const int minTop = chartTop + g_data.RDPI(2);
 	const int maxTop = (chartBottom - g_data.RDPI(1) - boxH) < minTop ? minTop : (chartBottom - g_data.RDPI(1) - boxH);
@@ -119,7 +119,7 @@ static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int
 			boxTop = flipped;
 	}
 
-	// 与蜡烛实体不重叠：重叠时优先推到与首选侧相反的一边（保证不与蜡烛交叠）
+	// 与蜡烛（含影线）不重叠：重叠时优先推到与首选侧相反的一边
 	if (avoidTop != INT_MIN && avoidBottom != INT_MIN)
 	{
 		if (boxTop < avoidBottom && boxTop + boxH > avoidTop)
@@ -144,7 +144,7 @@ static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int
 
 	const int boxLeft = x - boxW / 2;
 
-	// 引线：自方块朝向价格点的一侧中心，连到 (x, y)
+	// 引线：自方块朝向影线端点的一侧中心，连到 (x, y)（y 即影线端点）
 	{
 		CPen leadPen(PS_SOLID, 1, boxColor);
 		CPen* pOldPen = memDC.SelectObject(&leadPen);
@@ -1662,11 +1662,9 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 				int seq = sameDaySeq[tradeDay]++;
 				int centerX = static_cast<int>(ctx.chartWidth / static_cast<float>(totalPoints) * i)
 					+ static_cast<int>(barTotalWidth / 2) + (seq % 3 - 1) * g_data.RDPI(5);
-				// 引线锚点取柱子实体的中心（开盘收盘价中点），标记看起来是从这根柱子里延伸出来的
-				const double bodyMid = (kp.open > 0 && kp.close > 0) ? (kp.open + kp.close) / 2.0
-					: (kp.high + kp.low) / 2.0;
-				int anchorY = priceToY(bodyMid);
-				// 传入当日蜡烛高低点：标记不与K线实体重叠，买入落在下沿之外、卖出落在上沿之外
+				// 引线自影线端点伸出：买入接下影线低点、卖出接上影线高点，
+				// 标记再从这个端点继续向外让开，保证离K线足够远
+				int anchorY = rec.isSell ? priceToY(kp.high) : priceToY(kp.low);
 				DrawBsMarker(memDC, centerX, anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight,
 					priceToY(kp.high), priceToY(kp.low));
 				break;
