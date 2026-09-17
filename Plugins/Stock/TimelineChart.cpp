@@ -97,14 +97,14 @@ static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int
 	const COLORREF boxColor = isBuy ? kBsBuyColor : kBsSellColor;
 	CSize txtSize = memDC.GetTextExtent(txt);
 
-	// 正方形外框：边长取字形长短边中的较大者，再加等量内边距，
-	// 保证任何字形下都是正方形（原先按宽高分别加内边距会得到竖长条）
-	const int pad = g_data.RDPI(4);
-	const int side = max(txtSize.cx, txtSize.cy) + pad * 2;
+	// 外框尺寸沿用原字高（高度那个尺寸是对的），宽度补到与高度相等成为正方形。
+	// 注意别按长短边较大者算边长，那会把整个标记放大一圈
+	const int padY = g_data.RDPI(2);
+	const int side = txtSize.cy + padY * 2;
 	const int boxW = side;
 	const int boxH = side;
-	// 引线加长：标记与蜡烛拉开更明显的距离，指向关系靠引线表达
-	const int gap = g_data.RDPI(14);
+	// 引线再拉长：标记尽量远离K线，避免与蜡烛挤成一堆
+	const int gap = g_data.RDPI(22);
 
 	const int minTop = chartTop + g_data.RDPI(2);
 	const int maxTop = (chartBottom - g_data.RDPI(1) - boxH) < minTop ? minTop : (chartBottom - g_data.RDPI(1) - boxH);
