@@ -88,10 +88,12 @@ static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLef
 }
 
 // 交易台账 B/S 标记：正方形圆角小方标 + 细引线自影线端点向外延伸。
-// 买入接下影线（标在下方）、卖出接上影线（标在上方），标记再向外让开 gap，尽量远离K线不与之挤在一起。
-// 传了 avoidTop/avoidBottom（当日K线高低点像素）时，方块绝不会与蜡烛实体或影线重叠。
+// 买入接下影线（标在下方）、卖出接上影线（标在上方）。
+// 引线长度按当日蜡烛的像素高度等比缩放：缩放图表时蜡烛会变大，
+// 固定像素的间距在放大后显得贴脸，按比例走才能保持一致的视觉距离。
+// stackIndex 用于同一天多笔成交——改为纵向堆叠（而不是横向错位），保证标记始终对准柱子中心。
 static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int chartBottom,
-	int avoidTop = INT_MIN, int avoidBottom = INT_MIN)
+	int avoidTop = INT_MIN, int avoidBottom = INT_MIN, int stackIndex = 0)
 {
 	const CString txt = isBuy ? _T("B") : _T("S");
 	const COLORREF boxColor = isBuy ? kBsBuyColor : kBsSellColor;
@@ -103,8 +105,19 @@ static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int
 	const int side = txtSize.cy + padY * 2;
 	const int boxW = side;
 	const int boxH = side;
-	// 引线长度：y 已是影线端点，标记再让开这么远，保证与K线拉开明显距离
-	const int gap = g_data.RDPI(26);
+
+	// 间距：K线图以蜡烛（含影线）的像素高度为基准取 22%，图表缩小时蜡烛矮、间距自动收紧，
+	// 放大时蜡烛高、间距同步放大，视觉距离保持一致；分时图无蜡烛可参照，用固定值。
+	// 下限防止极小的蜡烛把标记贴上去
+	int gap = g_data.RDPI(26);
+	if (avoidTop != INT_MIN && avoidBottom != INT_MIN)
+	{
+		const int span = avoidBottom - avoidTop;   // 蜡烛含影线的像素高度
+		if (span > 0)
+			gap = max(g_data.RDPI(14), span * 22 / 100);
+	}
+	// 同日多笔纵向堆叠，避免标记互相压住（横向保持对准柱子中心）
+	gap += stackIndex * (boxH + g_data.RDPI(2));
 
 	const int minTop = chartTop + g_data.RDPI(2);
 	const int maxTop = (chartBottom - g_data.RDPI(1) - boxH) < minTop ? minTop : (chartBottom - g_data.RDPI(1) - boxH);
@@ -1643,11 +1656,11 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 		memDC.SelectObject(pOldBrush);
 	}
 
-	// 交易台账 B/S 标记：按成交日期匹配可见 bar，方块置于K线外侧、引线从柱子中心延伸出来
+	// 交易台账 B/S 标记：按成交日期匹配可见 bar，方块置于K线外侧、引线自影线端点延伸出来
 	if (!hover.stockId.empty())
 	{
 		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
-		std::map<std::string, int> sameDaySeq;   // 同一交易日的第几笔，用于横向错开避免标注重叠
+		std::map<std::string, int> sameDaySeq;   // 同一交易日的第几笔：纵向堆叠，避免标注重叠
 		for (const auto& rec : trades)
 		{
 			if (rec.time.size() < 10)
@@ -1660,13 +1673,14 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 					continue;
 
 				int seq = sameDaySeq[tradeDay]++;
+				// 横向严格对齐柱子中心（不再左右错位，否则标记会偏离蜡烛）
 				int centerX = static_cast<int>(ctx.chartWidth / static_cast<float>(totalPoints) * i)
-					+ static_cast<int>(barTotalWidth / 2) + (seq % 3 - 1) * g_data.RDPI(5);
+					+ static_cast<int>(barTotalWidth / 2);
 				// 引线自影线端点伸出：买入接下影线低点、卖出接上影线高点，
 				// 标记再从这个端点继续向外让开，保证离K线足够远
 				int anchorY = rec.isSell ? priceToY(kp.high) : priceToY(kp.low);
 				DrawBsMarker(memDC, centerX, anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight,
-					priceToY(kp.high), priceToY(kp.low));
+					priceToY(kp.high), priceToY(kp.low), seq);
 				break;
 			}
 		}
