@@ -5262,15 +5262,23 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
 
 	const CRect btnRect = CalcAboutUpdateBtnRect();
 	const int textX = cardRect.left + pad;
-	int textY = cardRect.top + g_data.DPI(ABOUT_CARD_PAD);
 
 	Gdiplus::Font nameFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(15)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+	Gdiplus::Font verFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+
+	// 左列两行（名称 + 版本行）在卡片内垂直居中：按字体实际行高算块高后再定位，
+	// 固定行距会让整块贴在顶部（卡片下半留白明显大于上半）
+	const int verRowY = g_data.DPI(6);   // 名称行与版本行之间的行距
+	const int nameRowH = static_cast<int>(nameFont.GetHeight(&g) + 0.5f);
+	const int verRowH = static_cast<int>(verFont.GetHeight(&g) + 0.5f);
+	const int leftBlockH = nameRowH + verRowY + verRowH;
+	int textY = cardRect.top + max(g_data.DPI(ABOUT_CARD_PAD), (cardRect.Height() - leftBlockH) / 2);
+
 	Gdiplus::SolidBrush nameBrush(Gdiplus::Color(255, 241, 245, 249));
 	const wchar_t* partName = L"TrafficMonitor 股票行情插件 (Stock Plugin)";
 	g.DrawString(partName, -1, &nameFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &nameBrush);
 
-	textY += g_data.DPI(26);
-	Gdiplus::Font verFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+	textY += nameRowH + verRowY;
 	Gdiplus::SolidBrush verBrush(Gdiplus::Color(255, 148, 163, 184));
 	Gdiplus::SolidBrush linkBrush(Gdiplus::Color(255, 56, 189, 248));
 
