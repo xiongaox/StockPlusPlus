@@ -54,19 +54,17 @@ namespace
 	const int kMaPresetDays[] = { 5, 10, 20, 30, 60, 120, 250 }; // 快捷添加候选周期
 
 	// ===== 关于页布局常量 =====
-	// 页面结构（自上而下）：固定信息卡（名称 + 版本作者行）→ 独立滚动的更新日志 → 底部固定区
-	// （更新状态文字 + 置底的「检查更新」按钮）。DrawAboutPage / MeasureAboutPageHeight /
-	// UpdateControlsLayout / CalcAboutUpdateBtnRect 全部引用这里，避免四处几何漂移。
-	const int ABOUT_CARD_H = 66;      // 顶部固定信息卡高（名称 22 + 版本行 28 + 上下留白）
+	// 页面结构：顶部固定信息卡（左＝名称 + 版本作者行，右＝更新状态文字 + 「检查更新」按钮的
+	// 上下结构）→ 下方独立滚动的更新日志。DrawAboutPage / MeasureAboutPageHeight /
+	// UpdateControlsLayout / CalcAboutUpdateBtnRect 全部引用这里，避免多处几何漂移。
+	const int ABOUT_CARD_H = 78;      // 信息卡高（须容纳右侧「状态 16 + 间隔 6 + 按钮 28」两行）
+	const int ABOUT_CARD_PAD = 14;    // 卡片上下内边距
 	const int ABOUT_GAP = 10;         // 信息卡与日志区之间的间距
-	const int ABOUT_LOG_PAD = 22;     // 日志区内容上/左/右内边距（与卡片内边距同源）
-	const int ABOUT_FOOTER_H = 72;    // 底部固定区高（状态文字行 16 + 间隔 6 + 按钮 28 + 下边距 18 + 上留白）
-	const int ABOUT_FOOTER_GAP = 10;  // 日志区与底部固定区之间的间距
-	const int ABOUT_STATUS_H = 16;    // 底部状态文字行高
+	const int ABOUT_LOG_PAD = 22;     // 日志区内容上/左/右内边距
+	const int ABOUT_STATUS_H = 16;    // 状态文字行高
 	const int ABOUT_STATUS_GAP = 6;   // 状态文字与按钮之间的间距
 	const int ABOUT_BTN_W = 108;      // 「检查更新」按钮宽
 	const int ABOUT_BTN_H = 28;       // 「检查更新」按钮高
-	const int ABOUT_BTN_BOTTOM = 18;  // 按钮距内容区底边
 }
 
 // ===== 云端备份异步操作 =====
@@ -2875,38 +2873,31 @@ void CManagerDialog::ApplyOpacity(int opacityPercent)
 	g_data.m_setting_data.m_window_opacity = pct;
 }
 
-// 关于页三段式几何（内容区坐标系）：顶部固定信息卡 / 中间独立滚动日志视口 / 底部固定操作区。
-// 绘制、量高与控件摆放全部走这里，三段高度改动只需动 ABOUT_* 常量。
-void CManagerDialog::GetAboutLayout(CRect& cardRect, CRect& logViewport, CRect& footerRect) const
+// 关于页几何（内容区坐标系）：顶部固定信息卡 + 其下独立滚动的日志视口。
+// 状态文字与「检查更新」按钮位于信息卡内右侧（上下结构），因此卡片高度必须容下这两行。
+// 绘制、量高与控件摆放全部走这里，高度改动只需动 ABOUT_* 常量。
+void CManagerDialog::GetAboutLayout(CRect& cardRect, CRect& logViewport) const
 {
 	CRect contentRect;
 	GetScrollContentRect(contentRect);
 
-	const int cardH = g_data.DPI(ABOUT_CARD_H);
-	const int cardGap = g_data.DPI(ABOUT_GAP);
-	const int footerGap = g_data.DPI(ABOUT_FOOTER_GAP);
-	const int footerH = g_data.DPI(ABOUT_FOOTER_H);
+	cardRect = CRect(contentRect.left, contentRect.top, contentRect.right, contentRect.top + g_data.DPI(ABOUT_CARD_H));
 
-	cardRect = CRect(contentRect.left, contentRect.top, contentRect.right, contentRect.top + cardH);
-
-	const int logTop = cardRect.bottom + cardGap;
-	// 底部区优先贴内容底；日志视口吃掉剩余高度。极端矮窗口下若剩余不足，
-	// 就把底部区上移（宁可压日志也不让两段重叠成一团）
-	const int footerTop = max(logTop + footerGap, contentRect.bottom - footerH);
-	logViewport = CRect(contentRect.left, logTop, contentRect.right, footerTop - footerGap);
-	footerRect = CRect(contentRect.left, footerTop, contentRect.right, max(footerTop, contentRect.bottom));
+	const int logTop = cardRect.bottom + g_data.DPI(ABOUT_GAP);
+	logViewport = CRect(contentRect.left, logTop, contentRect.right, max(logTop, contentRect.bottom));
 }
 
-// 关于页底部「检查更新」按钮矩形：贴在底部固定区内靠右，状态文字与它共用同一右缘
+// 关于页「检查更新」按钮矩形：位于信息卡内右侧，状态文字紧贴其上方，两者共用同一右缘
 CRect CManagerDialog::CalcAboutUpdateBtnRect() const
 {
-	CRect cardRect, logViewport, footerRect;
-	GetAboutLayout(cardRect, logViewport, footerRect);
+	CRect cardRect, logViewport;
+	GetAboutLayout(cardRect, logViewport);
 
 	const int w = g_data.DPI(ABOUT_BTN_W);
 	const int h = g_data.DPI(ABOUT_BTN_H);
-	const int right = footerRect.right - g_data.DPI(ABOUT_LOG_PAD);
-	const int top = footerRect.bottom - g_data.DPI(ABOUT_BTN_BOTTOM) - h;
+	const int right = cardRect.right - g_data.DPI(ABOUT_LOG_PAD);
+	// 按钮贴卡片下边距，状态文字排在其上方：两行整体在卡片内垂直居中
+	const int top = cardRect.bottom - g_data.DPI(ABOUT_CARD_PAD) - h;
 	return CRect(right - w, top, right, top + h);
 }
 
@@ -5068,8 +5059,8 @@ namespace
 		L"•  【修复】 修复连续切换股票时新股票 K 线加载缓慢：后台焦点任务在切换后立即退出，不再让新股票排队等待旧任务跑完",
 		L"•  【修复】 分时缓存交易日改用数据自身日期，修正凌晨拉取把上一交易日数据重复写进今天的问题",
 		L"•  【优化】 分时图去掉基金净值紫线；鼠标悬停卡片新增「均价」与「偏离」行（价格相对当日均价线的百分比）",
-		L"•  【新增】 关于页新增「检查更新」按钮：后台查询 GitHub 最新 Release，发现新版本时按钮上方提示可直接点击前往下载",
-		L"•  【优化】 关于页改为三段式布局：顶部插件信息卡与底部操作区固定不动，中间更新日志独立滚动，日志再多也不挤占信息与按钮"
+		L"•  【新增】 关于页新增「检查更新」按钮：位于插件信息卡右侧，后台查询 GitHub 最新 Release，发现新版本时按钮上方提示可直接点击前往下载",
+		L"•  【优化】 关于页改为固定信息卡 + 独立滚动日志两段式：插件信息与「检查更新」按钮始终可见，更新日志再多也不挤占它们"
 	};
 	const wchar_t* kItems_0916_v208[] = {
 		L"•  【优化】 关于页更新日志抽取统一排版/量高函数，页面滚动高度按日志实际内容自然高度计算，日志条目变多后不再被页面底部截断",
@@ -5205,8 +5196,8 @@ int CManagerDialog::LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, i
 // 滚到底时最后一行会被视口下缘裁掉上边距那么多（LayoutAboutLog 末尾的 24px 则充当底部留白）
 int CManagerDialog::MeasureAboutPageHeight()
 {
-	CRect cardRect, logViewport, footerRect;
-	GetAboutLayout(cardRect, logViewport, footerRect);
+	CRect cardRect, logViewport;
+	GetAboutLayout(cardRect, logViewport);
 
 	const int textX = logViewport.left + g_data.DPI(ABOUT_LOG_PAD);
 	const int rightX = logViewport.right - g_data.DPI(ABOUT_LOG_PAD);
@@ -5218,14 +5209,14 @@ int CManagerDialog::MeasureAboutPageHeight()
 	return g_data.DPI(ABOUT_LOG_PAD) + max(0, LayoutAboutLog(g, false, textX, rightX, 0));
 }
 
-// 当前页滚动可视区高度：关于页只有日志区滚动（顶部信息卡与底部操作区固定），
+// 当前页滚动可视区高度：关于页只有日志区滚动（顶部信息卡固定），
 // 其余页为整个内容区。maxScroll 必须按这个高度算，否则关于页滚动行程会偏大
 int CManagerDialog::ScrollViewportHeight() const
 {
 	if (m_current_page == PAGE_ABOUT)
 	{
-		CRect cardRect, logViewport, footerRect;
-		GetAboutLayout(cardRect, logViewport, footerRect);
+		CRect cardRect, logViewport;
+		GetAboutLayout(cardRect, logViewport);
 		return logViewport.Height();
 	}
 
@@ -5236,25 +5227,27 @@ int CManagerDialog::ScrollViewportHeight() const
 
 void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
 {
-	CRect cardRect, logViewport, footerRect;
-	GetAboutLayout(cardRect, logViewport, footerRect);
+	CRect cardRect, logViewport;
+	GetAboutLayout(cardRect, logViewport);
 
 	const int pad = g_data.DPI(ABOUT_LOG_PAD);
 	Gdiplus::SolidBrush panelBg(Gdiplus::Color(255, 24, 27, 34));
 	Gdiplus::Pen panelPen(Gdiplus::Color(255, 38, 42, 54), 1.0f);
 
-	// ===== ① 顶部固定信息卡：名称 + 版本/作者/仓库行 =====
+	// ===== 信息卡：左侧名称/版本行，右侧更新状态 + 「检查更新」按钮（上下结构） =====
 	Gdiplus::RectF cardRf(static_cast<Gdiplus::REAL>(cardRect.left), static_cast<Gdiplus::REAL>(cardRect.top),
 		static_cast<Gdiplus::REAL>(cardRect.Width()), static_cast<Gdiplus::REAL>(cardRect.Height()));
 	g.FillRectangle(&panelBg, cardRf);
 	g.DrawRectangle(&panelPen, cardRf);
 
+	const CRect btnRect = CalcAboutUpdateBtnRect();
 	const int textX = cardRect.left + pad;
-	int textY = cardRect.top + g_data.DPI(16);
+	int textY = cardRect.top + g_data.DPI(ABOUT_CARD_PAD);
 
 	Gdiplus::Font nameFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(15)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
 	Gdiplus::SolidBrush nameBrush(Gdiplus::Color(255, 241, 245, 249));
-	g.DrawString(L"TrafficMonitor 股票行情插件 (Stock Plugin)", -1, &nameFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &nameBrush);
+	const wchar_t* partName = L"TrafficMonitor 股票行情插件 (Stock Plugin)";
+	g.DrawString(partName, -1, &nameFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &nameBrush);
 
 	textY += g_data.DPI(26);
 	Gdiplus::Font verFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
@@ -5264,6 +5257,10 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
 	Gdiplus::StringFormat strFmt(Gdiplus::StringFormat::GenericTypographic());
 	Gdiplus::PointF curPt(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY));
 	Gdiplus::RectF boundRect;
+
+	// 名称行右缘（状态文字与它同高，是左侧最宽的一行）
+	g.MeasureString(partName, -1, &nameFont, Gdiplus::PointF(0.0f, 0.0f), &strFmt, &boundRect);
+	int leftColRight = textX + static_cast<int>(boundRect.Width + 0.5f);
 
 	// 1. "版本：v" STOCK_VERSION_STR "   |   作者："
 	const wchar_t* partVer = L"版本：v" STOCK_VERSION_STR L"   |   作者：";
@@ -5291,8 +5288,41 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
 	g.MeasureString(partRepo, -1, &verFont, curPt, &strFmt, &boundRect);
 	m_about_repo_rect = CRect(static_cast<int>(curPt.X), textY - g_data.DPI(2),
 		static_cast<int>(curPt.X + boundRect.Width), textY + g_data.DPI(18));
+	leftColRight = max(leftColRight, static_cast<int>(curPt.X + boundRect.Width + 0.5f));
 
-	// ===== ② 中间更新日志：唯一滚动区（视口裁剪 + 负向滚动偏移） =====
+	// 更新状态文字：贴在按钮正上方，右缘与按钮对齐（构成「状态在上、按钮在下」）
+	// 可用宽度受左侧名称/版本行限制；不够时按省略号截断而不是整条不画，
+	// 保证「发现新版本…」这类关键前缀在任何窗口宽度下都看得见
+	m_about_update_rect.SetRectEmpty();
+	if (!m_update_status_text.empty())
+	{
+		const bool clickable = !m_update_download_url.empty();
+		Gdiplus::Font stFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+		Gdiplus::SolidBrush stBrush(clickable ? Gdiplus::Color(255, 56, 189, 248)          // 品牌蓝：可点击下载
+			: (m_update_failed ? Gdiplus::Color(255, 245, 158, 11)                         // 暖黄：查询失败
+				: Gdiplus::Color(255, 148, 163, 184)));
+
+		const int stRight = btnRect.right;
+		const int stTop = btnRect.top - g_data.DPI(ABOUT_STATUS_GAP) - g_data.DPI(ABOUT_STATUS_H);
+		const int availW = stRight - (leftColRight + g_data.DPI(12));
+		if (availW > g_data.DPI(30))
+		{
+			Gdiplus::StringFormat stFmt(Gdiplus::StringFormat::GenericTypographic());
+			stFmt.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+			stFmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+			Gdiplus::RectF stRf(static_cast<Gdiplus::REAL>(stRight - availW), static_cast<Gdiplus::REAL>(stTop),
+				static_cast<Gdiplus::REAL>(availW), static_cast<Gdiplus::REAL>(g_data.DPI(ABOUT_STATUS_H)));
+			g.DrawString(m_update_status_text.c_str(), -1, &stFont, stRf, &stFmt, &stBrush);
+
+			if (clickable)
+			{
+				m_about_update_rect = CRect(stRight - availW, stTop - g_data.DPI(2),
+					stRight, stTop + g_data.DPI(ABOUT_STATUS_H));
+			}
+		}
+	}
+
+	// ===== 更新日志：唯一滚动区（视口裁剪 + 负向滚动偏移） =====
 	{
 		// 日志底色与外框跟随视口，滚动时边框保持不动
 		Gdiplus::RectF logRf(static_cast<Gdiplus::REAL>(logViewport.left), static_cast<Gdiplus::REAL>(logViewport.top),
@@ -5305,41 +5335,6 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
 			static_cast<Gdiplus::REAL>(logViewport.Width()), static_cast<Gdiplus::REAL>(logViewport.Height())));
 		LayoutAboutLog(g, true, logViewport.left + pad, logViewport.right - pad, logViewport.top + pad - m_page_scroll_y);
 		g.Restore(st);
-	}
-
-	// ===== ③ 底部固定操作区：状态文字在上、按钮在下（按钮由原生控件摆放） =====
-	// 与顶部卡片同底色，使其看起来是同一个面板的一部分；两者右缘对齐同一竖线，
-	// 状态文字在上、按钮在下形成上下结构
-	Gdiplus::RectF footRf(static_cast<Gdiplus::REAL>(footerRect.left), static_cast<Gdiplus::REAL>(footerRect.top),
-		static_cast<Gdiplus::REAL>(footerRect.Width()), static_cast<Gdiplus::REAL>(footerRect.Height()));
-	g.FillRectangle(&panelBg, footRf);
-	g.DrawRectangle(&panelPen, footRf);
-
-	m_about_update_rect.SetRectEmpty();
-	if (!m_update_status_text.empty())
-	{
-		const bool clickable = !m_update_download_url.empty();
-		Gdiplus::Font stFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-		Gdiplus::SolidBrush stBrush(clickable ? Gdiplus::Color(255, 56, 189, 248)          // 品牌蓝：可点击下载
-			: (m_update_failed ? Gdiplus::Color(255, 245, 158, 11)                         // 暖黄：查询失败
-				: Gdiplus::Color(255, 148, 163, 184)));
-
-		const CRect btnRect = CalcAboutUpdateBtnRect();
-		Gdiplus::PointF stPt(0.0f, 0.0f);
-		Gdiplus::RectF stBound;
-		g.MeasureString(m_update_status_text.c_str(), -1, &stFont, stPt, &strFmt, &stBound);
-
-		const int stRight = btnRect.right;
-		const int stLeft = stRight - static_cast<int>(stBound.Width + 0.5f);
-		const int stTop = btnRect.top - g_data.DPI(ABOUT_STATUS_GAP) - g_data.DPI(ABOUT_STATUS_H);
-		g.DrawString(m_update_status_text.c_str(), -1, &stFont,
-			Gdiplus::PointF(static_cast<Gdiplus::REAL>(stLeft), static_cast<Gdiplus::REAL>(stTop)), &strFmt, &stBrush);
-
-		if (clickable)
-		{
-			m_about_update_rect = CRect(stLeft - g_data.DPI(4), stTop - g_data.DPI(2),
-				stRight, stTop + g_data.DPI(ABOUT_STATUS_H));
-		}
 	}
 }
 
@@ -6115,12 +6110,12 @@ BOOL CManagerDialog::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
 		CRect contentRect;
 		GetScrollContentRect(contentRect);
 		// 关于页只有更新日志区滚动：视口与命中判定都收窄到日志视口，
-		// 顶部信息卡与底部操作区（含「检查更新」按钮）上滚轮不滚动页面
+		// 顶部信息卡（含「检查更新」按钮）上滚轮不滚动页面
 		CRect scrollArea = contentRect;
 		if (m_current_page == PAGE_ABOUT)
 		{
-			CRect cardRect, logViewport, footerRect;
-			GetAboutLayout(cardRect, logViewport, footerRect);
+			CRect cardRect, logViewport;
+			GetAboutLayout(cardRect, logViewport);
 			scrollArea = logViewport;
 		}
 		const int maxScroll = CalcPageContentHeight() - ScrollViewportHeight();

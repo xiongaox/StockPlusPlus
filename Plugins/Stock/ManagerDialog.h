@@ -274,10 +274,9 @@ private:
 	int MeasureAboutPageHeight();                       // 关于页日志区自然高度（与绘制排布一致）
 	int LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, int rightX, int startY); // 日志区排版并返回结束 Y（draw=false 只量高）
 	int ContentBottomPad() const;                        // 内容区底部留白（内嵌无按钮条时收窄，分组页仍留操作按钮行）
-	// 关于页三段式几何（顶部固定信息卡 / 独立滚动日志区 / 底部固定操作区），
-	// 绘制、量高与控件摆放共用，改动只需改这一处
-	void GetAboutLayout(CRect& cardRect, CRect& logViewport, CRect& footerRect) const;
-	CRect CalcAboutUpdateBtnRect() const; // 关于页底部「检查更新」按钮矩形（按钮与状态文字共用的右对齐基准）
+	// 关于页两段式几何（顶部固定信息卡 / 其下独立滚动日志区），绘制、量高与控件摆放共用
+	void GetAboutLayout(CRect& cardRect, CRect& logViewport) const;
+	CRect CalcAboutUpdateBtnRect() const; // 信息卡内右侧「检查更新」按钮矩形（状态文字与它共用右缘）
 	void ApplyIfEmbedded();                              // 内嵌模式即时提交设置（模态模式等「确定」）
 	void ApplyOpacity(int opacityPercent);               // 实时应用并推送背景透明度到宿主与当前窗口
 
