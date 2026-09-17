@@ -71,7 +71,9 @@ namespace
 	const UINT WM_APP_WEBDAV_RESULT = WM_APP + 130;
 	const UINT WM_APP_API_PROBE_FINISHED = WM_APP + 131;
 	const UINT WM_APP_SEARCH_RESULT_READY = WM_APP + 132;
+	const UINT WM_APP_UPDATE_CHECK_FINISHED = WM_APP + 133;
 	const UINT IDC_API_TEST_BTN = 1197;
+	const UINT IDC_ABOUT_UPDATE_BTN = 1200;   // 1198/1199 已被分组排序/删除分组占用
 
 	// 分组管理三个列表的「阈值提醒」列索引（7 列布局：交易所/代码/名称/阈值提醒/...）
 	const int ALERT_PERCENT_COLUMN = 3;
@@ -1985,8 +1987,10 @@ BEGIN_MESSAGE_MAP(CManagerDialog, CDialog)
 	ON_BN_CLICKED(IDC_WEBDAV_AUTO_BACKUP_CHECK, &CManagerDialog::OnBnClickedWebDavAutoBackupCheck)
 	ON_MESSAGE(WM_APP_WEBDAV_RESULT, &CManagerDialog::OnWebDavResult)
 	ON_BN_CLICKED(IDC_API_TEST_BTN, &CManagerDialog::OnBnClickedApiTestBtn)
+	ON_BN_CLICKED(IDC_ABOUT_UPDATE_BTN, &CManagerDialog::OnBnClickedUpdateCheckBtn)
 	ON_MESSAGE(WM_APP_API_PROBE_FINISHED, &CManagerDialog::OnApiProbeFinished)
 	ON_MESSAGE(WM_APP_SEARCH_RESULT_READY, &CManagerDialog::OnSearchResultReady)
+	ON_MESSAGE(WM_APP_UPDATE_CHECK_FINISHED, &CManagerDialog::OnUpdateCheckFinished)
 
 	// 列表行自绘（交替行底色/选中高亮）
 	ON_NOTIFY(NM_CUSTOMDRAW, IDC_MGR_LIST, &CManagerDialog::OnListCustomDraw)
@@ -2120,7 +2124,7 @@ BOOL CManagerDialog::OnInitDialog()
 		IDC_MGR_ADD_BTN, IDC_MGR_EDIT_BTN, IDC_MGR_DEL_BTN, IDC_MGR_MOVE_UP_BTN, IDC_MGR_MOVE_DOWN_BTN,
 		IDC_MA_ADD_BTN,
 		IDC_WEBDAV_TEST_BTN, IDC_WEBDAV_UPLOAD_BTN, IDC_WEBDAV_DOWNLOAD_BTN,
-		1197, 1198, 1199
+		1197, 1198, 1199, IDC_ABOUT_UPDATE_BTN
 	};
 	for (int id : ownerDrawBtnIds)
 	{
@@ -2149,6 +2153,10 @@ BOOL CManagerDialog::OnInitDialog()
 	// 接口检测页右上角「立即重新检测」入口
 	m_api_test_btn.Create(_T("立即重新检测"), WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, 1197);
 	m_api_test_btn.SetFont(&m_font);
+
+	// 关于页右上角「检查更新」入口
+	m_about_update_btn.Create(_T("检查更新"), WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_ABOUT_UPDATE_BTN);
+	m_about_update_btn.SetFont(&m_font);
 
 	m_search_dropdown.CreatePopup(this);
 
@@ -2423,7 +2431,8 @@ void CManagerDialog::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 		// ===== 普通按钮：与浮动窗一致的扁平暗色样式（直角 + 细边框 + 悬停/按下反馈） =====
 		bool pressedState = (lpDrawItemStruct->itemState & ODS_SELECTED) != 0;
 		bool hot = (lpDrawItemStruct->itemState & ODS_HOTLIGHT) != 0;
-			DrawFlatButton(dc, r, text, IsPrimaryBtn(nID), IsDestructiveBtn(nID), hot, pressedState);
+		bool disabled = (lpDrawItemStruct->itemState & ODS_DISABLED) != 0;
+		DrawFlatButton(dc, r, text, IsPrimaryBtn(nID), IsDestructiveBtn(nID), hot, pressedState, disabled);
 
 		dc.Detach();
 		return;
@@ -2853,6 +2862,15 @@ void CManagerDialog::ApplyOpacity(int opacityPercent)
 	g_data.m_setting_data.m_window_opacity = pct;
 }
 
+// 关于页右上角「检查更新」按钮的客户区矩形：按钮摆放与页头状态文字右对齐共用同一几何，避免两处漂移
+CRect CManagerDialog::CalcAboutUpdateBtnRect(const CRect& clientRect) const
+{
+	int w = g_data.DPI(108);
+	int top = m_as_child ? g_data.DPI(26) : g_data.DPI(14);
+	int right = clientRect.Width() - g_data.DPI(18);
+	return CRect(right - w, top, right, top + g_data.DPI(28));
+}
+
 void CManagerDialog::UpdateControlsLayout()
 {
 	CRect clientRect;
@@ -3140,6 +3158,14 @@ void CManagerDialog::UpdateControlsLayout()
 		int testTop = m_as_child ? g_data.DPI(26) : g_data.DPI(14);
 		m_api_test_btn.MoveWindow(rightLeft + rightWidth - testW, testTop, testW, g_data.DPI(28));
 		m_api_test_btn.ShowWindow(isApiHealth ? SW_SHOW : SW_HIDE);
+	}
+
+	// 「检查更新」按钮：关于页头部右上角（与接口检测页按钮同一位置与尺寸），其他页面隐藏
+	bool isAbout = (m_current_page == PAGE_ABOUT);
+	if (m_about_update_btn.GetSafeHwnd())
+	{
+		m_about_update_btn.MoveWindow(CalcAboutUpdateBtnRect(clientRect));
+		m_about_update_btn.ShowWindow(isAbout ? SW_SHOW : SW_HIDE);
 	}
 
 	// 方案B：隐藏式滚动 —— 原生控件随内容平移后，滚出内容可视区的自动隐藏
@@ -3490,6 +3516,40 @@ void CManagerDialog::DrawHeader(Gdiplus::Graphics& g, const CRect& clientRect)
 	}
 
 	g.DrawString(subText.c_str(), -1, &subFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(rightLeft + g_data.DPI(10)), static_cast<Gdiplus::REAL>(headerTop + g_data.DPI(24))), &subBrush);
+
+	// 关于页：更新检查结果右对齐在副标题同一行，紧邻右上角按钮（未检查时不占位、不显示）
+	// 状态文字与按钮共用 CalcAboutUpdateBtnRect 的几何，窗口变窄也不会压到副标题上
+	m_about_update_rect.SetRectEmpty();
+	if (m_current_page == PAGE_ABOUT && !m_update_status_text.empty())
+	{
+		const bool clickable = !m_update_download_url.empty();
+		Gdiplus::StringFormat stFmt(Gdiplus::StringFormat::GenericTypographic());
+		Gdiplus::PointF stPt(0.0f, static_cast<Gdiplus::REAL>(headerTop + g_data.DPI(24)));
+		Gdiplus::RectF stBound;
+		g.MeasureString(m_update_status_text.c_str(), -1, &subFont, stPt, &stFmt, &stBound);
+
+		// 先量副标题右缘：窗口收窄到两者会撞上时，整条状态文字让位（按钮仍在，不影响检查更新）
+		Gdiplus::RectF subBound;
+		g.MeasureString(subText.c_str(), -1, &subFont, Gdiplus::PointF(0.0f, static_cast<Gdiplus::REAL>(headerTop + g_data.DPI(24))), &stFmt, &subBound);
+		const int subRight = rightLeft + g_data.DPI(10) + static_cast<int>(subBound.Width + 0.5f);
+
+		int stRight = CalcAboutUpdateBtnRect(clientRect).left - g_data.DPI(12);
+		int stLeft = stRight - static_cast<int>(stBound.Width + 0.5f);
+		if (stLeft >= subRight + g_data.DPI(12))
+		{
+			Gdiplus::SolidBrush stBrush(clickable ? Gdiplus::Color(255, 56, 189, 248)          // 品牌蓝：可点击下载
+				: (m_update_failed ? Gdiplus::Color(255, 245, 158, 11)                         // 暖黄：查询失败
+					: Gdiplus::Color(255, 148, 163, 184)));
+			g.DrawString(m_update_status_text.c_str(), -1, &subFont,
+				Gdiplus::PointF(static_cast<Gdiplus::REAL>(stLeft), static_cast<Gdiplus::REAL>(headerTop + g_data.DPI(24))), &stFmt, &stBrush);
+
+			if (clickable)
+			{
+				m_about_update_rect = CRect(stLeft - g_data.DPI(4), headerTop + g_data.DPI(22),
+					stRight, headerTop + g_data.DPI(40));
+			}
+		}
+	}
 
 	Gdiplus::Pen divPen(Gdiplus::Color(255, 38, 42, 54), 1.0f);
 	g.DrawLine(&divPen, rightLeft, g_data.DPI(56), clientRect.Width() - g_data.DPI(18), g_data.DPI(56));
@@ -4844,6 +4904,140 @@ LRESULT CManagerDialog::OnApiProbeFinished(WPARAM, LPARAM)
 
 namespace
 {
+	// 版本号比较：把 "2.0.10" 拆成数字段逐一比较，避免字符串比较把 2.0.9 > 2.0.10 判错
+	// 返回 true 表示 a 比 b 新
+	bool IsVersionNewer(const std::wstring& a, const std::wstring& b)
+	{
+		auto parse = [](const std::wstring& v, std::vector<int>& out) {
+			out.clear();
+			std::wstring cur;
+			for (wchar_t c : v)
+			{
+				if (c >= L'0' && c <= L'9')
+					cur.push_back(c);
+				else if (c == L'.')
+				{
+					out.push_back(cur.empty() ? 0 : _wtoi(cur.c_str()));
+					cur.clear();
+				}
+				else
+					break;   // 遇到 v 前缀或后缀（如 "v2.0.10"）停止
+			}
+			if (!cur.empty())
+				out.push_back(_wtoi(cur.c_str()));
+		};
+		std::vector<int> va, vb;
+		parse(a, va);
+		parse(b, vb);
+		const size_t n = max(va.size(), vb.size());
+		for (size_t i = 0; i < n; ++i)
+		{
+			const int x = (i < va.size()) ? va[i] : 0;
+			const int y = (i < vb.size()) ? vb[i] : 0;
+			if (x != y)
+				return x > y;
+		}
+		return false;
+	}
+
+	// 从 GitHub releases/latest 的 JSON 里取 tag_name 与 html_url
+	void ParseLatestReleaseJson(const std::string& json, std::wstring& tag, std::wstring& url)
+	{
+		auto extract = [&json](const char* key) -> std::string {
+			const std::string pat = std::string("\"") + key + "\"";
+			size_t k = json.find(pat);
+			if (k == std::string::npos) return std::string();
+			size_t colon = json.find(':', k + pat.size());
+			if (colon == std::string::npos) return std::string();
+			size_t q1 = json.find('"', colon + 1);
+			if (q1 == std::string::npos) return std::string();
+			size_t q2 = json.find('"', q1 + 1);
+			if (q2 == std::string::npos) return std::string();
+			return json.substr(q1 + 1, q2 - q1 - 1);
+		};
+		tag = CCommon::StrToUnicode(extract("tag_name").c_str(), true);
+		url = CCommon::StrToUnicode(extract("html_url").c_str(), true);
+	}
+}
+
+void CManagerDialog::OnBnClickedUpdateCheckBtn()
+{
+	if (m_update_checking)
+		return;
+
+	m_update_checking = true;
+	m_update_status_text.clear();
+	if (m_about_update_btn.GetSafeHwnd())
+	{
+		m_about_update_btn.SetWindowText(L"检查中…");
+		m_about_update_btn.EnableWindow(FALSE);
+	}
+
+	HWND hWnd = m_hWnd;
+	std::thread([hWnd]() {
+		AFX_MANAGE_STATE(AfxGetStaticModuleState());
+		std::string resp;
+		std::wstring tag, url;
+		const bool ok = CCommon::GetURL(
+			L"https://api.github.com/repos/xiongaox/StockPlusPlus/releases/latest",
+			resp, true, L"StockPlusPlus-Plugin", nullptr, 0);
+		if (ok && !resp.empty())
+			ParseLatestReleaseJson(resp, tag, url);
+
+		if (::IsWindow(hWnd))
+		{
+			// 结果通过 PostMessage 回主线程；字符串用 new 传递，接收方负责 delete
+			auto* payload = new std::pair<std::wstring, std::wstring>(tag, url);
+			if (!::PostMessage(hWnd, WM_APP_UPDATE_CHECK_FINISHED, ok ? 1 : 0, reinterpret_cast<LPARAM>(payload)))
+				delete payload;   // 对话框已关闭或消息队列失效，结果无人接收
+		}
+	}).detach();
+}
+
+LRESULT CManagerDialog::OnUpdateCheckFinished(WPARAM wParam, LPARAM lParam)
+{
+	std::unique_ptr<std::pair<std::wstring, std::wstring>> payload(
+		reinterpret_cast<std::pair<std::wstring, std::wstring>*>(lParam));
+
+	m_update_checking = false;
+	if (m_about_update_btn.GetSafeHwnd())
+	{
+		m_about_update_btn.SetWindowText(L"检查更新");
+		m_about_update_btn.EnableWindow(TRUE);
+	}
+
+	const bool ok = (wParam != 0) && payload && !payload->first.empty();
+	m_update_failed = !ok;
+	if (!ok)
+	{
+		m_update_status_text = L"检查失败，请检查网络后重试";
+		m_update_latest_version.clear();
+		m_update_download_url.clear();
+	}
+	else
+	{
+		std::wstring tag = payload->first;
+		// 去掉可能的 "v" 前缀，便于与 STOCK_VERSION_STR 比较
+		if (!tag.empty() && (tag[0] == L'v' || tag[0] == L'V'))
+			tag = tag.substr(1);
+		m_update_latest_version = tag;
+		m_update_download_url = payload->second;
+		if (IsVersionNewer(tag, STOCK_VERSION_STR))
+		{
+			m_update_status_text = L"发现新版本 v" + tag + L"，点击前往下载";
+		}
+		else
+		{
+			m_update_status_text = L"已是最新版本";
+			m_update_download_url.clear();
+		}
+	}
+	Invalidate(FALSE);
+	return 0;
+}
+
+namespace
+{
 	// 关于页更新日志：按版本分组，文案与 README 变更记录同源
 	struct AboutLogGroup {
 		const wchar_t* date;
@@ -4858,7 +5052,8 @@ namespace
 		L"•  【优化】 成交录入弹窗排版重做：方角控件、标签左对齐、日期时间并排、删除按钮独立靠左，标题交易所前缀大写",
 		L"•  【修复】 修复连续切换股票时新股票 K 线加载缓慢：后台焦点任务在切换后立即退出，不再让新股票排队等待旧任务跑完",
 		L"•  【修复】 分时缓存交易日改用数据自身日期，修正凌晨拉取把上一交易日数据重复写进今天的问题",
-		L"•  【优化】 分时图去掉基金净值紫线；鼠标悬停卡片新增「均价」与「偏离」行（价格相对当日均价线的百分比）"
+		L"•  【优化】 分时图去掉基金净值紫线；鼠标悬停卡片新增「均价」与「偏离」行（价格相对当日均价线的百分比）",
+		L"•  【新增】 关于页新增「检查更新」按钮：后台查询 GitHub 最新 Release，发现新版本时页头提示可直接点击前往下载"
 	};
 	const wchar_t* kItems_0916_v208[] = {
 		L"•  【优化】 关于页更新日志抽取统一排版/量高函数，页面滚动高度按日志实际内容自然高度计算，日志条目变多后不再被页面底部截断",
@@ -5303,6 +5498,8 @@ BOOL CManagerDialog::OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message)
 		m_hover_group_tab >= 0 || m_hover_index_mode >= 0 || m_hover_display_area >= 0 ||
 		m_hover_opacity_preset >= 0 || m_hover_opacity_slider || m_is_dragging_opacity ||
 		m_hover_reset_btn ||
+		// 页头「发现新版本」状态文字（在滚动态之上，不受内容滚动影响）
+		(m_current_page == PAGE_ABOUT && m_about_update_rect.PtInRect(pt)) ||
 		(m_current_page == PAGE_ABOUT && InScrollContent(pt) &&
 			(m_about_author_rect.PtInRect(pt) || m_about_repo_rect.PtInRect(pt))))
 	{
@@ -5606,6 +5803,13 @@ void CManagerDialog::OnLButtonDown(UINT nFlags, CPoint point)
 				return;
 			}
 		}
+	}
+
+	// 页头「发现新版本」状态文字：点击跳转下载页（矩形仅在可点击时非空）
+	if (m_current_page == PAGE_ABOUT && !m_update_download_url.empty() && m_about_update_rect.PtInRect(point))
+	{
+		ShellExecute(nullptr, L"open", m_update_download_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+		return;
 	}
 
 	if (m_current_page == PAGE_ABOUT && InScrollContent(point))
@@ -7944,7 +8148,7 @@ bool CManagerDialog::IsDestructiveBtn(UINT nID) const
 }
 
 // 与浮动窗按钮同款：直角 + 1px 细边框 + 悬停/按下反馈；主操作品牌蓝，删除操作警示红
-void CManagerDialog::DrawFlatButton(CDC& dc, const CRect& r, const CString& text, bool primary, bool destructive, bool hot, bool pressed)
+void CManagerDialog::DrawFlatButton(CDC& dc, const CRect& r, const CString& text, bool primary, bool destructive, bool hot, bool pressed, bool disabled)
 {
 	COLORREF bgCol, borderCol, textCol;
 	if (primary)
@@ -7980,6 +8184,14 @@ void CManagerDialog::DrawFlatButton(CDC& dc, const CRect& r, const CString& text
 	if (pressed)
 	{
 		bgCol = RGB(max(0, GetRValue(bgCol) - 20), max(0, GetGValue(bgCol) - 20), max(0, GetBValue(bgCol) - 20));
+	}
+
+	// 禁用态（如「检查更新」查询进行中）：压暗底色与文字，且不响应悬停高亮
+	if (disabled)
+	{
+		bgCol = RGB(20, 22, 28);
+		borderCol = RGB(38, 42, 52);
+		textCol = RGB(100, 110, 125);
 	}
 
 	dc.FillSolidRect(r, bgCol);

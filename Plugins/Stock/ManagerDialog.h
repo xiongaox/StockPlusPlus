@@ -250,6 +250,15 @@ private:
 	CRect m_about_author_rect; // 关于页作者主页超链接区域
 	CRect m_about_repo_rect;   // 关于页项目仓库超链接区域
 
+	// 关于页「检查更新」按钮：查询在后台线程执行，完成后 PostMessage 回主线程刷新状态
+	CButton m_about_update_btn;
+	bool m_update_checking{ false };            // 查询中（按钮置灰显示「检查中…」）
+	bool m_update_failed{ false };              // 上次查询失败（状态文字用告警色提示）
+	std::wstring m_update_latest_version;       // 查到的最新版本号（如 "2.0.10"），空=未查到
+	std::wstring m_update_download_url;         // 新版本下载页地址
+	std::wstring m_update_status_text;          // 状态提示（已是最新/发现新版本/查询失败）
+	CRect m_about_update_rect;                  // 状态文字点击区（仅「发现新版本」时有效）
+
 	// 内部辅助方法
 	std::wstring GetStockName(const std::wstring& code);
 	// 「阈值提醒」列文本：形如 "+5% | -5%"，未设置的展示 "--"
@@ -264,6 +273,7 @@ private:
 	int MeasureAboutPageHeight();                       // 关于页日志区自然高度（与绘制排布一致）
 	int LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, int rightX, int startY); // 日志区排版并返回结束 Y（draw=false 只量高）
 	int ContentBottomPad() const;                        // 内容区底部留白（内嵌无按钮条时收窄，分组页仍留操作按钮行）
+	CRect CalcAboutUpdateBtnRect(const CRect& clientRect) const; // 关于页右上角「检查更新」按钮矩形（布局与页头状态文字共用）
 	void ApplyIfEmbedded();                              // 内嵌模式即时提交设置（模态模式等「确定」）
 	void ApplyOpacity(int opacityPercent);               // 实时应用并推送背景透明度到宿主与当前窗口
 
@@ -273,7 +283,7 @@ private:
 	bool IsCheckCtrl(UINT nID) const;
 	bool IsPrimaryBtn(UINT nID) const;
 	bool IsDestructiveBtn(UINT nID) const;
-	void DrawFlatButton(CDC& dc, const CRect& rect, const CString& text, bool primary, bool destructive, bool hot, bool pressed);
+	void DrawFlatButton(CDC& dc, const CRect& rect, const CString& text, bool primary, bool destructive, bool hot, bool pressed, bool disabled = false);
 	void DrawControlBorder(Gdiplus::Graphics& g, UINT nID);
 	void DrawSectionTitle(Gdiplus::Graphics& g, int x, int y, const std::wstring& title);
 	// 单行 EDIT 不支持垂直居中：控件实际高度缩为字段高-8 并居中放置，
@@ -298,10 +308,13 @@ private:
 	void DrawWebDavPage(Gdiplus::Graphics& g, const CRect& contentRect);
 	void DrawApiHealthPage(Gdiplus::Graphics& g, const CRect& contentRect);
 	void DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRect);
-
 	// ===== 接口检测页控件 =====
 	CButton m_api_test_btn;       // 接口检测页右上角「立即重新检测」按钮
 	bool m_api_probing{ false };
+
+	// 检查更新：后台查询完成后回主线程
+	afx_msg void OnBnClickedUpdateCheckBtn();
+	afx_msg LRESULT OnUpdateCheckFinished(WPARAM wParam, LPARAM lParam);
 
 protected:
 	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV 支持
