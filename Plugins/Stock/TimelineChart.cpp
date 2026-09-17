@@ -106,15 +106,14 @@ static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int
 	const int boxW = side;
 	const int boxH = side;
 
-	// 间距：K线图以蜡烛（含影线）的像素高度为基准取 22%，图表缩小时蜡烛矮、间距自动收紧，
-	// 放大时蜡烛高、间距同步放大，视觉距离保持一致；分时图无蜡烛可参照，用固定值。
-	// 下限防止极小的蜡烛把标记贴上去
-	int gap = g_data.RDPI(26);
+	// 间距以方块边长为基准（两者在同一像素空间，避免 RDPI 在高 DPI 下缩小而与方块尺寸脱节）：
+	// 下限 2 倍边长，保证引线明显长于标记本身；蜡烛很大时再多给一点，免得上方的标记显得贴脸
+	int gap = boxH * 2;
 	if (avoidTop != INT_MIN && avoidBottom != INT_MIN)
 	{
 		const int span = avoidBottom - avoidTop;   // 蜡烛含影线的像素高度
 		if (span > 0)
-			gap = max(g_data.RDPI(14), span * 22 / 100);
+			gap = max(gap, span * 30 / 100);
 	}
 	// 同日多笔纵向堆叠，避免标记互相压住（横向保持对准柱子中心）
 	gap += stackIndex * (boxH + g_data.RDPI(2));
