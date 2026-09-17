@@ -230,50 +230,15 @@ namespace
 {
 	const COLORREF kTradeDlgBg = RGB(18, 20, 26);        // 弹窗底色
 	const COLORREF kTradeDlgEditBg = RGB(13, 15, 21);    // 输入框底色
-	const int kTradeDlgRadius = 8;                       // 圆角半径（逻辑像素）：5 在 26px 高控件上肉眼几乎看不出
 
-	// 圆角矩形路径：GDI+ 无直接圆角 API，用四段弧拼
-	void BuildRoundRectPath(Gdiplus::GraphicsPath& path, const CRect& rect, int radius)
+	// 方角描边：用四条实心边条拼，笔直且无抗锯齿溢出（本弹窗一律方角，不用圆角）
+	void FillFlatOutline(Gdiplus::Graphics& g, const CRect& rect, const Gdiplus::Color& color)
 	{
-		const Gdiplus::REAL r = static_cast<Gdiplus::REAL>(max(0, radius));
-		const Gdiplus::REAL l = static_cast<Gdiplus::REAL>(rect.left);
-		const Gdiplus::REAL t = static_cast<Gdiplus::REAL>(rect.top);
-		const Gdiplus::REAL w = static_cast<Gdiplus::REAL>(rect.Width());
-		const Gdiplus::REAL h = static_cast<Gdiplus::REAL>(rect.Height());
-		path.Reset();
-		if (r <= 0.5f)
-		{
-			path.AddRectangle(Gdiplus::RectF(l, t, w, h));
-			return;
-		}
-		const Gdiplus::REAL rr = min(r, min(w, h) / 2);
-		path.AddArc(l, t, rr * 2, rr * 2, 180.0f, 90.0f);
-		path.AddArc(l + w - rr * 2, t, rr * 2, rr * 2, 270.0f, 90.0f);
-		path.AddArc(l + w - rr * 2, t + h - rr * 2, rr * 2, rr * 2, 0.0f, 90.0f);
-		path.AddArc(l, t + h - rr * 2, rr * 2, rr * 2, 90.0f, 90.0f);
-		path.CloseFigure();
-	}
-
-	// 圆角实底填充
-	void FillRoundRect(Gdiplus::Graphics& g, const CRect& rect, const Gdiplus::Color& color, int radius = kTradeDlgRadius)
-	{
-		Gdiplus::GraphicsPath path;
-		BuildRoundRectPath(path, rect, g_data.DPI(radius));
 		Gdiplus::SolidBrush brush(color);
-		g.FillPath(&brush, &path);
-	}
-
-	// 圆角描边。GDI+ 1px 笔会跨半像素抗锯齿把颜色溢到矩形外，故描边矩形整体内缩 1px，
-	// 既避免溢出，也保证描边完全落在控件矩形内
-	void DrawRoundRectOutline(Gdiplus::Graphics& g, const CRect& rect, const Gdiplus::Color& color, int radius = kTradeDlgRadius)
-	{
-		CRect inner = rect;
-		inner.DeflateRect(1, 1);
-		if (inner.IsRectEmpty()) return;
-		Gdiplus::GraphicsPath path;
-		BuildRoundRectPath(path, inner, max(1, g_data.DPI(radius) - 1));
-		Gdiplus::Pen pen(color, 1.0f);
-		g.DrawPath(&pen, &path);
+		g.FillRectangle(&brush, rect.left, rect.top, rect.Width(), 1);
+		g.FillRectangle(&brush, rect.left, rect.bottom - 1, rect.Width(), 1);
+		g.FillRectangle(&brush, rect.left, rect.top, 1, rect.Height());
+		g.FillRectangle(&brush, rect.right - 1, rect.top, 1, rect.Height());
 	}
 
 	// 标签左对齐绘制，与「设置持仓信息」弹窗同一约定：
@@ -381,7 +346,8 @@ BOOL CDarkTradeEditDlg::OnInitDialog()
 	createEdit(m_amount_edit, amountY, contentLeft, contentRight, 1103, L"输入数量");
 	createEdit(m_price_edit, priceY, contentLeft, contentRight, 1104, L"输入成交价");
 
-	// 底部按钮：确定/取消靠右成组（右边界与输入框对齐），编辑模式在左侧插入删除按钮
+	// 底部按钮：确定/取消靠右成组（右边界与输入框对齐）；
+	// 删除按钮单独放到最左边（与标签列左边界对齐，远离确定/取消，避免误按）
 	const int okLeft = contentRight - btnW;
 	const int cancelLeft = okLeft - g_data.DPI(8) - btnW;
 
@@ -396,7 +362,7 @@ BOOL CDarkTradeEditDlg::OnInitDialog()
 	if (!m_is_new)
 	{
 		m_btn_delete.Create(_T("删除"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW,
-			CRect(contentLeft, btnY, contentLeft + btnW, btnY + btnH), this, IDC_TRADE_BTN_DELETE);
+			CRect(marginX, btnY, marginX + btnW, btnY + btnH), this, IDC_TRADE_BTN_DELETE);
 		m_btn_delete.SetFont(&m_font);
 	}
 
@@ -507,13 +473,8 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 				textColor = RGB(255, 255, 255);
 			}
 
-			// 圆角底：先铺弹窗底色填掉直角，再落圆角；否则四角会留下方形色块
-			dc.FillSolidRect(rect, kTradeDlgBg);
-			{
-				Gdiplus::Graphics g(dc.GetSafeHdc());
-				g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-				FillRoundRect(g, rect, Gdiplus::Color(255, GetRValue(bgColor), GetGValue(bgColor), GetBValue(bgColor)));
-			}
+			// 方角实底填充（按钮一律方角，与「设置持仓信息」弹窗一致）
+			dc.FillSolidRect(rect, bgColor);
 
 			dc.SetBkMode(TRANSPARENT);
 			dc.SetTextColor(textColor);
@@ -579,19 +540,18 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 		drawRowLabel(L"数量 (股)", frameRectForEdit(editRectInClient(m_amount_edit)));
 		drawRowLabel(L"价格 (元)", frameRectForEdit(editRectInClient(m_price_edit)));
 
-		// 3. 输入框：外框按行高绘制圆角底与描边，控件本体居中嵌在其中。
-		//    圆角外的四角会露出弹窗底色，故先按弹窗底色把外框铺一遍
+		// 3. 输入框：按行高绘制方角底与描边，控件本体居中嵌在其中（控件矮一圈、窄一圈，
+		//    文字才垂直居中且左右留出内边距，描边也不会被控件盖住）
 		auto drawEdit = [&](CWnd& edit) {
 			CRect frame = frameRectForEdit(editRectInClient(edit));
 			if (frame.IsRectEmpty()) return;
 
-			Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, 18, 20, 26));
+			Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, 13, 15, 21));
 			g.FillRectangle(&bgBrush, frame.left, frame.top, frame.Width(), frame.Height());
 
 			CWnd* pFocus = GetFocus();
 			bool focused = (pFocus && pFocus->GetSafeHwnd() == edit.GetSafeHwnd());
-			FillRoundRect(g, frame, Gdiplus::Color(255, 13, 15, 21));
-			DrawRoundRectOutline(g, frame, focused ? Gdiplus::Color(255, 37, 99, 235) : Gdiplus::Color(255, 52, 58, 72));
+			FillFlatOutline(g, frame, focused ? Gdiplus::Color(255, 37, 99, 235) : Gdiplus::Color(255, 52, 58, 72));
 		};
 		drawEdit(m_date_edit);
 		drawEdit(m_time_edit);
@@ -610,16 +570,17 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 
 void CDarkTradeEditDlg::DrawDirectionButtons(Gdiplus::Graphics& g)
 {
-	// 分段开关样式：选中侧语义色实底，未选中侧深底 + 灰描边
+	// 分段开关样式：选中侧语义色实底，未选中侧深底 + 灰描边（一律方角）
 	auto drawDir = [&](const CRect& rect, bool isBuy) {
 		bool isSel = (m_is_sell != isBuy);
 		Gdiplus::Color bgCol = isSel
 			? (isBuy ? Gdiplus::Color(255, 246, 70, 93) : Gdiplus::Color(255, 14, 203, 129))
 			: Gdiplus::Color(255, 24, 27, 34);
-		FillRoundRect(g, rect, bgCol);
+		Gdiplus::SolidBrush bgBrush(bgCol);
+		g.FillRectangle(&bgBrush, rect.left, rect.top, rect.Width(), rect.Height());
 
 		if (!isSel)
-			DrawRoundRectOutline(g, rect, Gdiplus::Color(255, 52, 58, 72));
+			FillFlatOutline(g, rect, Gdiplus::Color(255, 52, 58, 72));
 
 		Gdiplus::Font dirFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(12)),
 			isSel ? Gdiplus::FontStyleBold : Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
