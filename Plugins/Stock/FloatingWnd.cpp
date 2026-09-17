@@ -89,12 +89,16 @@ void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLeft, int 
 #define ORDER_BOOK_WIDTH          g_data.RDPI(168)     // 右侧信息面板宽度
 
 // 右侧信息按钮簇（自右向左：CM 筹码峰 / PK 盘口 / CC ETF持仓 / BS 交易台账）占用格数。
-// CC 仅基金显示，其余恒显示；最左格决定汇总行需预留的宽度，与布局必须同源，否则会遮挡盈亏数字。
-static int InfoBtnSlotCount(const std::wstring& stockId, bool showObBtns)
+// CM/PK 恒显示，CC 仅基金显示，BS 仅持仓股显示；最左格决定汇总行需预留的宽度，
+// 与布局必须同源，否则会遮挡盈亏数字。
+static int InfoBtnSlotCount(const std::wstring& stockId, bool showObBtns, bool isHolding)
 {
 	if (!showObBtns)
 		return 0;
-	return CCommon::IsFundCode(stockId) ? 4 : 3;
+	int slots = 2;                                       // CM + PK
+	if (CCommon::IsFundCode(stockId)) ++slots;           // CC
+	if (isHolding) ++slots;                              // BS
+	return slots;
 }
 
 enum {
@@ -696,7 +700,7 @@ void CFloatingWnd::OnPaint()
 			// 背景/描边铺满整个图表区宽度；文本内容区为右上角按钮预留空间（无按钮则铺满）
 			const int obBtnW = g_data.RDPI(34);
 			const bool showObBtns = !isIndexKLine;
-			const int rightBtnsW = InfoBtnSlotCount(m_stock_id, showObBtns) * obBtnW;
+			const int rightBtnsW = InfoBtnSlotCount(m_stock_id, showObBtns, IsHoldingStock()) * obBtnW;
 			const int summaryContentRight = min(chartWidth, showObBtns ? (w - rightBtnsW) : w);
 			const int summaryContentW = max(0, summaryContentRight - summaryX);
 
@@ -3695,6 +3699,9 @@ void CFloatingWnd::SetStockId(const std::wstring& stockId)
 	{
 		EnsureEtfHoldingsData();
 	}
+	// 台账只对持仓股有意义：切到未持仓的股票（自选股等）时收起 BS 面板
+	if (!IsHoldingStock())
+		m_showBsTrades = false;
 	UpdatePeriodComboVisibility();
 	Invalidate();
 }
@@ -3920,7 +3927,8 @@ void CFloatingWnd::UpdatePeriodComboVisibility()
 	SafeShowWindow(m_btnChipPeak, m_viewMode != UI_VIEW_OVERVIEW);
 	SafeShowWindow(m_btnOrderBook, m_viewMode != UI_VIEW_OVERVIEW);
 	SafeShowWindow(m_btnEtfHoldings, m_viewMode != UI_VIEW_OVERVIEW && CCommon::IsFundCode(m_stock_id));
-	SafeShowWindow(m_btnBsTrades, m_viewMode != UI_VIEW_OVERVIEW);
+	// 台账只对持仓股有意义，与 LayoutInfoButtons 的条件保持一致
+	SafeShowWindow(m_btnBsTrades, m_viewMode != UI_VIEW_OVERVIEW && IsHoldingStock());
 }
 
 BOOL CFloatingWnd::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
@@ -4436,10 +4444,17 @@ void CFloatingWnd::LayoutInfoButtons(int w, int obBtnTop, int obBtnW, int obBtnH
 	SafeSetWindowPos(m_btnEtfHoldings, w - obBtnW * 3, obBtnTop, obBtnW, obBtnH);
 	SafeShowWindow(m_btnEtfHoldings, showObBtns && isEtf);
 
-	// BS 占最左格：格序号与汇总行预留格数同源（基金 4，非基金 3）
-	const int bsSlot = InfoBtnSlotCount(m_stock_id, showObBtns);
+	// BS 紧邻 CC 左侧：CC 可见时占第 4 格，否则顶到第 3 格（不留空档）。
+	// 台账只对持仓股有意义，未持仓的股票（自选股等）不显示该按钮
+	const int bsSlot = isEtf ? 4 : 3;
 	SafeSetWindowPos(m_btnBsTrades, w - obBtnW * bsSlot, obBtnTop, obBtnW, obBtnH);
-	SafeShowWindow(m_btnBsTrades, showObBtns);
+	SafeShowWindow(m_btnBsTrades, showObBtns && IsHoldingStock());
+}
+
+// 当前股票是否持仓（台账/标记/BS 按钮均以此为准）
+bool CFloatingWnd::IsHoldingStock() const
+{
+	return g_data.GetHoldingCount(m_stock_id) > 0;
 }
 
 HBRUSH CFloatingWnd::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)

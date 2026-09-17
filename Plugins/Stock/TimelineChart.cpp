@@ -26,6 +26,12 @@ struct TimeMarker {
 static const COLORREF kBsBuyColor = RGB(59, 130, 246);
 static const COLORREF kBsSellColor = RGB(249, 115, 22);
 
+// 交易台账只对持仓股有意义：非持仓（自选股等）不画 B/S 标记
+static bool ShouldDrawBsMarkers(const std::wstring& stockId)
+{
+	return !stockId.empty() && g_data.GetHoldingCount(stockId) > 0;
+}
+
 // 辅助函数：绘制价格点标签（最高/最低价标注）
 static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLeft, int chartTop, int chartWidth, int chartHeight,
 	STOCK::Price price, bool isHigh, COLORREF color)
@@ -1088,7 +1094,7 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 
 	// 交易台账 B/S 标记：匹配可见数据点。
 	// 分时模式下数据点只有 HH:mm，只标注当日成交；趋势图（K线数据派生）fullTime 为完整日期，按日期匹配。
-	if (!hover.stockId.empty())
+	if (ShouldDrawBsMarkers(hover.stockId))
 	{
 		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
 		if (!trades.empty())
@@ -1656,7 +1662,7 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 	}
 
 	// 交易台账 B/S 标记：按成交日期匹配可见 bar，方块置于K线外侧、引线自影线端点延伸出来
-	if (!hover.stockId.empty())
+	if (ShouldDrawBsMarkers(hover.stockId))
 	{
 		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
 		std::map<std::string, int> sameDaySeq;   // 同一交易日的第几笔：纵向堆叠，避免标注重叠
