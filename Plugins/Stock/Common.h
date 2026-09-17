@@ -151,6 +151,9 @@ public:
 	// 获取去除交易所前缀后的纯数字/纯代码
 	static std::wstring GetPureCode(const std::wstring& fullCode);
 
+	// 展示用完整代码：交易所前缀转大写（sz159558 -> SZ159558），与行情软件观感一致
+	static std::wstring GetDisplayCode(const std::wstring& fullCode);
+
 	// 搜索股票（支持代码、名称、拼音），集成腾讯 Smartbox、新浪及本地预置数据
 	static std::vector<struct StockSearchResult> SearchStock(const std::wstring& keyword);
 };

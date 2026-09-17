@@ -230,7 +230,7 @@ namespace
 {
 	const COLORREF kTradeDlgBg = RGB(18, 20, 26);        // 弹窗底色
 	const COLORREF kTradeDlgEditBg = RGB(13, 15, 21);    // 输入框底色
-	const int kTradeDlgRadius = 5;                       // 圆角半径（逻辑像素）
+	const int kTradeDlgRadius = 8;                       // 圆角半径（逻辑像素）：5 在 26px 高控件上肉眼几乎看不出
 
 	// 圆角矩形路径：GDI+ 无直接圆角 API，用四段弧拼
 	void BuildRoundRectPath(Gdiplus::GraphicsPath& path, const CRect& rect, int radius)
@@ -276,16 +276,17 @@ namespace
 		g.DrawPath(&pen, &path);
 	}
 
-	// 标签右对齐绘制，使各行标签尾部成一列
-	void DrawRightAlignedLabel(Gdiplus::Graphics& g, const wchar_t* text, Gdiplus::Font& font,
-		const CRect& cell, const Gdiplus::SolidBrush& brush)
+	// 标签左对齐绘制，与「设置持仓信息」弹窗同一约定：
+	// 左内边距永远等于 marginX，不会因标签长短而变（右对齐会让短标签的左留白看起来更大）
+	void DrawLeftAlignedLabel(Gdiplus::Graphics& g, const wchar_t* text, Gdiplus::Font& font,
+		int left, const CRect& anchorRow, const Gdiplus::SolidBrush& brush)
 	{
 		Gdiplus::StringFormat fmt;
-		fmt.SetAlignment(Gdiplus::StringAlignmentFar);
+		fmt.SetAlignment(Gdiplus::StringAlignmentNear);
 		fmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
 		fmt.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
-		Gdiplus::RectF rf(static_cast<Gdiplus::REAL>(cell.left), static_cast<Gdiplus::REAL>(cell.top),
-			static_cast<Gdiplus::REAL>(cell.Width()), static_cast<Gdiplus::REAL>(cell.Height()));
+		Gdiplus::RectF rf(static_cast<Gdiplus::REAL>(left), static_cast<Gdiplus::REAL>(anchorRow.top),
+			static_cast<Gdiplus::REAL>(g_data.DPI(200)), static_cast<Gdiplus::REAL>(anchorRow.Height()));
 		g.DrawString(text, -1, &font, rf, &fmt, &brush);
 	}
 }
@@ -293,13 +294,14 @@ namespace
 BOOL CDarkTradeEditDlg::OnInitDialog()
 {
 	CDialog::OnInitDialog();
-	// 标题带上代码与名称，便于在同名标的间区分
+	// 标题带上代码与名称，便于在同名标的间区分（代码前缀用大写，与行情软件一致）
 	if (m_name.empty())
 		SetWindowText(_T("成交录入"));
 	else
 	{
 		CString title;
-		title.Format(_T("%s %s · 成交录入"), CString(m_code.c_str()), CString(m_name.c_str()));
+		title.Format(_T("%s %s · 成交录入"),
+			CString(CCommon::GetDisplayCode(m_code).c_str()), CString(m_name.c_str()));
 		SetWindowText(title);
 	}
 
@@ -314,9 +316,13 @@ BOOL CDarkTradeEditDlg::OnInitDialog()
 	m_edit_brush.CreateSolidBrush(kTradeDlgEditBg);
 
 	// 列布局：标签列固定宽（单位写在标签里，与「设置持仓信息」弹窗同一约定），输入框统一右边界
-	const int marginX = g_data.DPI(16);
+	const int marginX = g_data.DPI(16);       // 左右留白一致：左=marginX，右=marginX
 	const int labelW = g_data.DPI(80);
-	const int editH = g_data.DPI(26);
+	const int rowH = g_data.DPI(26);          // 视觉外框高（描边所在的框）
+	const int editBoxH = g_data.DPI(18);      // 输入框控件实际高度：单行编辑框文字靠上，
+	const int editPadX = g_data.DPI(6);       // 控件须比外框小一圈并居中嵌入，文字才垂直居中、
+	                                          // 且左右描边不会被控件自身盖住（沿用「设置持仓信息」做法）
+	const int editPadY = (rowH - editBoxH) / 2;
 	const int rowPitch = g_data.DPI(38);
 	const int btnH = g_data.DPI(28);
 	const int btnW = g_data.DPI(64);
@@ -345,18 +351,23 @@ BOOL CDarkTradeEditDlg::OnInitDialog()
 			SetWindowPos(nullptr, 0, 0, wr.Width() + deltaW, wr.Height() + deltaH, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 	}
 
-	const int contentLeft = marginX + labelW;
-	const int contentRight = contentLeft + contentW;
+	// 客户区尺寸在窗口调整后重新读取，保证左右留白严格相等
+	CRect crClient;
+	GetClientRect(&crClient);
+	const int contentRight = crClient.right - marginX;
+	const int contentLeft = contentRight - contentW;
 
 	// 方向：两枚按钮等宽铺满内容列，形似分段开关（比两个小按钮浮在左侧更整齐）
 	const int dirGap = g_data.DPI(8);
 	const int dirBtnW = (contentRight - contentLeft - dirGap) / 2;
-	m_buy_btn_rect = CRect(contentLeft, dirY, contentLeft + dirBtnW, dirY + editH);
-	m_sell_btn_rect = CRect(contentLeft + dirBtnW + dirGap, dirY, contentRight, dirY + editH);
+	m_buy_btn_rect = CRect(contentLeft, dirY, contentLeft + dirBtnW, dirY + rowH);
+	m_sell_btn_rect = CRect(contentLeft + dirBtnW + dirGap, dirY, contentRight, dirY + rowH);
 
+	// 输入框按「外框内缩」放置：控件只占内圈，四周留出的环带用于画圆角描边，
+	// 同时天然形成文字左内边距
 	auto createEdit = [&](CEdit& edit, int rowY, int left, int right, UINT id, const wchar_t* cue) {
 		edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-			CRect(left, rowY, right, rowY + editH), this, id);
+			CRect(left + editPadX, rowY + editPadY, right - editPadX, rowY + editPadY + editBoxH), this, id);
 		edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
 		::SetWindowTheme(edit.GetSafeHwnd(), L"", L"");
 		edit.SetFont(&m_font);
@@ -450,15 +461,19 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 			return 0;
 		}
 	}
-	else if (message == WM_COMMAND && HIWORD(wParam) == BN_CLICKED)
+	else if (message == WM_COMMAND)
 	{
-		// 删除按钮：无消息映射，直接在 WindowProc 处理
-		if (LOWORD(wParam) == IDC_TRADE_BTN_DELETE)
+		const WORD notify = HIWORD(wParam);
+		if (notify == BN_CLICKED && LOWORD(wParam) == IDC_TRADE_BTN_DELETE)
 		{
+			// 删除按钮：无消息映射，直接在 WindowProc 处理
 			m_result = RES_DELETE;
 			EndDialog(RES_DELETE);
 			return TRUE;
 		}
+		// 输入框焦点变化时重绘，让蓝色焦点描边跟随光标所在框
+		if (notify == EN_SETFOCUS || notify == EN_KILLFOCUS)
+			InvalidateRect(nullptr, FALSE);
 	}
 	else if (message == WM_DRAWITEM)
 	{
@@ -531,9 +546,9 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 		g.FillRectangle(&bg, 0, 0, rc.Width(), rc.Height());
 
 		const int marginX = g_data.DPI(16);
-		const int labelW = g_data.DPI(80);
 
-		// 2. 标签：单位直接写进标签（与「设置持仓信息」弹窗同一约定），令输入框右边界整齐
+		// 2. 标签：左对齐、单位写进标签（与「设置持仓信息」弹窗同一约定），
+		//    左留白恒为 marginX，不会随标签长短变化
 		Gdiplus::Font labelFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(12)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 		Gdiplus::SolidBrush labelBrush(Gdiplus::Color(255, 203, 213, 225));
 
@@ -545,32 +560,38 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 			return er;
 		};
 
-		// 标签在各自行内垂直居中：以对应输入框（或方向按钮）的垂直中线为基准
-		auto drawRowLabel = [&](const wchar_t* text, const CRect& anchorRow) {
-			CRect cell(marginX, anchorRow.top, marginX + labelW - g_data.DPI(10), anchorRow.bottom);
-			DrawRightAlignedLabel(g, text, labelFont, cell, labelBrush);
+		// 行高与视觉外框对齐：输入框控件比外框小一圈，这里把控件矩形还原成外框矩形
+		auto frameRectForEdit = [&](const CRect& editRc) {
+			if (editRc.IsRectEmpty()) return editRc;
+			CRect r = editRc;
+			const int padX = g_data.DPI(6);
+			const int padY = (g_data.DPI(26) - g_data.DPI(18)) / 2;
+			r.InflateRect(padX, padY);
+			return r;
 		};
-
-		CRect dateRc = editRectInClient(m_date_edit);
-		CRect amountRc = editRectInClient(m_amount_edit);
-		CRect priceRc = editRectInClient(m_price_edit);
+		auto drawRowLabel = [&](const wchar_t* text, const CRect& anchorRow) {
+			DrawLeftAlignedLabel(g, text, labelFont, marginX, anchorRow, labelBrush);
+		};
 
 		// 日期与时间同排，故只用一行标签统辖两个框
 		drawRowLabel(L"方向", m_buy_btn_rect);
-		drawRowLabel(L"日期/时间", dateRc);
-		drawRowLabel(L"数量 (股)", amountRc);
-		drawRowLabel(L"价格 (元)", priceRc);
+		drawRowLabel(L"日期/时间", frameRectForEdit(editRectInClient(m_date_edit)));
+		drawRowLabel(L"数量 (股)", frameRectForEdit(editRectInClient(m_amount_edit)));
+		drawRowLabel(L"价格 (元)", frameRectForEdit(editRectInClient(m_price_edit)));
 
-		// 3. 输入框：圆角实底 + 描边（含焦点高亮）。注意输入框是子窗口，圆角外的底色
-		//    会露出弹窗底色，故先铺满弹窗底色再落圆角底
+		// 3. 输入框：外框按行高绘制圆角底与描边，控件本体居中嵌在其中。
+		//    圆角外的四角会露出弹窗底色，故先按弹窗底色把外框铺一遍
 		auto drawEdit = [&](CWnd& edit) {
-			CRect er = editRectInClient(edit);
-			if (er.IsRectEmpty()) return;
+			CRect frame = frameRectForEdit(editRectInClient(edit));
+			if (frame.IsRectEmpty()) return;
+
+			Gdiplus::SolidBrush bgBrush(Gdiplus::Color(255, 18, 20, 26));
+			g.FillRectangle(&bgBrush, frame.left, frame.top, frame.Width(), frame.Height());
 
 			CWnd* pFocus = GetFocus();
 			bool focused = (pFocus && pFocus->GetSafeHwnd() == edit.GetSafeHwnd());
-			FillRoundRect(g, er, Gdiplus::Color(255, 13, 15, 21));
-			DrawRoundRectOutline(g, er, focused ? Gdiplus::Color(255, 37, 99, 235) : Gdiplus::Color(255, 52, 58, 72));
+			FillRoundRect(g, frame, Gdiplus::Color(255, 13, 15, 21));
+			DrawRoundRectOutline(g, frame, focused ? Gdiplus::Color(255, 37, 99, 235) : Gdiplus::Color(255, 52, 58, 72));
 		};
 		drawEdit(m_date_edit);
 		drawEdit(m_time_edit);
