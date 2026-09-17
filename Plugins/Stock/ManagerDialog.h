@@ -269,11 +269,15 @@ private:
 	bool InScrollContent(CPoint point);                  // 点是否在右侧内容可视区内
 	void SetPageScroll(int scrollY);                     // 钳制滚动偏移并联动控件布局与重绘
 	int CalcPageContentHeight();                         // 当前页内容自然总高（0 = 不启用通用滚动）
+	int ScrollViewportHeight() const;                    // 当前页滚动可视区高度（关于页只算日志视口）
 	int MeasureMetricCard2Height(int rightWidth);        // 指标页候选库自然高度（与绘制排布一致）
 	int MeasureAboutPageHeight();                       // 关于页日志区自然高度（与绘制排布一致）
 	int LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, int rightX, int startY); // 日志区排版并返回结束 Y（draw=false 只量高）
 	int ContentBottomPad() const;                        // 内容区底部留白（内嵌无按钮条时收窄，分组页仍留操作按钮行）
-	CRect CalcAboutUpdateBtnRect(const CRect& clientRect) const; // 关于页右上角「检查更新」按钮矩形（布局与页头状态文字共用）
+	// 关于页三段式几何（顶部固定信息卡 / 独立滚动日志区 / 底部固定操作区），
+	// 绘制、量高与控件摆放共用，改动只需改这一处
+	void GetAboutLayout(CRect& cardRect, CRect& logViewport, CRect& footerRect) const;
+	CRect CalcAboutUpdateBtnRect() const; // 关于页底部「检查更新」按钮矩形（按钮与状态文字共用的右对齐基准）
 	void ApplyIfEmbedded();                              // 内嵌模式即时提交设置（模态模式等「确定」）
 	void ApplyOpacity(int opacityPercent);               // 实时应用并推送背景透明度到宿主与当前窗口
 
@@ -307,7 +311,7 @@ private:
 	void DrawMetricPage(Gdiplus::Graphics& g, const CRect& contentRect);
 	void DrawWebDavPage(Gdiplus::Graphics& g, const CRect& contentRect);
 	void DrawApiHealthPage(Gdiplus::Graphics& g, const CRect& contentRect);
-	void DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRect);
+	void DrawAboutPage(Gdiplus::Graphics& g);
 	// ===== 接口检测页控件 =====
 	CButton m_api_test_btn;       // 接口检测页右上角「立即重新检测」按钮
 	bool m_api_probing{ false };
