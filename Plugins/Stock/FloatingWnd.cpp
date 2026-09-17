@@ -3666,7 +3666,6 @@ void CFloatingWnd::SetStockId(const std::wstring& stockId)
 	m_stock_id = stockId;
 	ClearRegionSelection(true);   // 换股时选区失效：退出区域统计避免残留旧标的统计
 	g_data.LoadFocusStockCache(m_stock_id);
-	g_data.LoadFocusStockCache(m_stock_id);
 	m_mc_return_stock_id.clear();   // 主动切换股票即结束临时 K 线查看
 	EnsureStockListVisible();
 	// 通知获取线程切换关注股票，线程自动重置计时器并立即获取新股数据
