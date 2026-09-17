@@ -695,108 +695,6 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 		}
 	}
 
-	// 绘制基金净值曲线
-	if (ctx.realtimeData.IsETF())
-	{
-		auto priceToY = [&](double price) -> int {
-			return ctx.priceChartTop + ctx.priceChartHeight - static_cast<int>(round((price - minPrice) * unitY));
-			};
-
-		const auto& fullTimeline = *ctx.fullTimeline;
-		std::map<int, double> iopvByIndex;
-
-		STOCK::Price refPrice = ctx.realtimeData.currentPrice > 0 ? ctx.realtimeData.currentPrice : ctx.realtimeData.prevClosePrice;
-		if (refPrice <= 0 && !fullTimeline.empty())
-			refPrice = fullTimeline[0].price;
-
-		auto isValidIopv = [refPrice](double val) {
-			if (val <= 0) return false;
-			if (refPrice <= 0) return true;
-			return (val >= refPrice * 0.7 && val <= refPrice * 1.3);
-		};
-
-		// 优先使用内存中fullTimeline的iopv字段（ApplyTimeline/ApplyFundIOPV已填充）
-		for (int i = 0; i < static_cast<int>(fullTimeline.size()); i++)
-		{
-			if (isValidIopv(fullTimeline[i].iopv))
-			{
-				iopvByIndex[i] = fullTimeline[i].iopv;
-			}
-		}
-
-		// 始终从数据库补充净值数据（LoadLatestFundNavCache已过滤非交易时段，含午休11:30-13:00）
-		// 不依赖内存iopv的覆盖度判断，避免上午数据已占满一半时跳过数据库，导致下午曲线缺失
-		{
-			auto navPoints = g_data.GetDbManager().LoadLatestFundNavCache(hover.stockId);
-			if (!navPoints.empty())
-			{
-				std::map<std::string, int> fullTimeIndexMap;
-				for (int i = 0; i < static_cast<int>(fullTimeline.size()); i++)
-				{
-					std::string hhmm = fullTimeline[i].time.substr(0, 5);
-					fullTimeIndexMap[hhmm] = i;
-				}
-
-				for (const auto& nav : navPoints)
-				{
-					if (isValidIopv(nav.iopv))
-					{
-						auto it = fullTimeIndexMap.find(nav.time);
-						if (it != fullTimeIndexMap.end())
-						{
-							iopvByIndex[it->second] = nav.iopv;
-						}
-					}
-				}
-			}
-		}
-
-		// 追加实时IOPV到最后一个分时点
-		if (isValidIopv(ctx.realtimeData.iopv) && !fullTimeline.empty())
-		{
-			int lastIdx = static_cast<int>(fullTimeline.size()) - 1;
-			iopvByIndex[lastIdx] = ctx.realtimeData.iopv;
-		}
-		if (!iopvByIndex.empty())
-		{
-			const COLORREF navColor = RGB(160, 32, 240);
-			CPen navPen(PS_SOLID, 1, navColor);
-			CPen* pOldPen = memDC.SelectObject(&navPen);
-			bool firstNavPoint = true;
-
-			int startIdx = ctx.startIndex;
-			int visCount = ctx.visibleCount;
-			int drawnCount = 0;
-
-			for (const auto& kv : iopvByIndex)
-			{
-				int fullIdx = kv.first;
-				double iopvVal = kv.second;
-
-				if (fullIdx < startIdx || fullIdx >= startIdx + visCount)
-					continue;
-
-				int relIdx = fullIdx - startIdx;
-				int pointX = stretchToEdges
-					? static_cast<int>(ctx.chartWidth * relIdx / static_cast<float>(totalPoints - 1))
-					: static_cast<int>(ctx.chartWidth / static_cast<float>(xAxisPts) * relIdx) + static_cast<int>(ctx.chartWidth / static_cast<float>(xAxisPts) / 2);
-				int pointY = priceToY(iopvVal);
-				if (firstNavPoint)
-				{
-					memDC.MoveTo(pointX, pointY);
-					firstNavPoint = false;
-				}
-				else
-				{
-					memDC.LineTo(pointX, pointY);
-				}
-				drawnCount++;
-			}
-
-			memDC.SelectObject(pOldPen);
-		}
-	}
-
 	// 绘制智能分析买卖点标记
 	{
 		auto stockData = g_data.GetStockData(hover.stockId);
@@ -1409,6 +1307,20 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 			amount = static_cast<double>(item.volume) * item.price;
 		CString amountStr = CCommon::FormatAmount(amount);
 		rows.push_back({ _T("成交额"), amountStr, COLOR_TEXT_PRIMARY });
+
+		// 7. 价格均线（与标题栏图例、图上均线同一份数据：悬停点的 maValues）
+		//    周期取自「均线日配置」，颜色用 MaIndexColor 与图上曲线一一对应
+		const std::vector<int>& maDays = g_data.m_setting_data.m_ma_days;
+		for (size_t k = 0; k < maDays.size(); k++)
+		{
+			STOCK::Price maVal = (k < hover.hoverMaValues.size()) ? hover.hoverMaValues[k] : 0;
+			if (maVal <= 0)
+				continue;
+			CString maLabel;
+			maLabel.Format(_T("M%d"), maDays[k]);
+			CString maValStr = isEtf ? CCommon::FormatETFPrice(maVal) : CCommon::FormatFloat(maVal);
+			rows.push_back({ maLabel, maValStr, MaIndexColor(k) });
+		}
 	}
 
 	// 动态添加副图指标数据到悬浮卡片
