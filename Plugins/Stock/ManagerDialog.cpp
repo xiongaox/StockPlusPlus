@@ -4966,7 +4966,14 @@ void CManagerDialog::OnBnClickedUpdateCheckBtn()
 		return;
 
 	m_update_checking = true;
+	// 重新检查时先清空上一次结果：状态文字与它的点击区一起失效，避免「检查中…」期间
+	// 仍显示并允许点击旧版本的下载链接
 	m_update_status_text.clear();
+	m_update_download_url.clear();
+	m_update_latest_version.clear();
+	m_update_failed = false;
+	m_about_update_rect.SetRectEmpty();
+	Invalidate(FALSE);
 	if (m_about_update_btn.GetSafeHwnd())
 	{
 		m_about_update_btn.SetWindowText(L"检查中…");
