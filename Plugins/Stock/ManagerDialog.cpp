@@ -5307,16 +5307,37 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
 		const int availW = stRight - (leftColRight + g_data.DPI(12));
 		if (availW > g_data.DPI(30))
 		{
-			Gdiplus::StringFormat stFmt(Gdiplus::StringFormat::GenericTypographic());
-			stFmt.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
-			stFmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-			Gdiplus::RectF stRf(static_cast<Gdiplus::REAL>(stRight - availW), static_cast<Gdiplus::REAL>(stTop),
-				static_cast<Gdiplus::REAL>(availW), static_cast<Gdiplus::REAL>(g_data.DPI(ABOUT_STATUS_H)));
-			g.DrawString(m_update_status_text.c_str(), -1, &stFont, stRf, &stFmt, &stBrush);
+			// 右缘贴住按钮右缘，视觉上落在按钮正上方（不右对齐会飘到左侧标题旁边）。
+			// 宽度自己算：GenericTypographic 带 NoClip，靠它做省略号裁剪语义不确定，
+			// 明确走「量宽 → 放得下就精确右对齐，放不下才逐字截断」两条路径
+			Gdiplus::RectF stBound;
+			g.MeasureString(m_update_status_text.c_str(), -1, &stFont, Gdiplus::PointF(0.0f, 0.0f), &strFmt, &stBound);
+			std::wstring shown = m_update_status_text;
+			int textW = static_cast<int>(stBound.Width + 0.5f);
+			if (textW > availW)
+			{
+				while (!shown.empty())
+				{
+					shown.pop_back();
+					std::wstring cand = shown + L"…";
+					g.MeasureString(cand.c_str(), -1, &stFont, Gdiplus::PointF(0.0f, 0.0f), &strFmt, &stBound);
+					if (static_cast<int>(stBound.Width + 0.5f) <= availW)
+					{
+						shown = cand;
+						break;
+					}
+				}
+				textW = static_cast<int>(stBound.Width + 0.5f);
+			}
+
+			const int textLeft = stRight - textW;
+			g.DrawString(shown.c_str(), -1, &stFont,
+				Gdiplus::PointF(static_cast<Gdiplus::REAL>(textLeft), static_cast<Gdiplus::REAL>(stTop)), &strFmt, &stBrush);
 
 			if (clickable)
 			{
-				m_about_update_rect = CRect(stRight - availW, stTop - g_data.DPI(2),
+				// 点击区只覆盖文字实际范围：短文案时左侧空白不该也算成热区
+				m_about_update_rect = CRect(textLeft - g_data.DPI(4), stTop - g_data.DPI(2),
 					stRight, stTop + g_data.DPI(ABOUT_STATUS_H));
 			}
 		}
