@@ -1308,18 +1308,20 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 		CString amountStr = CCommon::FormatAmount(amount);
 		rows.push_back({ _T("成交额"), amountStr, COLOR_TEXT_PRIMARY });
 
-		// 7. 价格均线（与标题栏图例、图上均线同一份数据：悬停点的 maValues）
-		//    周期取自「均线日配置」，颜色用 MaIndexColor 与图上曲线一一对应
-		const std::vector<int>& maDays = g_data.m_setting_data.m_ma_days;
-		for (size_t k = 0; k < maDays.size(); k++)
+		// 7. 均价（当日累计成交均价，即图上那条暖金色均价线；与标题栏"均:"同源）
 		{
-			STOCK::Price maVal = (k < hover.hoverMaValues.size()) ? hover.hoverMaValues[k] : 0;
-			if (maVal <= 0)
-				continue;
-			CString maLabel;
-			maLabel.Format(_T("M%d"), maDays[k]);
-			CString maValStr = isEtf ? CCommon::FormatETFPrice(maVal) : CCommon::FormatFloat(maVal);
-			rows.push_back({ maLabel, maValStr, MaIndexColor(k) });
+			STOCK::Price avgPrice = item.averagePrice;
+			// 量纲自愈：旧缓存可能把均价缩小了约100倍，与现价偏差过大时乘回（与均价线绘制同一判据）
+			if (avgPrice > 0 && item.price > 0
+				&& avgPrice < item.price * 0.4 && std::abs(avgPrice * 100.0 - item.price) < item.price * 0.3)
+			{
+				avgPrice *= 100.0;
+			}
+			if (avgPrice > 0)
+			{
+				CString avgStr = isEtf ? CCommon::FormatETFPrice(avgPrice) : CCommon::FormatFloat(avgPrice);
+				rows.push_back({ _T("均价"), avgStr, RGB(255, 179, 0) });
+			}
 		}
 	}
 
