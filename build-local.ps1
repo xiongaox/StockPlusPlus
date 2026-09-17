@@ -45,6 +45,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $solDir = (Resolve-Path $PSScriptRoot).Path + '\'
+$solDirArg = "/p:SolutionDir=`"$($solDir.TrimEnd('\'))\\`""
 $src = Join-Path $PSScriptRoot 'bin\x64\Release\Stock.dll'
 
 # ---------------------------------------------------------------- 1. 定位 MSBuild
@@ -108,7 +109,7 @@ if (-not $NoBuild) {
     for ($i = 0; $i -lt $projects.Count; $i++) {
         $proj = $projects[$i]
         Write-Host "[*] [$($i + 1)/$($projects.Count)] Building $proj ..." -ForegroundColor Cyan
-        & $msbuild (Join-Path $PSScriptRoot $proj) /nologo /p:Configuration=Release /p:Platform=x64 /p:SolutionDir="$solDir" /m /v:m
+        & $msbuild (Join-Path $PSScriptRoot $proj) /nologo /p:Configuration=Release /p:Platform=x64 $solDirArg /m /v:m
         if ($LASTEXITCODE -ne 0) { throw "Build failed: $proj" }
     }
 }
