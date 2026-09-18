@@ -105,6 +105,16 @@ if (Test-Path $mgrPath) {
     }
 }
 
+# 1c. 发布前置校验：日志里必须已存在本次版本号，否则说明本次改动还没写进日志。
+# 校验放在编译之前：否则要白等一轮 x64+x86 构建才会在生成发布说明时失败
+if (Test-Path $mgrPath) {
+    $mgrCheck = Get-Content $mgrPath -Raw -Encoding UTF8
+    $verToken = "(v$cleanVer)"
+    if ($mgrCheck -notmatch [regex]::Escape($verToken)) {
+        throw "更新日志中没有任何分组标记为 $verToken：请先在 ManagerDialog.cpp 的 kAboutLogGroups[] 顶部补充本次改动的日期分组（日期行只写日期），再执行发包"
+    }
+}
+
 # 2. 检查并关闭运行中的测试器
 $tester = Get-Process -Name "PluginTester" -ErrorAction SilentlyContinue
 if ($tester) {

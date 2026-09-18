@@ -51,7 +51,7 @@ flowchart TD
      - 若今天日期已有条目组，将提炼的新条目智能合并/追加到该组；
      - 若今天为新日期，创建新的 `kItems_MMDD` 并将其置于 `kAboutLogGroups[]` 顶部；
      - 日期行**只写日期**（`L"YYYY-MM-DD"`），**不写版本号**：版本号只在发包时由 `release.ps1` 追加；
-     - 同步检查并必要时增大 `CalcPageContentHeight()` 中的 `PAGE_ABOUT` 虚拟滚动高度，防止文字底部截断；
+     - 关于页高度由 `MeasureAboutPageHeight()` 按日志内容自动量算，无需手工调整任何常量；
    - **不要改动 `Plugins/Stock/Version.h`**：它只代表「最后一次发包的版本」，只在发包时由 `release.ps1` 覆写；
 3. **本地 Git 提交**：
    - 执行 `git add -A` 暂存所有修改（包括代码改动与更新日志）；
@@ -91,7 +91,7 @@ flowchart TD
      - 自动执行 `git log $(git describe --tags --abbrev=0 2>$null)..HEAD` 分析所有改动；
      - 提炼 1~4 条规范条目（`•  【新增】...`、`•  【优化】...`、`•  【修复】...`）；
      - 在 `DrawAboutPage` 顶部创建全新的 `kItems_MMDD` 数组（同日已有分组时以 `kItems_MMDD_v<版本>` 区分），并作为首个元素插入 `kAboutLogGroups[]`；日期行**只写日期**（`L"YYYY-MM-DD"`），不要手写版本号；
-     - 同步适度调大 `CalcPageContentHeight()` 中的 `PAGE_ABOUT` 滚动高度，防止文字截断；
+     - 关于页高度已自动量算（`MeasureAboutPageHeight()`），无需手工调整；
    - **严格确保在调用 `release.ps1` 之前，更新日志已覆盖本次全部改动**：脚本会自动给顶部无版本号的日期分组补上本次版本号，并随 DLL 一起编译发布；
 3. **运行发包脚本**：
    - 调用发包脚本：

@@ -5107,6 +5107,10 @@ namespace
 		int count;
 	};
 
+	const wchar_t* kItems_0918[] = {
+		L"•  【优化】 关于页更新日志正文行距调整为 1.5 倍，长条目折行后阅读更舒展",
+		L"•  【优化】 首页顶栏缓存状态文案由「正在使用本地数据」精简为「本地缓存」"
+	};
 	const wchar_t* kItems_0917[] = {
 		L"•  【新增】 BS 交易台账：CC 旁新增 BS 按钮（仅持仓股显示），面板按时间列出成交流水并汇总买卖笔数，双击行增删改，改完即时写库",
 		L"•  【新增】 日K与分时图绘制 B/S 成交标记（蓝买橙卖圆角方标 + 引线自影线端点延伸），做T/减仓的买卖点直接画在K线上",
@@ -5179,6 +5183,7 @@ namespace
 	};
 
 	const AboutLogGroup kAboutLogGroups[] = {
+		{ L"2026-09-18", kItems_0918, _countof(kItems_0918) },
 		{ L"2026-09-17", kItems_0917, _countof(kItems_0917) },
 		{ L"2026-09-16 (v2.0.8)", kItems_0916_v208, _countof(kItems_0916_v208) },
 		{ L"2026-09-12 (v2.0.7)", kItems_0912_v207, _countof(kItems_0912_v207) },
