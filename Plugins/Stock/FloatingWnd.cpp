@@ -5134,6 +5134,12 @@ void CFloatingWnd::OnTimer(UINT_PTR nIDEvent)
 
 	if (nIDEvent == IDC_REFRESH_TIMER)
 	{
+		// DPI 变化检测：宿主是系统级 DPI 感知（清单 dpiAware=true），跨显示器拖动或
+		// 系统缩放调整后收不到 WM_DPICHANGED，只能靠轮询。DPI 变了要重建派生字体与
+		// 按钮位置，否则界面一直按旧 DPI 排版（字与控件整体偏大/偏小）
+		if (g_data.RefreshDpi())
+			OnDpiChanged();
+
 		// 行情中心视图：刷新时钟 + 拉取过期数据，并重绘（时钟每秒变化）
 		if (m_marketCenterMode)
 		{
@@ -5165,6 +5171,50 @@ void CFloatingWnd::OnTimer(UINT_PTR nIDEvent)
 		}
 	}
 	CWnd::OnTimer(nIDEvent);
+}
+
+// DPI 变更后重建按 DPI 派生的状态。
+// 窗口宽高来自配置的逻辑像素（RDPI 换算），DPI 变了必须按新值重算尺寸并重新贴边，
+// 否则窗口会保持旧 DPI 的像素尺寸：高 DPI 下内容被挤小、低 DPI 下留出大片空白。
+// 按钮等子控件位置由 OnPaint 每帧按当前 DPI 重排，这里只需触发一次重绘
+void CFloatingWnd::OnDpiChanged()
+{
+	const int WIDTH = g_data.RDPI(g_data.m_setting_data.m_kline_width);
+	const int HEIGHT = g_data.RDPI(g_data.m_setting_data.m_kline_height);
+
+	// 贴回原显示器工作区的同一角（与 Create 时的 AREA_* 口径一致）
+	CRect wndRect;
+	GetWindowRect(&wndRect);
+	const HMONITOR hMonitor = MonitorFromRect(&wndRect, MONITOR_DEFAULTTONEAREST);
+	MONITORINFO mi{ sizeof(MONITORINFO) };
+	GetMonitorInfo(hMonitor, &mi);
+	const CRect& wa = mi.rcWork;
+
+	int x = wndRect.left;
+	int y = wndRect.top;
+	switch (g_data.m_setting_data.m_display_area)
+	{
+	case AREA_LEFT_TOP:    x = wa.left + 3;               y = wa.top + 3;                break;
+	case AREA_RIGHT_TOP:   x = wa.right - WIDTH - 3;      y = wa.top + 3;                break;
+	case AREA_LEFT_BOTTOM: x = wa.left + 3;               y = wa.bottom - HEIGHT - 3;    break;
+	case AREA_CENTER:      x = wa.left + (wa.Width() - WIDTH) / 2; y = wa.top + (wa.Height() - HEIGHT) / 2; break;
+	case AREA_RIGHT_BOTTOM:
+	default:               x = wa.right - WIDTH - 3;      y = wa.bottom - HEIGHT - 3;    break;
+	}
+
+	SetWindowPos(nullptr, x, y, WIDTH, HEIGHT, SWP_NOZORDER | SWP_NOACTIVATE);
+
+	// 内嵌设置视图：先让它按新 DPI 重建字体（它缓存了三档字体，不刷新会内外字号不一致），
+	// 再铺满新尺寸的窗口
+	if (m_settingsMode && m_pSettingsDlg != nullptr && m_pSettingsDlg->GetSafeHwnd())
+	{
+		m_pSettingsDlg->OnHostDpiChanged();
+		CRect rcClient;
+		GetClientRect(&rcClient);
+		m_pSettingsDlg->MoveWindow(0, 0, rcClient.Width(), rcClient.Height());
+	}
+
+	Invalidate();
 }
 
 void CFloatingWnd::CheckHoverCardAutoHide()

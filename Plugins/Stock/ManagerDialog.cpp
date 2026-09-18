@@ -2077,17 +2077,7 @@ BOOL CManagerDialog::OnInitDialog()
 	m_menu_width = g_data.DPI(140);
 
 	// 创建与走势图一致的微软雅黑字阶体系 (字号升级，清晰易读)
-	m_font.CreateFont(-g_data.RDPI(13), 0, 0, 0, FW_NORMAL, 0, 0, 0,
-		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
-
-	m_font_bold.CreateFont(-g_data.RDPI(13), 0, 0, 0, FW_BOLD, 0, 0, 0,
-		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
-
-	m_font_title.CreateFont(-g_data.RDPI(16), 0, 0, 0, FW_BOLD, 0, 0, 0,
-		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
+	CreateUiFonts();
 
 	// 全局应用清晰字体
 	EnumChildWindows(m_hWnd, [](HWND hWnd, LPARAM lParam) -> BOOL {
@@ -2873,6 +2863,52 @@ void CManagerDialog::ApplyOpacity(int opacityPercent)
 
 	// 3. 同步写回共享配置
 	g_data.m_setting_data.m_window_opacity = pct;
+}
+
+// 按当前 DPI 创建三档界面字体。初始化与 DPI 变更刷新共用，保证字号口径只有一处
+void CManagerDialog::CreateUiFonts()
+{
+	// 创建与走势图一致的微软雅黑字阶体系 (字号升级，清晰易读)
+	m_font.CreateFont(-g_data.RDPI(13), 0, 0, 0, FW_NORMAL, 0, 0, 0,
+		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
+
+	m_font_bold.CreateFont(-g_data.RDPI(13), 0, 0, 0, FW_BOLD, 0, 0, 0,
+		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
+
+	m_font_title.CreateFont(-g_data.RDPI(16), 0, 0, 0, FW_BOLD, 0, 0, 0,
+		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
+}
+
+// 宿主 DPI 变更：重建字体、刷新子控件字体并整体重排。
+// CFont::CreateFont 会先释放旧 HFONT，而子控件仍持着旧句柄，
+// 因此重建后必须重新 WM_SETFONT，否则控件会用到已销毁的字体
+void CManagerDialog::OnHostDpiChanged()
+{
+	CreateUiFonts();
+
+	m_menu_width = g_data.DPI(140);
+
+	// 模态窗口的最小尺寸按 DPI 派生，同样要跟着更新（内嵌模式的尺寸由宿主决定，不设）
+	if (!m_as_child)
+	{
+		m_min_size.cx = g_data.DPI(720);
+		m_min_size.cy = g_data.DPI(640);
+	}
+
+	const HFONT hFont = static_cast<HFONT>(m_font.GetSafeHandle());
+	if (hFont != nullptr)
+	{
+		EnumChildWindows(m_hWnd, [](HWND hWnd, LPARAM lParam) -> BOOL {
+			::SendMessage(hWnd, WM_SETFONT, lParam, TRUE);
+			return TRUE;
+		}, reinterpret_cast<LPARAM>(hFont));
+	}
+
+	UpdateControlsLayout();
+	Invalidate();
 }
 
 // 关于页几何（内容区坐标系）：顶部固定信息卡 + 其下独立滚动的日志视口。
@@ -5080,7 +5116,8 @@ namespace
 		L"•  【修复】 分时缓存交易日改用数据自身日期，修正凌晨拉取把上一交易日数据重复写进今天的问题",
 		L"•  【优化】 分时图去掉基金净值紫线；鼠标悬停卡片新增「均价」与「偏离」行（价格相对当日均价线的百分比）",
 		L"•  【新增】 关于页新增「检查更新」按钮：位于插件信息卡右侧，后台查询 GitHub 最新 Release，状态文字居中显示在按钮上方，发现新版本时按钮转为「前往下载」",
-		L"•  【优化】 关于页改为固定信息卡 + 独立滚动日志两段式：插件信息与「检查更新」按钮始终可见，更新日志再多也不挤占它们"
+		L"•  【优化】 关于页改为固定信息卡 + 独立滚动日志两段式：插件信息与「检查更新」按钮始终可见，更新日志再多也不挤占它们",
+		L"•  【修复】 新增 DPI 变更检测：跨显示器拖动或调整系统缩放后，悬浮窗与内嵌设置视图按新 DPI 重排，不再需要重启宿主"
 	};
 	const wchar_t* kItems_0916_v208[] = {
 		L"•  【优化】 关于页更新日志抽取统一排版/量高函数，页面滚动高度按日志实际内容自然高度计算，日志条目变多后不再被页面底部截断",

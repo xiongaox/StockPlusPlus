@@ -970,10 +970,54 @@ void CDataManager::SetHostFont(HFONT hFont)
 		return;
 	m_host_logfont = lf;
 	m_has_host_font = true;
+	RecalcFontScale();
+}
+
+// 由主机 LOGFONT 与当前 DPI 换算派生字体的缩放比例（100=不缩放）。
+// SetHostFont 与 DPI 变更刷新共用，保证两条路径口径一致
+void CDataManager::RecalcFontScale()
+{
+	if (!m_has_host_font)
+		return;
 	// 主机字号换算成96DPI下的逻辑高度，与9pt（约12px）基准比较得到缩放比例，
 	// 使派生字体在主机字号变化时同步缩放
-	int logicalHeight = -lf.lfHeight * 96 / max(96, m_dpi);
+	int logicalHeight = -m_host_logfont.lfHeight * 96 / max(96, m_dpi);
 	m_font_scale_percent = max(75, min(300, logicalHeight * 100 / 12));
+}
+
+// 重新读取系统 DPI。构造时只读一次，跨显示器拖动或系统缩放调整后不会自行更新，
+// 会导致界面按旧 DPI 排版（字体与控件尺寸整体偏大/偏小），必须重启宿主才恢复。
+// 返回 true 表示 DPI 确实变了，调用方需要重建字体/控件并重绘
+bool CDataManager::RefreshDpi()
+{
+	HDC hDC = ::GetDC(HWND_DESKTOP);
+	const int dpi = GetDeviceCaps(hDC, LOGPIXELSY);
+	::ReleaseDC(HWND_DESKTOP, hDC);
+
+	if (dpi <= 0 || dpi == m_dpi)
+		return false;
+
+	m_dpi = dpi;
+
+	// 图标按旧 DPI 加载（LoadImage 的宽高已烘进位图），须丢弃重取，否则高 DPI 下
+	// 仍用小位图拉伸显示。但 IDI_STOCK 已通过 Stock::GetPluginIcon() 交给宿主长期持有
+	// （宿主托盘/设置界面图标），销毁它会让宿主握到悬空句柄并可能在重绘时崩溃；
+	// 故只清理非宿主图标，IDI_STOCK 保持原样（图标尺寸略滞后属纯观感问题，可忽略）
+	for (auto it = m_icons.begin(); it != m_icons.end(); )
+	{
+		if (it->first == IDI_STOCK)
+		{
+			++it;
+			continue;
+		}
+		if (it->second != nullptr)
+			::DestroyIcon(it->second);
+		it = m_icons.erase(it);
+	}
+
+	// 字体缩放基准含 DPI 项，随之重算
+	RecalcFontScale();
+	return true;
 }
 
 HICON CDataManager::GetIcon(UINT id)

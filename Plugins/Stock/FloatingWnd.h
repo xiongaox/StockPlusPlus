@@ -87,6 +87,8 @@ public:
 
 	// 鼠标移出图表区超过2秒时自动清除悬停信息卡，避免长期遮挡图表
 	void CheckHoverCardAutoHide();
+	// DPI 变更后重建按 DPI 派生的尺寸状态：窗口按新 DPI 重算宽高、按钮重排并重绘
+	void OnDpiChanged();
 	// 右侧信息面板（盘口/筹码峰）当前是否可见：隐藏后宽度全部让给图表
 	bool IsInfoPanelVisible(bool isIndexKLine) const;
 	// 重置所有数据联动（切换至自选股、更新当前关注股票、清空图表缓存并重绘）

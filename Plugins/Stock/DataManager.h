@@ -99,8 +99,13 @@ public:
 	int DPI(int pixel);
 	int RDPI(int pixel);
 	int GetDpi() const { return m_dpi; }
+	// 重新读取系统 DPI（跨显示器拖动 / 系统缩放调整后调用）。
+	// 返回 true 表示 DPI 变了，调用方需重建字体与控件并重绘
+	bool RefreshDpi();
 	// 记录主机（TrafficMonitor）选择的显示字体，供 StockFont 派生字体按主机字号等比缩放
 	void SetHostFont(HFONT hFont);
+	// 由主机 LOGFONT 与当前 DPI 重算派生字体缩放比例（SetHostFont / RefreshDpi 共用）
+	void RecalcFontScale();
 	bool HasHostFont() const { return m_has_host_font; }
 	const LOGFONT& GetHostLogFont() const { return m_host_logfont; }
 	// 主机字号相对96DPI下9pt基准的缩放百分比（100=不缩放）

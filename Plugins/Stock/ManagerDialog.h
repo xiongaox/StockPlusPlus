@@ -161,6 +161,9 @@ public:
 	std::function<void(bool)> m_on_settings_closed;
 	// 即时生效：读取全部控件值写入 g_data 并保存/热更新（原「确定」按钮的提交逻辑）
 	void ApplySettings();
+	// 宿主 DPI 变更后重建字体并整体重排。内嵌设置视图会长期开着，
+	// 且三档界面字体只在初始化时按 DPI 建一次，不刷新会出现内外字号不一致
+	void OnHostDpiChanged();
 
 	// 对话框数据
 #ifdef AFX_DESIGN_TIME
@@ -294,6 +297,8 @@ private:
 	void PlaceEditInField(UINT nID, const CRect& fieldRect);
 	bool TryAddMaDay(int day); // 校验并添加均线周期，失败时弹出对应提示，返回是否成功
 	bool TryAddMetric(const std::wstring& name); // 添加指标项（上限4项）
+	// 按当前 DPI 创建三档界面字体（初始化与 DPI 变更刷新共用，避免两处字号口径漂移）
+	void CreateUiFonts();
 	void SwitchPage(PageIndex page);
 	void SwitchGroupTab(int tab);
 	void UpdateControlsLayout();
