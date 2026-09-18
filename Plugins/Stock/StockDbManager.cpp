@@ -711,6 +711,103 @@ bool CStockDbManager::DeleteTradeRecord(long long id)
 	return rc == SQLITE_DONE;
 }
 
+bool CStockDbManager::ExportAllTradeRecords(std::vector<StockTradeBackupRecord>& recordsOut)
+{
+	STOCKDB_LOCK();
+	recordsOut.clear();
+	if (m_db == nullptr) return false;
+
+	// 按股票分组、组内时间升序读出，备份文件里顺序稳定且便于人工查看
+	const char* sql = "SELECT stock_code, stock_name, trade_type, trade_time, price, amount, fee "
+		"FROM trades ORDER BY stock_code ASC, trade_time ASC, id ASC;";
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+
+	while (sqlite3_step(stmt) == SQLITE_ROW)
+	{
+		StockTradeBackupRecord item;
+		const void* codeText = sqlite3_column_text16(stmt, 0);
+		item.stockCode = codeText ? std::wstring(static_cast<const wchar_t*>(codeText)) : L"";
+		const void* nameText = sqlite3_column_text16(stmt, 1);
+		item.stockName = nameText ? std::wstring(static_cast<const wchar_t*>(nameText)) : L"";
+		item.tradeType = sqlite3_column_int(stmt, 2);
+		const void* timeText = sqlite3_column_text16(stmt, 3);
+		item.time = timeText ? std::wstring(static_cast<const wchar_t*>(timeText)) : L"";
+		item.price = sqlite3_column_double(stmt, 4);
+		item.amount = sqlite3_column_double(stmt, 5);
+		item.fee = sqlite3_column_double(stmt, 6);
+		if (!item.stockCode.empty() && !item.time.empty())
+			recordsOut.push_back(std::move(item));
+	}
+	sqlite3_finalize(stmt);
+	return true;
+}
+
+bool CStockDbManager::ReplaceAllTradeRecords(const std::vector<StockTradeBackupRecord>& records)
+{
+	STOCKDB_LOCK();
+	if (m_db == nullptr) return false;
+
+	// 单事务内先清空再重建：恢复中途失败时回滚，不会留下半份台账
+	if (sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK)
+		return false;
+
+	bool ok = true;
+	if (sqlite3_exec(m_db, "DELETE FROM trades;", nullptr, nullptr, nullptr) != SQLITE_OK)
+	{
+		ok = false;
+	}
+
+	if (ok && !records.empty())
+	{
+		const char* sql = "INSERT INTO trades(stock_code, stock_name, trade_type, trade_time, price, amount, "
+			"total_amount, fee, total) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);";
+		sqlite3_stmt* stmt = nullptr;
+		if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK)
+		{
+			for (const auto& item : records)
+			{
+				if (item.stockCode.empty() || item.time.empty())
+					continue;
+				// 合计沿用录入口径：买入为负（含费），卖出为正（扣费）
+				const double totalAmount = item.price * item.amount;
+				const double total = (item.tradeType == 1) ? (totalAmount - item.fee) : -(totalAmount + item.fee);
+
+				sqlite3_reset(stmt);
+				sqlite3_clear_bindings(stmt);
+				sqlite3_bind_text16(stmt, 1, item.stockCode.c_str(), -1, SQLITE_TRANSIENT);
+				sqlite3_bind_text16(stmt, 2, item.stockName.c_str(), -1, SQLITE_TRANSIENT);
+				sqlite3_bind_int(stmt, 3, item.tradeType);
+				sqlite3_bind_text16(stmt, 4, item.time.c_str(), -1, SQLITE_TRANSIENT);
+				sqlite3_bind_double(stmt, 5, item.price);
+				sqlite3_bind_double(stmt, 6, item.amount);
+				sqlite3_bind_double(stmt, 7, totalAmount);
+				sqlite3_bind_double(stmt, 8, item.fee);
+				sqlite3_bind_double(stmt, 9, total);
+				if (sqlite3_step(stmt) != SQLITE_DONE)
+				{
+					ok = false;
+					break;
+				}
+			}
+			sqlite3_finalize(stmt);
+		}
+		else
+		{
+			ok = false;
+		}
+	}
+
+	if (ok)
+	{
+		if (sqlite3_exec(m_db, "COMMIT;", nullptr, nullptr, nullptr) != SQLITE_OK)
+			ok = false;
+	}
+	if (!ok)
+		sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+	return ok;
+}
+
 bool CStockDbManager::SaveInnerOuterSnapshot(const std::wstring& stockCode, time_t timestamp, STOCK::Volume innerVolume, STOCK::Volume outerVolume)
 {
 	STOCKDB_LOCK();

@@ -3,6 +3,7 @@
 #include "DataManager.h"
 #include "Common.h"
 #include "Stock.h"
+#include "utilities/yyjson/yyjson.h"
 #include <afxinet.h>
 #include <wincrypt.h>
 #include <sstream>
@@ -90,7 +91,28 @@ namespace
 			swprintf_s(buf, L"%llu B", bytes);
 		return buf;
 	}
+
+	// 台账 JSON 取数：价格/数量/费用按实际落盘类型可能是 real，也可能是整型
+	// （yyjson_get_real 对整型返回 0，直接用会静默把数量读成 0）
+	double LedgerJsonNumber(yyjson_val* val)
+	{
+		if (val == nullptr) return 0.0;
+		if (yyjson_is_real(val)) return yyjson_get_real(val);
+		if (yyjson_is_sint(val)) return static_cast<double>(yyjson_get_sint(val));
+		if (yyjson_is_uint(val)) return static_cast<double>(yyjson_get_uint(val));
+		if (yyjson_is_str(val))
+		{
+			try { return std::stod(yyjson_get_str(val)); }
+			catch (...) { return 0.0; }
+		}
+		return 0.0;
+	}
 }
+
+// 备份载荷的台账段标记：ini 全文之后另起一行，中间是单行 JSON，恢复时按标记切分。
+// 标记写成 ini 注释形态，旧版本插件读到含台账段的备份也只当普通注释，不会误解析
+const char* CWebDavSync::kTradeLedgerBeginMarker = "; --- StockPlusPlus trade ledger (do not edit) ---";
+const char* CWebDavSync::kTradeLedgerEndMarker = "; --- end trade ledger ---";
 
 std::string CWebDavSync::Base64Encode(const std::string& input)
 {
@@ -366,6 +388,223 @@ std::wstring CWebDavSync::MakeBackupFileName()
 	return buf;
 }
 
+bool CWebDavSync::BuildTradeLedgerJson(std::string& jsonOut)
+{
+	jsonOut.clear();
+
+	std::vector<StockTradeBackupRecord> records;
+	if (!g_data.GetDbManager().ExportAllTradeRecords(records))
+		return false;
+
+	// 单行 JSON：{"trades":[{"code":..,"name":..,"sell":0/1,"time":..,"price":..,"amount":..,"fee":..}, ...]}
+	// 字段名短且自解释；中文股票名按 UTF-8 写出（备份文件本身即 UTF-8 BOM）
+	yyjson_mut_doc* doc = yyjson_mut_doc_new(nullptr);
+	if (doc == nullptr)
+		return false;
+	yyjson_mut_val* root = yyjson_mut_obj(doc);
+	yyjson_mut_val* arr = yyjson_mut_arr(doc);
+	if (root == nullptr || arr == nullptr)
+	{
+		yyjson_mut_doc_free(doc);
+		return false;
+	}
+	yyjson_mut_obj_add_val(doc, root, "trades", arr);
+
+	for (const auto& item : records)
+	{
+		std::string code = CCommon::UnicodeToStr(item.stockCode, true);
+		std::string name = CCommon::UnicodeToStr(item.stockName, true);
+		std::string time = CCommon::UnicodeToStr(item.time, true);
+
+		yyjson_mut_val* obj = yyjson_mut_arr_add_obj(doc, arr);
+		if (obj == nullptr)
+			continue;
+		yyjson_mut_obj_add_strcpy(doc, obj, "code", code.c_str());
+		yyjson_mut_obj_add_strcpy(doc, obj, "name", name.c_str());
+		yyjson_mut_obj_add_int(doc, obj, "sell", item.tradeType == 1 ? 1 : 0);
+		yyjson_mut_obj_add_strcpy(doc, obj, "time", time.c_str());
+		yyjson_mut_obj_add_real(doc, obj, "price", item.price);
+		yyjson_mut_obj_add_real(doc, obj, "amount", item.amount);
+		yyjson_mut_obj_add_real(doc, obj, "fee", item.fee);
+	}
+
+	yyjson_mut_doc_set_root(doc, root);
+	size_t len = 0;
+	char* text = yyjson_mut_write(doc, YYJSON_WRITE_NOFLAG, &len);
+	if (text != nullptr)
+	{
+		jsonOut.assign(text, len);
+		free(text);
+	}
+	yyjson_mut_doc_free(doc);
+	return !jsonOut.empty();
+}
+
+void CWebDavSync::SplitBackupPayload(const std::string& payload, std::string& configDataOut,
+	std::string& ledgerJsonOut, bool& hasLedger)
+{
+	configDataOut = payload;
+	ledgerJsonOut.clear();
+	hasLedger = false;
+
+	// 台账段附加在 ini 之后：起始标记必须独占一行（避免 ini 内容里偶然出现同样字样被误切）
+	const size_t beginPos = payload.find(kTradeLedgerBeginMarker);
+	if (beginPos == std::string::npos)
+		return;
+	if (beginPos != 0 && payload[beginPos - 1] != '\n' && payload[beginPos - 1] != '\r')
+		return;
+
+	size_t ledgerStart = payload.find('\n', beginPos);
+	if (ledgerStart == std::string::npos)
+		return;
+	++ledgerStart;
+
+	const size_t ledgerEnd = payload.find(kTradeLedgerEndMarker, ledgerStart);
+	if (ledgerEnd == std::string::npos)
+		return;
+	if (ledgerEnd != 0 && payload[ledgerEnd - 1] != '\n' && payload[ledgerEnd - 1] != '\r')
+		return;
+
+	// ini 部分截到起始标记所在行之前；去掉分隔用的空行后补回一个换行，
+	// 写回本地的是纯 ini（末尾保留换行，与 Save() 产出的文件形态一致）
+	size_t configEnd = beginPos;
+	while (configEnd > 0 && (payload[configEnd - 1] == '\n' || payload[configEnd - 1] == '\r'))
+		--configEnd;
+	configDataOut = payload.substr(0, configEnd);
+	if (!configDataOut.empty())
+		configDataOut += "\r\n";
+
+	// JSON 段去掉首尾空白（写入时是单行，这里兼容手工整理过的多行/缩进）
+	size_t jsonBegin = ledgerStart;
+	size_t jsonEnd = ledgerEnd;
+	while (jsonBegin < jsonEnd && isspace(static_cast<unsigned char>(payload[jsonBegin])))
+		++jsonBegin;
+	while (jsonEnd > jsonBegin && isspace(static_cast<unsigned char>(payload[jsonEnd - 1])))
+		--jsonEnd;
+
+	ledgerJsonOut = payload.substr(jsonBegin, jsonEnd - jsonBegin);
+	hasLedger = true;
+}
+
+bool CWebDavSync::RestoreTradeLedger(const std::string& ledgerJson, std::wstring& errorMsg)
+{
+	if (ledgerJson.empty())
+	{
+		errorMsg = L"备份文件中的台账数据为空";
+		return false;
+	}
+	// 数据库连接必须先就绪（正常启动路径下 LoadConfig 已 Init 过），否则整表替换会失败
+	if (!g_data.GetDbManager().IsOpen())
+	{
+		errorMsg = L"本地交易台账数据库尚未就绪，无法恢复台账";
+		return false;
+	}
+
+	yyjson_doc* doc = yyjson_read(ledgerJson.c_str(), ledgerJson.size(), 0);
+	if (doc == nullptr)
+	{
+		errorMsg = L"备份文件中的台账数据解析失败";
+		return false;
+	}
+
+	std::vector<StockTradeBackupRecord> records;
+	yyjson_val* root = yyjson_doc_get_root(doc);
+	yyjson_val* arr = (root != nullptr) ? yyjson_obj_get(root, "trades") : nullptr;
+	// 段存在但结构不对（截断/被改坏）时按失败处理，绝不能当成「空台账」把本地记录清空
+	if (arr == nullptr || !yyjson_is_arr(arr))
+	{
+		yyjson_doc_free(doc);
+		errorMsg = L"备份文件中的台账数据结构无效";
+		return false;
+	}
+
+	{
+		yyjson_val* item;
+		yyjson_arr_iter iter;
+		yyjson_arr_iter_init(arr, &iter);
+		while ((item = yyjson_arr_iter_next(&iter)))
+		{
+			if (item == nullptr || !yyjson_is_obj(item))
+				continue;
+			StockTradeBackupRecord record;
+			yyjson_val* code = yyjson_obj_get(item, "code");
+			yyjson_val* name = yyjson_obj_get(item, "name");
+			yyjson_val* sell = yyjson_obj_get(item, "sell");
+			yyjson_val* time = yyjson_obj_get(item, "time");
+			yyjson_val* price = yyjson_obj_get(item, "price");
+			yyjson_val* amount = yyjson_obj_get(item, "amount");
+			yyjson_val* fee = yyjson_obj_get(item, "fee");
+
+			record.stockCode = (code && yyjson_is_str(code)) ? CCommon::StrToUnicode(yyjson_get_str(code), true) : L"";
+			record.stockName = (name && yyjson_is_str(name)) ? CCommon::StrToUnicode(yyjson_get_str(name), true) : L"";
+			record.tradeType = (LedgerJsonNumber(sell) != 0.0) ? 1 : 0;
+			record.time = (time && yyjson_is_str(time)) ? CCommon::StrToUnicode(yyjson_get_str(time), true) : L"";
+			record.price = LedgerJsonNumber(price);
+			record.amount = LedgerJsonNumber(amount);
+			record.fee = LedgerJsonNumber(fee);
+			if (record.stockCode.empty() || record.time.empty())
+				continue;
+			// 行情未就绪时备份里可能只有代码，兜底与录入口径一致
+			if (record.stockName.empty())
+				record.stockName = record.stockCode;
+			records.push_back(std::move(record));
+		}
+	}
+	yyjson_doc_free(doc);
+
+	if (!g_data.GetDbManager().ReplaceAllTradeRecords(records))
+	{
+		errorMsg = L"写入本地交易台账数据库失败";
+		return false;
+	}
+	return true;
+}
+
+bool CWebDavSync::ApplyBackupPayload(const std::string& payload, std::wstring& errorMsg, bool* ledgerRestored)
+{
+	errorMsg.clear();
+	if (ledgerRestored != nullptr)
+		*ledgerRestored = false;
+
+	std::string configData;
+	std::string ledgerJson;
+	bool hasLedger = false;
+	SplitBackupPayload(payload, configData, ledgerJson, hasLedger);
+	if (configData.empty())
+	{
+		errorMsg = L"备份文件内容为空";
+		return false;
+	}
+
+	// 先还原台账再写 ini：台账写库失败时不改动本地配置，避免出现「配置已回滚、台账却半新半旧」
+	if (hasLedger)
+	{
+		if (!RestoreTradeLedger(ledgerJson, errorMsg))
+			return false;
+		// 台账已按备份重建，内存里的按股票缓存必须先失效（ini 写盘失败时下面直接返回，
+		// 界面读到的仍是备份重建后的台账，与库里一致）
+		g_data.InvalidateTradeCache();
+	}
+
+	std::wstring configPath = g_data.GetConfigPath();
+	std::ofstream outFile(configPath, std::ios::binary | std::ios::trunc);
+	if (!outFile.is_open())
+	{
+		// 台账重建已完成（事务提交），此时如实说明，避免用户以为整份恢复都没生效
+		errorMsg = hasLedger
+			? (L"台账已恢复，但写入本地配置文件失败: " + configPath)
+			: (L"无法写入本地配置文件: " + configPath);
+		return false;
+	}
+	outFile.write(configData.data(), static_cast<std::streamsize>(configData.size()));
+	outFile.close();
+
+	g_data.LoadConfig(L"");
+	if (ledgerRestored != nullptr)
+		*ledgerRestored = hasLedger;
+	return true;
+}
+
 bool CWebDavSync::ParseBackupFileName(const std::wstring& name, unsigned long long& sortKey, std::wstring& displayName)
 {
 	const std::wstring prefix = L"stock_backup_";
@@ -435,6 +674,27 @@ bool CWebDavSync::UploadBackup(const SettingData& settings, std::wstring& errorM
 	{
 		errorMsg = L"本地配置文件内容为空";
 		return false;
+	}
+
+	// 台账（BS 面板的建仓/加仓/减仓）存在独立的 stock_trades.db，不在 ini 内，
+	// 因此把 trades 表序列化成 JSON 段附加在 ini 之后一起上传；台账导出失败不阻断备份，
+	// 只是这一份备份里没有台账段（恢复端会跳过台账、仅还原配置）
+	std::string ledgerJson;
+	if (BuildTradeLedgerJson(ledgerJson))
+	{
+		// 与 ini 保持同样的 CRLF 行结束符，文本编辑器里读起来是一体的
+		fileData += "\r\n";
+		fileData += kTradeLedgerBeginMarker;
+		fileData += "\r\n";
+		fileData += ledgerJson;
+		fileData += "\r\n";
+		fileData += kTradeLedgerEndMarker;
+		fileData += "\r\n";
+	}
+	else
+	{
+		CCommon::WriteLog("[WebDAV] trade ledger export failed, backup without ledger section",
+			g_data.GetLogPath().c_str());
 	}
 
 	// 每次备份独立存档，以本地时间戳命名，不覆盖历史备份
@@ -703,17 +963,6 @@ bool CWebDavSync::DownloadBackup(const SettingData& settings, std::wstring& erro
 	if (!DownloadBackupData(settings, entries.front().fileName, data, errorMsg))
 		return false;
 
-	// 写入本地 INI 配置文件并重新加载（仅启动时后台自动同步路径使用）
-	std::wstring configPath = g_data.GetConfigPath();
-	std::ofstream outFile(configPath, std::ios::binary | std::ios::trunc);
-	if (!outFile.is_open())
-	{
-		errorMsg = L"无法写入本地配置文件: " + configPath;
-		return false;
-	}
-	outFile.write(data.data(), static_cast<std::streamsize>(data.size()));
-	outFile.close();
-
-	g_data.LoadConfig(L"");
-	return true;
+	// 写 ini + 重建台账 + 重载配置，与手动恢复共用同一入口（仅启动时后台自动同步路径使用）
+	return ApplyBackupPayload(data, errorMsg);
 }

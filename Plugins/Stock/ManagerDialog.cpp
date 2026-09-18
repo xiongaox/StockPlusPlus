@@ -4697,7 +4697,7 @@ void CManagerDialog::DrawWebDavPage(Gdiplus::Graphics& g, const CRect& contentRe
 	Gdiplus::SolidBrush tipBrush(Gdiplus::Color(255, 148, 163, 184));
 	int tipY = card2Top + g_data.DPI(140);
 
-	g.DrawString(L"提示：每次备份以时间戳独立存档（云端保留最近 30 份），恢复时可在历史备份列表中任选一份。", -1, &tipFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(rightLeft + g_data.DPI(18)), static_cast<Gdiplus::REAL>(tipY)), &tipBrush);
+	g.DrawString(L"提示：每次备份以时间戳独立存档（云端保留最近 30 份，含 BS 交易台账），恢复时任选一份。", -1, &tipFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(rightLeft + g_data.DPI(18)), static_cast<Gdiplus::REAL>(tipY)), &tipBrush);
 
 	// 上次同步时间放在卡片 2 标题行右端，避免与左侧提示文字挤在同一行
 	if (!m_data.m_webdav_last_sync_time.empty())
@@ -5108,6 +5108,7 @@ namespace
 	};
 
 	const wchar_t* kItems_0918[] = {
+		L"•  【修复】 WebDAV 云端备份与恢复补齐 BS 交易台账：台账存于独立的 stock_trades.db，此前不在备份文件内，换机恢复后台账整份丢失（只剩配置与自选股）。现备份文件在配置之后附带台账数据段，恢复时一并写回数据库；旧版备份不含该段则只还原配置并给出提示",
 		L"•  【优化】 关于页更新日志正文行距调整为 1.5 倍，长条目折行后阅读更舒展",
 		L"•  【优化】 首页顶栏缓存状态文案由「正在使用本地数据」精简为「本地缓存」"
 	};
@@ -7143,7 +7144,7 @@ LRESULT CManagerDialog::OnWebDavResult(WPARAM, LPARAM lParam)
 			g_data.SaveConfig();
 
 			Invalidate();
-			MessageBox(L"已成功将全部配置与自选股备份至 WebDAV 云端（本次以时间戳独立存档）！", L"备份成功", MB_ICONINFORMATION | MB_OK);
+			MessageBox(L"已成功将全部配置、自选股与 BS 交易台账备份至 WebDAV 云端（本次以时间戳独立存档）！", L"备份成功", MB_ICONINFORMATION | MB_OK);
 		}
 		else
 		{
@@ -7169,7 +7170,7 @@ LRESULT CManagerDialog::OnWebDavResult(WPARAM, LPARAM lParam)
 			if (dlg.DoModal(this) == IDOK && !dlg.m_selectedFile.empty())
 			{
 				CString confirmMsg;
-				confirmMsg.Format(_T("已选择备份：%s\n恢复将覆盖本地当前的股票列表与全部配置，是否继续？"),
+				confirmMsg.Format(_T("已选择备份：%s\n恢复将覆盖本地当前的股票列表、全部配置与 BS 交易台账，是否继续？"),
 					dlg.m_selectedName.c_str());
 				if (MessageBox(confirmMsg, L"确认恢复", MB_ICONQUESTION | MB_YESNO) != IDYES)
 					break;
@@ -7194,18 +7195,15 @@ LRESULT CManagerDialog::OnWebDavResult(WPARAM, LPARAM lParam)
 
 void CManagerDialog::ApplyWebDavRestore(const std::string& data, const std::wstring& backupName)
 {
-	// 将云端备份内容写入本地 INI 并重载配置
-	std::wstring configPath = g_data.GetConfigPath();
-	std::ofstream outFile(configPath, std::ios::binary | std::ios::trunc);
-	if (!outFile.is_open())
+	// 写 ini + 重建台账（备份含台账段时）+ 重载配置，与启动自动同步共用同一入口
+	std::wstring errMsg;
+	bool ledgerRestored = false;
+	if (!CWebDavSync::ApplyBackupPayload(data, errMsg, &ledgerRestored))
 	{
-		MessageBox((L"无法写入本地配置文件: " + configPath).c_str(), L"恢复失败", MB_ICONERROR | MB_OK);
+		MessageBox((L"恢复失败：\n" + errMsg).c_str(), L"恢复失败", MB_ICONERROR | MB_OK);
 		return;
 	}
-	outFile.write(data.data(), static_cast<std::streamsize>(data.size()));
-	outFile.close();
 
-	g_data.LoadConfig(L"");
 	Stock::Instance().SendStockInfoRequest();
 
 	m_data = g_data.m_setting_data;
@@ -7244,6 +7242,9 @@ void CManagerDialog::ApplyWebDavRestore(const std::string& data, const std::wstr
 		okMsg = L"已成功从 WebDAV 云端恢复配置并加载！";
 	else
 		okMsg.Format(_T("已成功恢复 %s 的云端备份并加载！"), backupName.c_str());
+	// 旧版备份（本次改版前上传）不含台账段，如实说明，避免用户以为台账丢了
+	if (!ledgerRestored)
+		okMsg += L"\n\n提示：该备份不含交易台账（BS 记录），本地台账保持原样未变动。";
 	MessageBox(okMsg, L"恢复成功", MB_ICONINFORMATION | MB_OK);
 }
 

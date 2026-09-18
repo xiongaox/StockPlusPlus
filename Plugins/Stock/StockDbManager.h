@@ -28,6 +28,19 @@ struct StockTradeRecord
 	double fee{ 0.0 };          // 手续费（默认 0；口径上不影响当日盈亏，仅台账留存）
 };
 
+// 台账整表备份用一条（含股票归属，供 WebDAV 云端备份携带）
+// id 不参与备份：恢复时按插入顺序重建，避免与本地既有主键冲突
+struct StockTradeBackupRecord
+{
+	std::wstring stockCode;
+	std::wstring stockName;
+	int tradeType{ 0 };         // 1=卖出，0=买入（trades.trade_type 口径）
+	std::wstring time;          // 成交时间 yyyy-MM-dd HH:mm
+	double price{ 0.0 };
+	double amount{ 0.0 };
+	double fee{ 0.0 };
+};
+
 // 股票数据库管理类
 // 负责所有 SQLite 数据库的 CRUD 操作，与业务逻辑、UI 解耦。
 // CDataManager 持有其一个实例，并将原数据库方法转发到此。
@@ -66,6 +79,13 @@ public:
 		double price, double amount, double fee);
 	// 按 id 删除一笔
 	bool DeleteTradeRecord(long long id);
+
+	// 台账整表导出（WebDAV 云端备份携带用）：读取全部股票的成交记录，
+	// 按 stock_code、trade_time、id 升序返回；表为空时返回空 vector 且返回 true
+	bool ExportAllTradeRecords(std::vector<StockTradeBackupRecord>& recordsOut);
+	// 台账整表恢复：单事务内清空 trades 表后按传入顺序重建（id 重新分配，total 按约定重算）。
+	// 仅在备份文件确实带有台账段时调用；records 为空视为「恢复为空台账」
+	bool ReplaceAllTradeRecords(const std::vector<StockTradeBackupRecord>& records);
 
 	// 交易明细（一档行情逐笔成交）
 	// 批量插入，写前会先按 (code, trade_date) 删除同日旧数据，保证幂等覆盖

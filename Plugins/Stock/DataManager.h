@@ -95,6 +95,7 @@ public:
 	void SaveConfig();
 	void ResetToDefault();
 	const std::wstring& GetConfigPath() const { return m_config_path; }
+	const std::wstring& GetLogPath() const { return m_log_path; }
 	const CString& StringRes(UINT id); // 根据资源id获取一个字符串资源
 	int DPI(int pixel);
 	int RDPI(int pixel);
@@ -200,6 +201,8 @@ public:
 	bool UpdateStockTrade(const std::wstring& code, const StockTradeRecord& record);
 	// 按 id 删除一笔
 	bool DeleteStockTrade(const std::wstring& code, long long id);
+	// 按股票缓存的台账失效（云端恢复等外部直接改写 trades 表后调用）
+	void InvalidateTradeCache() { m_trade_cache.clear(); }
 	// 台账类型标签：按历史持仓推导 建仓/加仓/减仓/清仓（首笔买入=建仓，其后买入=加仓）
 	static std::wstring GetTradeKindLabel(const std::vector<StockTradeRecord>& trades, size_t index);
 	// 当日盈亏修正值：今日各笔 Σ卖出量×(卖价−昨收) + Σ买入量×(昨收−买价)。昨收<=0 时返回 0
