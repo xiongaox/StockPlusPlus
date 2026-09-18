@@ -5107,7 +5107,7 @@ namespace
 		int count;
 	};
 
-	const wchar_t* kItems_0917_v209[] = {
+	const wchar_t* kItems_0917[] = {
 		L"•  【新增】 BS 交易台账：CC 旁新增 BS 按钮（仅持仓股显示），面板按时间列出成交流水并汇总买卖笔数，双击行增删改，改完即时写库",
 		L"•  【新增】 日K与分时图绘制 B/S 成交标记（蓝买橙卖圆角方标 + 引线自影线端点延伸），做T/减仓的买卖点直接画在K线上",
 		L"•  【优化】 成交记录改存数据库 trades 表，替代原先 ini 手填的「今日成交」文本框，支持任意日期回填历史建仓/加仓/减仓",
@@ -5179,7 +5179,7 @@ namespace
 	};
 
 	const AboutLogGroup kAboutLogGroups[] = {
-		{ L"2026-09-17 (v2.0.9)", kItems_0917_v209, _countof(kItems_0917_v209) },
+		{ L"2026-09-17", kItems_0917, _countof(kItems_0917) },
 		{ L"2026-09-16 (v2.0.8)", kItems_0916_v208, _countof(kItems_0916_v208) },
 		{ L"2026-09-12 (v2.0.7)", kItems_0912_v207, _countof(kItems_0912_v207) },
 		{ L"2026-09-12 (v2.0.6)", kItems_0912, _countof(kItems_0912) },
