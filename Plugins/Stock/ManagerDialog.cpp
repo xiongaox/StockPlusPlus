@@ -5192,6 +5192,88 @@ namespace
 
 }
 
+namespace
+{
+	// 断点是否不美观：劈开 ASCII 单词/数字、拆散「做T」「K线」这类汉字+拉丁混排，
+	// 或让标点落在行首行尾（中文避头尾）
+	bool IsBadLogBreak(const std::wstring& text, int pos)
+	{
+		if (pos <= 0 || pos >= static_cast<int>(text.size()))
+			return false;
+
+		const wchar_t prev = text[pos - 1];
+		const wchar_t next = text[pos];
+		const auto isWordChar = [](wchar_t c) {
+			return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z');
+			};
+		if (isWordChar(prev) && isWordChar(next))
+			return true;
+
+		// 汉字与拉丁字母/数字之间不主动断开：「做T」「K线」应整体换行
+		const auto isHan = [](wchar_t c) { return c >= 0x4E00 && c <= 0x9FFF; };
+		if ((isHan(prev) && isWordChar(next)) || (isWordChar(prev) && isHan(next)))
+			return true;
+
+		static const std::wstring kNoLineStart = L"，。、；：！？）〕】》」』’”%";
+		if (kNoLineStart.find(next) != std::wstring::npos)
+			return true;
+
+		static const std::wstring kNoLineEnd = L"（〔【《「『‘“";
+		return kNoLineEnd.find(prev) != std::wstring::npos;
+	}
+
+	// 日志逐条折行：二分找每行能容纳的最长前缀。GDI+ 没有行距接口（只能用它自带的
+	// 字体行距），所以行距 1.5 倍必须自己折行后逐行定位；量高与绘制共用这里的结果，
+	// 两者不会失配
+	void WrapAboutLogItem(Gdiplus::Graphics& g, const wchar_t* text, const Gdiplus::Font& font,
+		const Gdiplus::StringFormat& fmt, Gdiplus::REAL maxW, std::vector<std::wstring>& lines)
+	{
+		lines.clear();
+		if (text == nullptr || maxW <= 0.0f)
+			return;
+
+		const std::wstring whole(text);
+		const int len = static_cast<int>(whole.size());
+		// 量宽用的排版框必须远宽于待测前缀：否则前缀先被换行，量到的宽度恒小于 maxW
+		const Gdiplus::RectF measureRf(0.0f, 0.0f, 100000.0f, static_cast<Gdiplus::REAL>(g_data.DPI(4000)));
+		Gdiplus::RectF boundRf;
+
+		int start = 0;
+		while (start < len)
+		{
+			int lo = start + 1, hi = len, fit = start + 1;
+			while (lo <= hi)
+			{
+				const int mid = lo + (hi - lo) / 2;
+				const std::wstring cand = whole.substr(start, static_cast<size_t>(mid - start));
+				g.MeasureString(cand.c_str(), -1, &font, measureRf, &fmt, &boundRf);
+				if (boundRf.Width <= maxW)
+				{
+					fit = mid;
+					lo = mid + 1;
+				}
+				else
+				{
+					hi = mid - 1;
+				}
+			}
+
+			// 退到更自然的断点：宁可这行短一点，也不把单词劈开、不让标点落行首。
+			// 回退距离有界：中文禁则最多让 1 个字，词内断行最多让半个词；
+			// 若整段都是无分隔的 ASCII（如长 URL），退不动就保持硬断，避免退成一行一个字
+			int brk = fit;
+			const int minBrk = max(start + 1, fit - 12);
+			while (brk > minBrk && IsBadLogBreak(whole, brk))
+				--brk;
+			if (brk == minBrk && IsBadLogBreak(whole, brk))
+				brk = fit;
+
+			lines.push_back(whole.substr(start, static_cast<size_t>(brk - start)));
+			start = brk;
+		}
+	}
+}
+
 // 关于页更新日志区排版：折行高度逐条实测，滚动量高与绘制共用本函数，
 // draw=false 只走量高路径，保证 CalcPageContentHeight 与画出来的内容永远一致
 int CManagerDialog::LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, int rightX, int startY)
@@ -5202,13 +5284,17 @@ int CManagerDialog::LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, i
 	Gdiplus::SolidBrush logBrush(Gdiplus::Color(255, 203, 213, 225));
 	Gdiplus::Pen sepPen(Gdiplus::Color(255, 42, 47, 60), 1.0f);
 
-	// 必须用默认可换行的 StringFormat：GenericTypographic 自带 NoWrap，
-	// 拿它画长条目仍会退回单行排版、溢出内容区右缘被裁掉
+	// 折行由 WrapAboutLogItem 自己做，这里必须禁掉 GDI+ 的自动换行：
+	// 否则已折好的行会因亚像素取整被再换一次行，多出的行压到下一行上。
+	// 正文行距 1.5 倍也靠手动折行 + 逐行定位实现（GDI+ 无行距接口）
 	Gdiplus::StringFormat logFmt;
+	logFmt.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap | Gdiplus::StringFormatFlagsNoClip);
 	logFmt.SetTrimming(Gdiplus::StringTrimmingNone);
 
 	const Gdiplus::REAL itemW = static_cast<Gdiplus::REAL>(max(0, rightX - textX));
-	const Gdiplus::REAL measureH = static_cast<Gdiplus::REAL>(g_data.DPI(4000));
+	// 单行基准高按字体行高实测：由它推出 1.5 倍行距，字距变化不会失配
+	const int lineBaseH = static_cast<int>(logFont.GetHeight(&g) + 0.5f);
+	const int logLineStep = static_cast<int>(lineBaseH * 1.5 + 0.5);
 	int textY = startY;
 
 	for (size_t gIdx = 0; gIdx < _countof(kAboutLogGroups); ++gIdx)
@@ -5226,22 +5312,25 @@ int CManagerDialog::LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, i
 			g.DrawString(grp.date, -1, &dateFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &dateBrush);
 		textY += g_data.DPI(24);
 
+		std::vector<std::wstring> lines;
 		for (int it = 0; it < grp.count; ++it)
 		{
-			Gdiplus::RectF measureRf(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY), itemW, measureH);
-			Gdiplus::RectF boundRf;
-			g.MeasureString(grp.items[it], -1, &logFont, measureRf, &logFmt, &boundRf);
-			const int itemH = static_cast<int>(boundRf.Height + 0.5f);
+			WrapAboutLogItem(g, grp.items[it], logFont, logFmt, itemW, lines);
 
-			if (draw)
+			for (size_t li = 0; li < lines.size(); ++li)
 			{
-				// 绘制框比实测高度再高 6px（GDI+ 按框高裁行，避免末行被取整吃掉），
-				// 而行距只推进 itemH+4px，两者不会重叠
-				Gdiplus::RectF drawRf(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY), itemW,
-					static_cast<Gdiplus::REAL>(itemH + g_data.DPI(6)));
-				g.DrawString(grp.items[it], -1, &logFont, drawRf, &logFmt, &logBrush);
+				if (draw)
+				{
+					// 每行单独定位：行基线间距即 logLineStep（1.5 倍），
+					// 排版框取整行高即可，不再依赖 GDI+ 自己的行距
+					Gdiplus::PointF linePt(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY));
+					g.DrawString(lines[li].c_str(), -1, &logFont, linePt, &logFmt, &logBrush);
+				}
+				textY += logLineStep;
 			}
-			textY += itemH + g_data.DPI(4);
+
+			// 条目间距与行距同源：1.5 倍行距下的条目留白 = 基准行的半行高
+			textY += lineBaseH / 2;
 		}
 	}
 

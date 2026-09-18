@@ -208,7 +208,7 @@ void CTimelineChart::DrawTimelineHeader(CDC& memDC, const TimelineDrawContext& c
 		macdSignal = stockData->macdTrendSignal;
 
 	CString cacheStatus = (ctx.klineData && !ctx.klineData->empty()) || (ctx.timelinePoint && !ctx.timelinePoint->empty())
-		? _T("正在使用本地数据") : _T("正在获取数据");
+		? _T("本地缓存") : _T("正在获取数据");
 	// 顶栏右侧 4 个图标按钮（设置/收起分组/展开/关闭，各 RDPI(20)）+ 4px 间隙
 	const int buttonReserve = g_data.RDPI(84);
 	const int cacheRight = ctx.windowWidth - buttonReserve;
@@ -232,7 +232,9 @@ void CTimelineChart::DrawTimelineHeader(CDC& memDC, const TimelineDrawContext& c
 	CStatusBarPanel statusBarPanel;
 	statusBarPanel.DrawHeader(memDC, ctx.realtimeData, ctx.windowWidth, g_data.RDPI(26), macdSignal);
 
-	const CString cacheChoices[] = { cacheStatus, _T("本地缓存"), _T("缓存") };
+	// 空间不足时逐级退到更短文案；首个候选已是最短的「本地缓存」口径，
+	// 故后备只留「缓存」，不再重复收录同名字符串
+	const CString cacheChoices[] = { cacheStatus, _T("缓存") };
 	for (const auto& candidate : cacheChoices)
 	{
 		CSize cacheSize = memDC.GetTextExtent(candidate);
