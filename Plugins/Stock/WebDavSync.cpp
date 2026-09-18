@@ -109,6 +109,13 @@ namespace
 	}
 }
 
+// 云端文件名来自 PROPFIND 列表，下载/删除前统一校验：不允许空、带路径分隔符或上跳
+static bool IsValidRemoteFileName(const std::wstring& name)
+{
+	return !name.empty() && name.find(L'/') == std::wstring::npos &&
+		name.find(L'\\') == std::wstring::npos && name.find(L"..") == std::wstring::npos;
+}
+
 // 备份载荷的台账段标记：ini 全文之后另起一行，中间是单行 JSON，恢复时按标记切分。
 // 标记写成 ini 注释形态，旧版本插件读到含台账段的备份也只当普通注释，不会误解析
 const char* CWebDavSync::kTradeLedgerBeginMarker = "; --- StockPlusPlus trade ledger (do not edit) ---";
@@ -904,8 +911,7 @@ bool CWebDavSync::DownloadBackupData(const SettingData& settings, const std::wst
 		return false;
 	}
 	// 文件名来自远端目录列表，防御性校验：不允许再带路径分隔符
-	if (remoteFile.empty() || remoteFile.find(L'/') != std::wstring::npos ||
-		remoteFile.find(L'\\') != std::wstring::npos || remoteFile.find(L"..") != std::wstring::npos)
+	if (!IsValidRemoteFileName(remoteFile))
 	{
 		errorMsg = L"非法的云端备份文件名: " + remoteFile;
 		return false;
@@ -945,6 +951,49 @@ bool CWebDavSync::DownloadBackupData(const SettingData& settings, const std::wst
 		return false;
 	}
 	return true;
+}
+
+bool CWebDavSync::DeleteBackup(const SettingData& settings, const std::wstring& remoteFile, std::wstring& errorMsg)
+{
+	errorMsg.clear();
+	if (settings.m_webdav_url.empty())
+	{
+		errorMsg = L"WebDAV 服务器地址不能为空";
+		return false;
+	}
+	// 文件名来自远端目录列表，防御性校验：不允许再带路径分隔符
+	if (!IsValidRemoteFileName(remoteFile))
+	{
+		errorMsg = L"非法的云端备份文件名: " + remoteFile;
+		return false;
+	}
+
+	bool isHttps = false;
+	std::wstring host, basePath;
+	int port = 80;
+	if (!ParseURL(settings.m_webdav_url, isHttps, host, port, basePath))
+	{
+		errorMsg = L"无效的 WebDAV 服务器 URL 格式";
+		return false;
+	}
+
+	std::wstring targetPath = NormalizeRemotePath(basePath, settings.m_webdav_dir, remoteFile);
+
+	std::wstring err;
+	DWORD code = ExecuteDavRequest(settings, L"DELETE", targetPath, std::string(), nullptr, 10, err);
+	if (code == 0)
+	{
+		errorMsg = err.empty() ? L"无法连接 WebDAV 服务器" : err;
+		return false;
+	}
+	// 200/204 为常规成功；404 表示云端已无此文件，同样按成功处理（目标状态已达成）
+	if (code == 200 || code == 204 || code == 404)
+		return true;
+	if (code == 401 || code == 403)
+		errorMsg = L"认证失败(HTTP " + std::to_wstring(code) + L")，请检查用户名和应用密码";
+	else
+		errorMsg = L"删除失败，HTTP 状态码: " + std::to_wstring(code);
+	return false;
 }
 
 bool CWebDavSync::DownloadBackup(const SettingData& settings, std::wstring& errorMsg)

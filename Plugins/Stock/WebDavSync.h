@@ -33,6 +33,9 @@ public:
 	static bool DownloadBackupData(const SettingData& settings, const std::wstring& remoteFile,
 		std::string& dataOut, std::wstring& errorMsg);
 
+	// 删除云端指定的一份备份（用户在备份列表里手动清理）。404 视为已不存在，按成功处理
+	static bool DeleteBackup(const SettingData& settings, const std::wstring& remoteFile, std::wstring& errorMsg);
+
 	// 把下载到的备份载荷落地：拆出 ini 写到配置路径、拆出台账段重建 trades 表，最后重载配置。
 	// 旧版备份不含台账段时只恢复配置（不动本地台账）。手动恢复与启动自动同步共用此入口。
 	// ledgerRestored 非空时回填「本次是否恢复了台账」，供界面提示区分旧版备份
