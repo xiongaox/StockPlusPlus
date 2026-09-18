@@ -43,6 +43,35 @@ static std::string GetCacheCutoffDateString()
 	return GetLocalDateString(GetLocalMidnightTime(-7));
 }
 
+// 从分时数据里取出真实交易日（"yyyy-MM-dd"）：优先 fullTime（东财等源逐行带日期），
+// 其次用 time 里可能存在的完整日期；都取不到返回空串，由调用方回退系统日期
+static std::string ExtractTradeDate(const std::vector<STOCK::TimelinePoint>& data)
+{
+	auto isValidDate = [](const std::string& s) {
+		if (s.size() != 10 || s[4] != '-' || s[7] != '-') return false;
+		for (int i = 0; i < 10; ++i)
+		{
+			if (i == 4 || i == 7) continue;
+			if (s[i] < '0' || s[i] > '9') return false;
+		}
+		return true;
+	};
+	for (const auto& item : data)
+	{
+		if (item.fullTime.size() >= 10)
+		{
+			std::string d = item.fullTime.substr(0, 10);
+			if (isValidDate(d)) return d;
+		}
+		if (item.time.size() >= 10)
+		{
+			std::string d = item.time.substr(0, 10);
+			if (isValidDate(d)) return d;
+		}
+	}
+	return std::string();
+}
+
 static const char* GetKLineCacheTable(STOCK::Period period)
 {
 	switch (period)
@@ -580,6 +609,108 @@ bool CStockDbManager::SaveTradeRecord(const std::wstring& stockCode, const std::
 	return rc == SQLITE_DONE;
 }
 
+long long CStockDbManager::InsertTradeRecord(const std::wstring& stockCode, const std::wstring& stockName,
+	int tradeType, const std::wstring& time, double price, double amount, double fee)
+{
+	STOCKDB_LOCK();
+	if (m_db == nullptr) return 0;
+
+	// 合计（total）沿用 SaveTradeRecord 的符号约定：买入为负（含费），卖出为正（扣费）
+	const double totalAmount = price * amount;
+	const double total = (tradeType == 1) ? (totalAmount - fee) : -(totalAmount + fee);
+
+	const char* sql = "INSERT INTO trades(stock_code, stock_name, trade_type, trade_time, price, amount, "
+		"total_amount, fee, total) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);";
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return 0;
+	sqlite3_bind_text16(stmt, 1, stockCode.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_text16(stmt, 2, stockName.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int(stmt, 3, tradeType);
+	sqlite3_bind_text16(stmt, 4, time.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_double(stmt, 5, price);
+	sqlite3_bind_double(stmt, 6, amount);
+	sqlite3_bind_double(stmt, 7, totalAmount);
+	sqlite3_bind_double(stmt, 8, fee);
+	sqlite3_bind_double(stmt, 9, total);
+
+	const int rc = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+	if (rc != SQLITE_DONE) return 0;
+	return static_cast<long long>(sqlite3_last_insert_rowid(m_db));
+}
+
+std::vector<StockTradeRecord> CStockDbManager::LoadTradeRecords(const std::wstring& stockCode)
+{
+	STOCKDB_LOCK();
+	std::vector<StockTradeRecord> result;
+	if (m_db == nullptr) return result;
+
+	// trade_time 为 "yyyy-MM-dd HH:mm(:ss)" 定长文本，字典序即时间序
+	const char* sql = "SELECT id, trade_type, trade_time, price, amount, fee FROM trades "
+		"WHERE stock_code = ? ORDER BY trade_time ASC, id ASC;";
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return result;
+	sqlite3_bind_text16(stmt, 1, stockCode.c_str(), -1, SQLITE_TRANSIENT);
+
+	while (sqlite3_step(stmt) == SQLITE_ROW)
+	{
+		StockTradeRecord item;
+		item.id = static_cast<long long>(sqlite3_column_int64(stmt, 0));
+		item.isSell = sqlite3_column_int(stmt, 1) == 1;
+		const void* timeText = sqlite3_column_text16(stmt, 2);
+		item.time = timeText ? std::wstring(static_cast<const wchar_t*>(timeText)) : L"";
+		item.price = sqlite3_column_double(stmt, 3);
+		item.amount = sqlite3_column_double(stmt, 4);
+		item.fee = sqlite3_column_double(stmt, 5);
+		result.push_back(std::move(item));
+	}
+	sqlite3_finalize(stmt);
+	return result;
+}
+
+bool CStockDbManager::UpdateTradeRecord(long long id, int tradeType, const std::wstring& time,
+	double price, double amount, double fee)
+{
+	STOCKDB_LOCK();
+	if (m_db == nullptr) return false;
+
+	// 合计（total）沿用 SaveTradeRecord 的符号约定：买入为负（含费），卖出为正（扣费）
+	const double totalAmount = price * amount;
+	const double total = (tradeType == 1) ? (totalAmount - fee) : -(totalAmount + fee);
+
+	const char* sql = "UPDATE trades SET trade_type=?, trade_time=?, price=?, amount=?, "
+		"total_amount=?, fee=?, total=? WHERE id=?;";
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+	sqlite3_bind_int(stmt, 1, tradeType);
+	sqlite3_bind_text16(stmt, 2, time.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_double(stmt, 3, price);
+	sqlite3_bind_double(stmt, 4, amount);
+	sqlite3_bind_double(stmt, 5, totalAmount);
+	sqlite3_bind_double(stmt, 6, fee);
+	sqlite3_bind_double(stmt, 7, total);
+	sqlite3_bind_int64(stmt, 8, static_cast<sqlite3_int64>(id));
+
+	const int rc = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+	return rc == SQLITE_DONE;
+}
+
+bool CStockDbManager::DeleteTradeRecord(long long id)
+{
+	STOCKDB_LOCK();
+	if (m_db == nullptr) return false;
+
+	const char* sql = "DELETE FROM trades WHERE id=?;";
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+	sqlite3_bind_int64(stmt, 1, static_cast<sqlite3_int64>(id));
+
+	const int rc = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+	return rc == SQLITE_DONE;
+}
+
 bool CStockDbManager::SaveInnerOuterSnapshot(const std::wstring& stockCode, time_t timestamp, STOCK::Volume innerVolume, STOCK::Volume outerVolume)
 {
 	STOCKDB_LOCK();
@@ -640,7 +771,11 @@ bool CStockDbManager::SaveTimelineCache(const std::wstring& stockCode, const std
 	bool isSecid = CCommon::IsEmSecidCode(stockCode);
 	bool isHK = (stockCode.find(kHK) == 0);
 	bool isUS = CCommon::IsUSStockCode(stockCode);
-	std::string tradeDate = GetTodayDateString();
+	// 交易日必须取自数据本身（fullTime 形如 "2026-09-17 09:30"），不能用写入时刻的系统日期：
+	// 凌晨/盘前拉取时接口返回的仍是上一交易日的分时，用系统日期会把同一天数据重复写进两天
+	std::string dataDate = ExtractTradeDate(data);
+	const std::string fallbackDate = GetTodayDateString();
+	const std::string tradeDate = dataDate.empty() ? fallbackDate : dataDate;
 	time_t now = time(nullptr);
 	bool ok = true;
 	for (const auto& item : data)

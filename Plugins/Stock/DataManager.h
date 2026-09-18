@@ -99,8 +99,13 @@ public:
 	int DPI(int pixel);
 	int RDPI(int pixel);
 	int GetDpi() const { return m_dpi; }
+	// 重新读取系统 DPI（跨显示器拖动 / 系统缩放调整后调用）。
+	// 返回 true 表示 DPI 变了，调用方需重建字体与控件并重绘
+	bool RefreshDpi();
 	// 记录主机（TrafficMonitor）选择的显示字体，供 StockFont 派生字体按主机字号等比缩放
 	void SetHostFont(HFONT hFont);
+	// 由主机 LOGFONT 与当前 DPI 重算派生字体缩放比例（SetHostFont / RefreshDpi 共用）
+	void RecalcFontScale();
 	bool HasHostFont() const { return m_has_host_font; }
 	const LOGFONT& GetHostLogFont() const { return m_host_logfont; }
 	// 主机字号相对96DPI下9pt基准的缩放百分比（100=不缩放）
@@ -185,6 +190,25 @@ public:
 	std::wstring GetBuyDate(const std::wstring& code);
 	void SetPosition(const std::wstring& code, double cost, double count, const std::wstring& buy_date = L"");
 
+	// ── 交易台账（人工录入的建仓/加仓/减仓；当日盈亏修正与日K B/S 标记的数据源）──
+	// 读取该股票全部成交（时间升序）；内部按股票缓存，写操作后自动失效
+	std::vector<StockTradeRecord> GetStockTrades(const std::wstring& code);
+	// 新增一笔，成功返回新记录 id（0 表示失败）
+	long long AddStockTrade(const std::wstring& code, bool is_sell, const std::wstring& time,
+		double price, double amount, double fee = 0.0);
+	// 按 id 更新一笔
+	bool UpdateStockTrade(const std::wstring& code, const StockTradeRecord& record);
+	// 按 id 删除一笔
+	bool DeleteStockTrade(const std::wstring& code, long long id);
+	// 台账类型标签：按历史持仓推导 建仓/加仓/减仓/清仓（首笔买入=建仓，其后买入=加仓）
+	static std::wstring GetTradeKindLabel(const std::vector<StockTradeRecord>& trades, size_t index);
+	// 当日盈亏修正值：今日各笔 Σ卖出量×(卖价−昨收) + Σ买入量×(昨收−买价)。昨收<=0 时返回 0
+	// 该值与现价无关，盘中恒定；口径与券商「当日参考盈亏」一致（手续费不计）
+	double GetTodayTradeAdjust(const std::wstring& code, double prev_close);
+	// 还原昨收持股数：填写持股数 + 今日卖出量 − 今日买入量（今日无成交时即填写的持股数）
+	// 用作“当日盈亏%”的分母（昨收市值），与券商口径一致
+	double GetYesterdayHoldCount(const std::wstring& code);
+
 	// 状态栏展示设置
 	bool GetShowInStatusBar(const std::wstring& code);
 	void SetShowInStatusBar(const std::wstring& code, bool show);
@@ -268,6 +292,9 @@ private:
 
 	// 持仓配置映射表: code -> (cost_price, holding_count, buy_date)
 	std::map<std::wstring, std::tuple<double, double, std::wstring>> m_stock_positions;
+
+	// 交易台账缓存: code -> 台账记录（惰性加载，写操作后失效重载）
+	std::map<std::wstring, std::vector<StockTradeRecord>> m_trade_cache;
 
 	// 状态栏展示映射表: code -> show_in_statusbar
 	std::map<std::wstring, bool> m_stock_statusbar;

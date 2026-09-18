@@ -405,8 +405,15 @@ void CStockFetchThread::SetFocusStockId(const std::wstring& stockId)
 	if (changed)
 	{
 		m_cv.notify_one();
-		// 使用专用的 PostFocusTask，确保日K线和快照在图表线程中优先执行
+		// 使用专用的 PostFocusTask，确保日K线和快照在图表线程中优先执行。
+		// 每个网络请求前都检查本任务是否已过期：m_focus_tasks.clear() 只能丢弃【尚未开始】
+		// 的任务，对【正在执行】的任务无能为力。用户连续切股（切组后点击）时，旧任务若不
+		// 自行退出，新股票就得等它把 4~5 个请求（含超时重试，最坏可达数十秒）全部跑完。
 		PostFocusTask([stockId]() {
+			auto stillFocused = [&stockId]() {
+				return CStockFetchThread::Instance().GetFocusStockId() == stockId;
+			};
+
 			// 东财 secid（118.* / 116.* / 101.* 等）不在腾讯/新浪实时接口中，
 			// 必须首屏直接走 stock/get，否则 K线已到而标题/现价长期为空。
 			if (CCommon::IsEmSecidCode(stockId))
@@ -422,9 +429,16 @@ void CStockFetchThread::SetFocusStockId(const std::wstring& stockId)
 					g_data.ApplyRealtimeData(rtOut, rtResp);
 			}
 
+			if (!stillFocused()) return;
 			CStockFetchThread::Instance().FetchDayKLine(stockId, 750);
+
+			if (!stillFocused()) return;
 			CStockFetchThread::Instance().FetchWeekKLine(stockId, 750);
+
+			if (!stillFocused()) return;
 			CStockFetchThread::Instance().FetchMonthKLine(stockId, 750);
+
+			if (!stillFocused()) return;
 			if (CCommon::IsFundCode(stockId))
 				CStockFetchThread::Instance().FetchFundIOPV(stockId);
 		});

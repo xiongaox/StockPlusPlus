@@ -52,6 +52,21 @@ namespace
 	const int MA_ADDBTN_W = 84;  // 卡片2「添加周期」按钮宽
 	const int MA_PRESET_MAX = 5; // 均线周期上限
 	const int kMaPresetDays[] = { 5, 10, 20, 30, 60, 120, 250 }; // 快捷添加候选周期
+
+	// ===== 关于页布局常量 =====
+	// 页面结构：顶部固定信息卡（左＝名称 + 版本作者行，右＝更新状态文字 + 「检查更新」按钮的
+	// 上下结构）→ 下方独立滚动的更新日志。DrawAboutPage / MeasureAboutPageHeight /
+	// UpdateControlsLayout / CalcAboutUpdateBtnRect 全部引用这里，避免多处几何漂移。
+	const int ABOUT_CARD_H = 78;      // 信息卡高（须容纳右侧「状态 16 + 间隔 6 + 按钮 28」两行）
+	const int ABOUT_CARD_PAD = 14;    // 卡片上下内边距
+	const int ABOUT_GAP = 10;         // 信息卡与日志区之间的间距
+	const int ABOUT_LOG_PAD = 22;     // 日志区内容上/左/右内边距
+	const int ABOUT_STATUS_H = 16;    // 状态文字行高
+	const int ABOUT_STATUS_GAP = 6;   // 状态文字与按钮之间的间距
+	// 状态文案须与按钮等宽区间内可容纳（约 108px），这样「文字在按钮正上方居中」成立；
+	// 文案比按钮宽时会被边界收口、居中失效，那种偏移比右对齐更别扭
+	const int ABOUT_BTN_W = 108;      // 「检查更新」按钮宽
+	const int ABOUT_BTN_H = 28;       // 「检查更新」按钮高
 }
 
 // ===== 云端备份异步操作 =====
@@ -71,7 +86,9 @@ namespace
 	const UINT WM_APP_WEBDAV_RESULT = WM_APP + 130;
 	const UINT WM_APP_API_PROBE_FINISHED = WM_APP + 131;
 	const UINT WM_APP_SEARCH_RESULT_READY = WM_APP + 132;
+	const UINT WM_APP_UPDATE_CHECK_FINISHED = WM_APP + 133;
 	const UINT IDC_API_TEST_BTN = 1197;
+	const UINT IDC_ABOUT_UPDATE_BTN = 1200;   // 1198/1199 已被分组排序/删除分组占用
 
 	// 分组管理三个列表的「阈值提醒」列索引（7 列布局：交易所/代码/名称/阈值提醒/...）
 	const int ALERT_PERCENT_COLUMN = 3;
@@ -1010,6 +1027,9 @@ public:
 		int editInnerLeft = editBorderLeft + g_data.DPI(6);
 		int editInnerRight = cr.right - marginX - g_data.DPI(6);
 
+		// 持股数输入框
+		int countY = costY + editH + g_data.DPI(12);
+
 		m_cost_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
 			CRect(editInnerLeft, costY + editOffset, editInnerRight, costY + editOffset + editBoxH), this, 1001);
 		m_cost_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
@@ -1024,7 +1044,6 @@ public:
 		m_cost_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"输入成本价(元)");
 
 		// 持股数输入框
-		int countY = costY + editH + g_data.DPI(12);
 		m_count_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
 			CRect(editInnerLeft, countY + editOffset, editInnerRight, countY + editOffset + editBoxH), this, 1002);
 		m_count_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
@@ -1983,8 +2002,10 @@ BEGIN_MESSAGE_MAP(CManagerDialog, CDialog)
 	ON_BN_CLICKED(IDC_WEBDAV_AUTO_BACKUP_CHECK, &CManagerDialog::OnBnClickedWebDavAutoBackupCheck)
 	ON_MESSAGE(WM_APP_WEBDAV_RESULT, &CManagerDialog::OnWebDavResult)
 	ON_BN_CLICKED(IDC_API_TEST_BTN, &CManagerDialog::OnBnClickedApiTestBtn)
+	ON_BN_CLICKED(IDC_ABOUT_UPDATE_BTN, &CManagerDialog::OnBnClickedUpdateCheckBtn)
 	ON_MESSAGE(WM_APP_API_PROBE_FINISHED, &CManagerDialog::OnApiProbeFinished)
 	ON_MESSAGE(WM_APP_SEARCH_RESULT_READY, &CManagerDialog::OnSearchResultReady)
+	ON_MESSAGE(WM_APP_UPDATE_CHECK_FINISHED, &CManagerDialog::OnUpdateCheckFinished)
 
 	// 列表行自绘（交替行底色/选中高亮）
 	ON_NOTIFY(NM_CUSTOMDRAW, IDC_MGR_LIST, &CManagerDialog::OnListCustomDraw)
@@ -2056,17 +2077,7 @@ BOOL CManagerDialog::OnInitDialog()
 	m_menu_width = g_data.DPI(140);
 
 	// 创建与走势图一致的微软雅黑字阶体系 (字号升级，清晰易读)
-	m_font.CreateFont(-g_data.RDPI(13), 0, 0, 0, FW_NORMAL, 0, 0, 0,
-		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
-
-	m_font_bold.CreateFont(-g_data.RDPI(13), 0, 0, 0, FW_BOLD, 0, 0, 0,
-		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
-
-	m_font_title.CreateFont(-g_data.RDPI(16), 0, 0, 0, FW_BOLD, 0, 0, 0,
-		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
+	CreateUiFonts();
 
 	// 全局应用清晰字体
 	EnumChildWindows(m_hWnd, [](HWND hWnd, LPARAM lParam) -> BOOL {
@@ -2118,7 +2129,7 @@ BOOL CManagerDialog::OnInitDialog()
 		IDC_MGR_ADD_BTN, IDC_MGR_EDIT_BTN, IDC_MGR_DEL_BTN, IDC_MGR_MOVE_UP_BTN, IDC_MGR_MOVE_DOWN_BTN,
 		IDC_MA_ADD_BTN,
 		IDC_WEBDAV_TEST_BTN, IDC_WEBDAV_UPLOAD_BTN, IDC_WEBDAV_DOWNLOAD_BTN,
-		1197, 1198, 1199
+		1197, 1198, 1199, IDC_ABOUT_UPDATE_BTN
 	};
 	for (int id : ownerDrawBtnIds)
 	{
@@ -2147,6 +2158,10 @@ BOOL CManagerDialog::OnInitDialog()
 	// 接口检测页右上角「立即重新检测」入口
 	m_api_test_btn.Create(_T("立即重新检测"), WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, 1197);
 	m_api_test_btn.SetFont(&m_font);
+
+	// 关于页右上角「检查更新」入口
+	m_about_update_btn.Create(_T("检查更新"), WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_ABOUT_UPDATE_BTN);
+	m_about_update_btn.SetFont(&m_font);
 
 	m_search_dropdown.CreatePopup(this);
 
@@ -2421,7 +2436,8 @@ void CManagerDialog::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 		// ===== 普通按钮：与浮动窗一致的扁平暗色样式（直角 + 细边框 + 悬停/按下反馈） =====
 		bool pressedState = (lpDrawItemStruct->itemState & ODS_SELECTED) != 0;
 		bool hot = (lpDrawItemStruct->itemState & ODS_HOTLIGHT) != 0;
-			DrawFlatButton(dc, r, text, IsPrimaryBtn(nID), IsDestructiveBtn(nID), hot, pressedState);
+		bool disabled = (lpDrawItemStruct->itemState & ODS_DISABLED) != 0;
+		DrawFlatButton(dc, r, text, IsPrimaryBtn(nID), IsDestructiveBtn(nID), hot, pressedState, disabled);
 
 		dc.Detach();
 		return;
@@ -2714,9 +2730,7 @@ bool CManagerDialog::InScrollContent(CPoint point)
 // 钳制滚动偏移到 [0, maxScroll] 并联动原生控件布局与重绘
 void CManagerDialog::SetPageScroll(int scrollY)
 {
-	CRect contentRect;
-	GetScrollContentRect(contentRect);
-	const int maxScroll = max(0, CalcPageContentHeight() - contentRect.Height());
+	const int maxScroll = max(0, CalcPageContentHeight() - ScrollViewportHeight());
 	const int v = max(0, min(scrollY, maxScroll));
 	if (v == m_page_scroll_y)
 		return;
@@ -2849,6 +2863,80 @@ void CManagerDialog::ApplyOpacity(int opacityPercent)
 
 	// 3. 同步写回共享配置
 	g_data.m_setting_data.m_window_opacity = pct;
+}
+
+// 按当前 DPI 创建三档界面字体。初始化与 DPI 变更刷新共用，保证字号口径只有一处
+void CManagerDialog::CreateUiFonts()
+{
+	// 创建与走势图一致的微软雅黑字阶体系 (字号升级，清晰易读)
+	m_font.CreateFont(-g_data.RDPI(13), 0, 0, 0, FW_NORMAL, 0, 0, 0,
+		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
+
+	m_font_bold.CreateFont(-g_data.RDPI(13), 0, 0, 0, FW_BOLD, 0, 0, 0,
+		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
+
+	m_font_title.CreateFont(-g_data.RDPI(16), 0, 0, 0, FW_BOLD, 0, 0, 0,
+		DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+		DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, _T("微软雅黑"));
+}
+
+// 宿主 DPI 变更：重建字体、刷新子控件字体并整体重排。
+// CFont::CreateFont 会先释放旧 HFONT，而子控件仍持着旧句柄，
+// 因此重建后必须重新 WM_SETFONT，否则控件会用到已销毁的字体
+void CManagerDialog::OnHostDpiChanged()
+{
+	CreateUiFonts();
+
+	m_menu_width = g_data.DPI(140);
+
+	// 模态窗口的最小尺寸按 DPI 派生，同样要跟着更新（内嵌模式的尺寸由宿主决定，不设）
+	if (!m_as_child)
+	{
+		m_min_size.cx = g_data.DPI(720);
+		m_min_size.cy = g_data.DPI(640);
+	}
+
+	const HFONT hFont = static_cast<HFONT>(m_font.GetSafeHandle());
+	if (hFont != nullptr)
+	{
+		EnumChildWindows(m_hWnd, [](HWND hWnd, LPARAM lParam) -> BOOL {
+			::SendMessage(hWnd, WM_SETFONT, lParam, TRUE);
+			return TRUE;
+		}, reinterpret_cast<LPARAM>(hFont));
+	}
+
+	UpdateControlsLayout();
+	Invalidate();
+}
+
+// 关于页几何（内容区坐标系）：顶部固定信息卡 + 其下独立滚动的日志视口。
+// 状态文字与「检查更新」按钮位于信息卡内右侧（上下结构），因此卡片高度必须容下这两行。
+// 绘制、量高与控件摆放全部走这里，高度改动只需动 ABOUT_* 常量。
+void CManagerDialog::GetAboutLayout(CRect& cardRect, CRect& logViewport) const
+{
+	CRect contentRect;
+	GetScrollContentRect(contentRect);
+
+	cardRect = CRect(contentRect.left, contentRect.top, contentRect.right, contentRect.top + g_data.DPI(ABOUT_CARD_H));
+
+	const int logTop = cardRect.bottom + g_data.DPI(ABOUT_GAP);
+	logViewport = CRect(contentRect.left, logTop, contentRect.right, max(logTop, contentRect.bottom));
+}
+
+// 关于页「检查更新」按钮矩形：位于信息卡内右侧，状态文字紧贴其上方，两者共用同一右缘
+CRect CManagerDialog::CalcAboutUpdateBtnRect() const
+{
+	CRect cardRect, logViewport;
+	GetAboutLayout(cardRect, logViewport);
+
+	const int w = g_data.DPI(ABOUT_BTN_W);
+	const int h = g_data.DPI(ABOUT_BTN_H);
+	const int right = cardRect.right - g_data.DPI(ABOUT_LOG_PAD);
+	// 按钮贴卡片下边距，状态文字排在其上方：两行整体在卡片内垂直居中
+	const int top = cardRect.bottom - g_data.DPI(ABOUT_CARD_PAD) - h;
+	return CRect(right - w, top, right, top + h);
 }
 
 void CManagerDialog::UpdateControlsLayout()
@@ -3140,6 +3228,14 @@ void CManagerDialog::UpdateControlsLayout()
 		m_api_test_btn.ShowWindow(isApiHealth ? SW_SHOW : SW_HIDE);
 	}
 
+	// 「检查更新」按钮：关于页底部固定区右下角（不随日志滚动，其他页面隐藏）
+	bool isAbout = (m_current_page == PAGE_ABOUT);
+	if (m_about_update_btn.GetSafeHwnd())
+	{
+		m_about_update_btn.MoveWindow(CalcAboutUpdateBtnRect());
+		m_about_update_btn.ShowWindow(isAbout ? SW_SHOW : SW_HIDE);
+	}
+
 	// 方案B：隐藏式滚动 —— 原生控件随内容平移后，滚出内容可视区的自动隐藏
 	// （GDI+ 绘制由 OnPaint 的裁剪区收口；原生控件无法被父窗口裁剪，只能按可视带显隐）
 	{
@@ -3227,8 +3323,11 @@ void CManagerDialog::OnPaint()
 	CRect contentRect(m_menu_width + g_data.DPI(18), g_data.DPI(72), clientRect.Width() - g_data.DPI(18), clientRect.Height() - ContentBottomPad());
 
 	// 方案B：隐藏式滚动 —— 内容整体上移 m_page_scroll_y 并裁剪在内容可视区内（不绘制滚动条）
+	// 关于页例外：它自带三段式几何（顶部信息卡与底部操作区固定，只有日志视口内滚动），
+	// 不参与这里的整体位移，否则固定的两段会被一起推走
+	const bool aboutPage = (m_current_page == PAGE_ABOUT);
 	CRect drawRect = contentRect;
-	const bool scrolled = (m_page_scroll_y > 0) || (CalcPageContentHeight() > contentRect.Height());
+	const bool scrolled = !aboutPage && ((m_page_scroll_y > 0) || (CalcPageContentHeight() > contentRect.Height()));
 	if (scrolled)
 	{
 		drawRect.top = contentRect.top - m_page_scroll_y;
@@ -3261,7 +3360,7 @@ void CManagerDialog::OnPaint()
 		DrawApiHealthPage(g, drawRect);
 		break;
 	case PAGE_ABOUT:
-		DrawAboutPage(g, drawRect);
+		DrawAboutPage(g);
 		break;
 	default:
 		break;
@@ -4842,6 +4941,165 @@ LRESULT CManagerDialog::OnApiProbeFinished(WPARAM, LPARAM)
 
 namespace
 {
+	// 版本号比较：把 "2.0.10" 拆成数字段逐一比较，避免字符串比较把 2.0.9 > 2.0.10 判错
+	// 返回 true 表示 a 比 b 新
+	bool IsVersionNewer(const std::wstring& a, const std::wstring& b)
+	{
+		auto parse = [](const std::wstring& v, std::vector<int>& out) {
+			out.clear();
+			std::wstring cur;
+			for (wchar_t c : v)
+			{
+				if (c >= L'0' && c <= L'9')
+					cur.push_back(c);
+				else if (c == L'.')
+				{
+					out.push_back(cur.empty() ? 0 : _wtoi(cur.c_str()));
+					cur.clear();
+				}
+				else
+					break;   // 遇到 v 前缀或后缀（如 "v2.0.10"）停止
+			}
+			if (!cur.empty())
+				out.push_back(_wtoi(cur.c_str()));
+		};
+		std::vector<int> va, vb;
+		parse(a, va);
+		parse(b, vb);
+		const size_t n = max(va.size(), vb.size());
+		for (size_t i = 0; i < n; ++i)
+		{
+			const int x = (i < va.size()) ? va[i] : 0;
+			const int y = (i < vb.size()) ? vb[i] : 0;
+			if (x != y)
+				return x > y;
+		}
+		return false;
+	}
+
+	// 从 GitHub releases/latest 的 JSON 里取 tag_name 与 html_url
+	void ParseLatestReleaseJson(const std::string& json, std::wstring& tag, std::wstring& url)
+	{
+		auto extract = [&json](const char* key) -> std::string {
+			const std::string pat = std::string("\"") + key + "\"";
+			size_t k = json.find(pat);
+			if (k == std::string::npos) return std::string();
+			size_t colon = json.find(':', k + pat.size());
+			if (colon == std::string::npos) return std::string();
+			size_t q1 = json.find('"', colon + 1);
+			if (q1 == std::string::npos) return std::string();
+			size_t q2 = json.find('"', q1 + 1);
+			if (q2 == std::string::npos) return std::string();
+			return json.substr(q1 + 1, q2 - q1 - 1);
+		};
+		tag = CCommon::StrToUnicode(extract("tag_name").c_str(), true);
+		url = CCommon::StrToUnicode(extract("html_url").c_str(), true);
+	}
+}
+
+void CManagerDialog::OnBnClickedUpdateCheckBtn()
+{
+	// 查到新版本后按钮转为「前往下载」：此时点击是跳转下载页而不是再查一次
+	if (m_update_checking)
+		return;
+	if (!m_update_download_url.empty())
+	{
+		ShellExecute(nullptr, L"open", m_update_download_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+		return;
+	}
+
+	m_update_checking = true;
+	// 重新检查时先清空上一次结果：状态文字与它的点击区一起失效，避免「检查中…」期间
+	// 仍显示并允许点击旧版本的下载链接
+	m_update_status_text.clear();
+	m_update_download_url.clear();
+	m_update_latest_version.clear();
+	m_update_failed = false;
+	m_about_update_rect.SetRectEmpty();
+	Invalidate(FALSE);
+	if (m_about_update_btn.GetSafeHwnd())
+	{
+		m_about_update_btn.SetWindowText(L"检查中…");
+		m_about_update_btn.EnableWindow(FALSE);
+	}
+
+	HWND hWnd = m_hWnd;
+	std::thread([hWnd]() {
+		AFX_MANAGE_STATE(AfxGetStaticModuleState());
+		std::string resp;
+		std::wstring tag, url;
+		const bool ok = CCommon::GetURL(
+			L"https://api.github.com/repos/xiongaox/StockPlusPlus/releases/latest",
+			resp, true, L"StockPlusPlus-Plugin", nullptr, 0);
+		if (ok && !resp.empty())
+			ParseLatestReleaseJson(resp, tag, url);
+
+		if (::IsWindow(hWnd))
+		{
+			// 结果通过 PostMessage 回主线程；字符串用 new 传递，接收方负责 delete
+			auto* payload = new std::pair<std::wstring, std::wstring>(tag, url);
+			if (!::PostMessage(hWnd, WM_APP_UPDATE_CHECK_FINISHED, ok ? 1 : 0, reinterpret_cast<LPARAM>(payload)))
+				delete payload;   // 对话框已关闭或消息队列失效，结果无人接收
+		}
+	}).detach();
+}
+
+LRESULT CManagerDialog::OnUpdateCheckFinished(WPARAM wParam, LPARAM lParam)
+{
+	std::unique_ptr<std::pair<std::wstring, std::wstring>> payload(
+		reinterpret_cast<std::pair<std::wstring, std::wstring>*>(lParam));
+
+	m_update_checking = false;
+	// 按钮文案随结果切换：发现新版本时直接标成「前往下载」，点击动作由按钮承担，
+	// 状态文字只报结论（短文案才能在按钮正上方居中）
+	bool hasNewer = false;
+	if (wParam != 0 && payload && !payload->first.empty())
+	{
+		std::wstring tag = payload->first;
+		if (!tag.empty() && (tag[0] == L'v' || tag[0] == L'V'))
+			tag = tag.substr(1);
+		hasNewer = IsVersionNewer(tag, STOCK_VERSION_STR);
+	}
+	if (m_about_update_btn.GetSafeHwnd())
+	{
+		m_about_update_btn.SetWindowText(hasNewer ? L"前往下载" : L"检查更新");
+		m_about_update_btn.EnableWindow(TRUE);
+	}
+
+	const bool ok = (wParam != 0) && payload && !payload->first.empty();
+	m_update_failed = !ok;
+	if (!ok)
+	{
+		// 文案须与按钮等宽区间内可容纳（约 108px），保证在按钮正上方居中
+		m_update_status_text = L"检查失败，请重试";
+		m_update_latest_version.clear();
+		m_update_download_url.clear();
+	}
+	else
+	{
+		std::wstring tag = payload->first;
+		// 去掉可能的 "v" 前缀，便于与 STOCK_VERSION_STR 比较
+		if (!tag.empty() && (tag[0] == L'v' || tag[0] == L'V'))
+			tag = tag.substr(1);
+		m_update_latest_version = tag;
+		m_update_download_url = payload->second;
+		if (IsVersionNewer(tag, STOCK_VERSION_STR))
+		{
+			// 只报版本号：点击动作由下方按钮承担，文案再长会顶出按钮宽度、居中失效
+			m_update_status_text = L"发现新版本 v" + tag;
+		}
+		else
+		{
+			m_update_status_text = L"已是最新版本";
+			m_update_download_url.clear();
+		}
+	}
+	Invalidate(FALSE);
+	return 0;
+}
+
+namespace
+{
 	// 关于页更新日志：按版本分组，文案与 README 变更记录同源
 	struct AboutLogGroup {
 		const wchar_t* date;
@@ -4849,16 +5107,33 @@ namespace
 		int count;
 	};
 
+	const wchar_t* kItems_0918[] = {
+		L"•  【优化】 关于页更新日志正文行距调整为 1.5 倍，长条目折行后阅读更舒展",
+		L"•  【优化】 首页顶栏缓存状态文案由「正在使用本地数据」精简为「本地缓存」"
+	};
+	const wchar_t* kItems_0917[] = {
+		L"•  【新增】 BS 交易台账：CC 旁新增 BS 按钮（仅持仓股显示），面板按时间列出成交流水并汇总买卖笔数，双击行增删改，改完即时写库",
+		L"•  【新增】 日K与分时图绘制 B/S 成交标记（蓝买橙卖圆角方标 + 引线自影线端点延伸），做T/减仓的买卖点直接画在K线上",
+		L"•  【优化】 成交记录改存数据库 trades 表，替代原先 ini 手填的「今日成交」文本框，支持任意日期回填历史建仓/加仓/减仓",
+		L"•  【优化】 成交录入弹窗排版重做：方角控件、标签左对齐、日期时间并排、删除按钮独立靠左，标题交易所前缀大写",
+		L"•  【修复】 修复连续切换股票时新股票 K 线加载缓慢：后台焦点任务在切换后立即退出，不再让新股票排队等待旧任务跑完",
+		L"•  【修复】 分时缓存交易日改用数据自身日期，修正凌晨拉取把上一交易日数据重复写进今天的问题",
+		L"•  【优化】 分时图去掉基金净值紫线；鼠标悬停卡片新增「均价」与「偏离」行（价格相对当日均价线的百分比）",
+		L"•  【新增】 关于页新增「检查更新」按钮：位于插件信息卡右侧，后台查询 GitHub 最新 Release，状态文字居中显示在按钮上方，发现新版本时按钮转为「前往下载」",
+		L"•  【优化】 关于页改为固定信息卡 + 独立滚动日志两段式：插件信息与「检查更新」按钮始终可见，更新日志再多也不挤占它们",
+		L"•  【修复】 新增 DPI 变更检测：跨显示器拖动或调整系统缩放后，悬浮窗与内嵌设置视图按新 DPI 重排，不再需要重启宿主"
+	};
 	const wchar_t* kItems_0916_v208[] = {
-		L"•  【新增】 K线族视图（日K/周K/月K）新增「区域」统计：周期行竞价按钮左侧新增区域开关，拖动框选后显示同花顺式区间卡片（区间涨幅/最高/最低/振幅 + 起止日期条 + ✕ 清除），左右边界手柄可逐柱微调；图表仍可平移，选区锚定柱子不随缩放/滚动丢失",
-		L"•  【修复】 修复运行中偶发闪退：崩溃点位于 SQLite 解析器，根因是 sqlite3 以 SQLITE_THREADSAFE=0 编译（内部无锁）而数据库连接被界面线程与后台抓取线程并发使用，现为数据库层全部方法加递归锁串行化访问",
-		L"•  【新增】 涨跌趋势成交额升级东财市场概况同款口径：盘中新增「较前一日同期」同分钟放量/缩量差额与幅度（幅度与主值同字号并排），预测全天改用昨日同分钟进度法，开市首分钟即出数，收盘后回落真实较昨日全天对比",
-		L"•  【修复】 分组管理「状态栏显示」列因阈值提醒列插入右移导致点击勾选/取消失效（自选股/持仓/自定义分组统一按常量列读写）；勾选即时落盘，双击勾选列不再叠加弹窗造成「确定后勾选丢失」错觉",
+		L"•  【优化】 关于页更新日志抽取统一排版/量高函数，页面滚动高度按日志实际内容自然高度计算，日志条目变多后不再被页面底部截断",
+		L"•  【新增】 K线族视图新增「区域」统计：拖动框选显示区间涨幅/最高/最低/振幅卡片，左右边界手柄可逐柱微调，选区锚定柱子不随缩放滚动丢失",
+		L"•  【修复】 修复运行中偶发闪退：sqlite3 以 SQLITE_THREADSAFE=0 编译而数据库被界面与后台线程并发访问，现为数据库层全部方法加递归锁串行化",
+		L"•  【新增】 涨跌趋势成交额升级东财市场概况同款口径：盘中新增「较前一日同期」同分钟放量/缩量差额与幅度，预测全天改用昨日同分钟进度法",
+		L"•  【修复】 分组管理「状态栏显示」列因阈值提醒列插入右移导致点击勾选失效；勾选即时落盘，双击勾选列不再叠加弹窗",
 		L"•  【优化】 持仓「成本价」列展示三位小数，与编辑弹窗口径一致",
 		L"•  【新增】 每日涨跌幅阈值提醒：分组管理新增「阈值提醒」列，双击暗色弹窗设置涨幅/跌幅阈值，当日首次达标经宿主托盘气泡提醒一次，跨日自动重置",
-		L"•  【新增】 悬浮窗销毁重建后完整恢复浏览状态（K线视图模式、指标、面板与行情中心页签全记忆）；分时图买卖点绘制信号名称小字；气泡页新增最强/最弱板块卡片，点击直达树图选区",
+		L"•  【新增】 悬浮窗销毁重建后完整恢复浏览状态；分时图买卖点绘制信号名称小字；气泡页新增最强/最弱板块卡片",
 		L"•  【新增】 行情中心顶栏新增手动刷新按钮，无视新鲜度与失败退避强制重拉当前页数据",
-		L"•  【修复】 昨收缺失时沿用最近一次有效昨收兜底涨跌幅与当日持仓收益，消除早间空白与橙色持平误色；指数成交额与行情快照按交易日严格区分，修正较昨日全天口径、午休预测与基金净值跨日错位"
+		L"•  【修复】 昨收缺失时沿用最近一次有效昨收兜底涨跌幅与当日持仓收益；指数成交额与行情快照按交易日严格区分，修正较昨日全天口径与基金净值跨日错位"
 	};
 	const wchar_t* kItems_0912_v207[] = {
 		L"•  【优化】 裁剪 SQLite 未使用模块与调试符号，大幅压缩 Stock.dll 二进制体积",
@@ -4908,6 +5183,8 @@ namespace
 	};
 
 	const AboutLogGroup kAboutLogGroups[] = {
+		{ L"2026-09-18", kItems_0918, _countof(kItems_0918) },
+		{ L"2026-09-17", kItems_0917, _countof(kItems_0917) },
 		{ L"2026-09-16 (v2.0.8)", kItems_0916_v208, _countof(kItems_0916_v208) },
 		{ L"2026-09-12 (v2.0.7)", kItems_0912_v207, _countof(kItems_0912_v207) },
 		{ L"2026-09-12 (v2.0.6)", kItems_0912, _countof(kItems_0912) },
@@ -4920,6 +5197,88 @@ namespace
 
 }
 
+namespace
+{
+	// 断点是否不美观：劈开 ASCII 单词/数字、拆散「做T」「K线」这类汉字+拉丁混排，
+	// 或让标点落在行首行尾（中文避头尾）
+	bool IsBadLogBreak(const std::wstring& text, int pos)
+	{
+		if (pos <= 0 || pos >= static_cast<int>(text.size()))
+			return false;
+
+		const wchar_t prev = text[pos - 1];
+		const wchar_t next = text[pos];
+		const auto isWordChar = [](wchar_t c) {
+			return (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z');
+			};
+		if (isWordChar(prev) && isWordChar(next))
+			return true;
+
+		// 汉字与拉丁字母/数字之间不主动断开：「做T」「K线」应整体换行
+		const auto isHan = [](wchar_t c) { return c >= 0x4E00 && c <= 0x9FFF; };
+		if ((isHan(prev) && isWordChar(next)) || (isWordChar(prev) && isHan(next)))
+			return true;
+
+		static const std::wstring kNoLineStart = L"，。、；：！？）〕】》」』’”%";
+		if (kNoLineStart.find(next) != std::wstring::npos)
+			return true;
+
+		static const std::wstring kNoLineEnd = L"（〔【《「『‘“";
+		return kNoLineEnd.find(prev) != std::wstring::npos;
+	}
+
+	// 日志逐条折行：二分找每行能容纳的最长前缀。GDI+ 没有行距接口（只能用它自带的
+	// 字体行距），所以行距 1.5 倍必须自己折行后逐行定位；量高与绘制共用这里的结果，
+	// 两者不会失配
+	void WrapAboutLogItem(Gdiplus::Graphics& g, const wchar_t* text, const Gdiplus::Font& font,
+		const Gdiplus::StringFormat& fmt, Gdiplus::REAL maxW, std::vector<std::wstring>& lines)
+	{
+		lines.clear();
+		if (text == nullptr || maxW <= 0.0f)
+			return;
+
+		const std::wstring whole(text);
+		const int len = static_cast<int>(whole.size());
+		// 量宽用的排版框必须远宽于待测前缀：否则前缀先被换行，量到的宽度恒小于 maxW
+		const Gdiplus::RectF measureRf(0.0f, 0.0f, 100000.0f, static_cast<Gdiplus::REAL>(g_data.DPI(4000)));
+		Gdiplus::RectF boundRf;
+
+		int start = 0;
+		while (start < len)
+		{
+			int lo = start + 1, hi = len, fit = start + 1;
+			while (lo <= hi)
+			{
+				const int mid = lo + (hi - lo) / 2;
+				const std::wstring cand = whole.substr(start, static_cast<size_t>(mid - start));
+				g.MeasureString(cand.c_str(), -1, &font, measureRf, &fmt, &boundRf);
+				if (boundRf.Width <= maxW)
+				{
+					fit = mid;
+					lo = mid + 1;
+				}
+				else
+				{
+					hi = mid - 1;
+				}
+			}
+
+			// 退到更自然的断点：宁可这行短一点，也不把单词劈开、不让标点落行首。
+			// 回退距离有界：中文禁则最多让 1 个字，词内断行最多让半个词；
+			// 若整段都是无分隔的 ASCII（如长 URL），退不动就保持硬断，避免退成一行一个字
+			int brk = fit;
+			const int minBrk = max(start + 1, fit - 12);
+			while (brk > minBrk && IsBadLogBreak(whole, brk))
+				--brk;
+			if (brk == minBrk && IsBadLogBreak(whole, brk))
+				brk = fit;
+
+			lines.push_back(whole.substr(start, static_cast<size_t>(brk - start)));
+			start = brk;
+		}
+	}
+}
+
 // 关于页更新日志区排版：折行高度逐条实测，滚动量高与绘制共用本函数，
 // draw=false 只走量高路径，保证 CalcPageContentHeight 与画出来的内容永远一致
 int CManagerDialog::LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, int rightX, int startY)
@@ -4930,13 +5289,17 @@ int CManagerDialog::LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, i
 	Gdiplus::SolidBrush logBrush(Gdiplus::Color(255, 203, 213, 225));
 	Gdiplus::Pen sepPen(Gdiplus::Color(255, 42, 47, 60), 1.0f);
 
-	// 必须用默认可换行的 StringFormat：GenericTypographic 自带 NoWrap，
-	// 拿它画长条目仍会退回单行排版、溢出内容区右缘被裁掉
+	// 折行由 WrapAboutLogItem 自己做，这里必须禁掉 GDI+ 的自动换行：
+	// 否则已折好的行会因亚像素取整被再换一次行，多出的行压到下一行上。
+	// 正文行距 1.5 倍也靠手动折行 + 逐行定位实现（GDI+ 无行距接口）
 	Gdiplus::StringFormat logFmt;
+	logFmt.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap | Gdiplus::StringFormatFlagsNoClip);
 	logFmt.SetTrimming(Gdiplus::StringTrimmingNone);
 
 	const Gdiplus::REAL itemW = static_cast<Gdiplus::REAL>(max(0, rightX - textX));
-	const Gdiplus::REAL measureH = static_cast<Gdiplus::REAL>(g_data.DPI(4000));
+	// 单行基准高按字体行高实测：由它推出 1.5 倍行距，字距变化不会失配
+	const int lineBaseH = static_cast<int>(logFont.GetHeight(&g) + 0.5f);
+	const int logLineStep = static_cast<int>(lineBaseH * 1.5 + 0.5);
 	int textY = startY;
 
 	for (size_t gIdx = 0; gIdx < _countof(kAboutLogGroups); ++gIdx)
@@ -4954,67 +5317,109 @@ int CManagerDialog::LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, i
 			g.DrawString(grp.date, -1, &dateFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &dateBrush);
 		textY += g_data.DPI(24);
 
+		std::vector<std::wstring> lines;
 		for (int it = 0; it < grp.count; ++it)
 		{
-			Gdiplus::RectF measureRf(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY), itemW, measureH);
-			Gdiplus::RectF boundRf;
-			g.MeasureString(grp.items[it], -1, &logFont, measureRf, &logFmt, &boundRf);
-			const int itemH = static_cast<int>(boundRf.Height + 0.5f);
+			WrapAboutLogItem(g, grp.items[it], logFont, logFmt, itemW, lines);
 
-			if (draw)
+			for (size_t li = 0; li < lines.size(); ++li)
 			{
-				// 绘制框比实测高度再高 6px（GDI+ 按框高裁行，避免末行被取整吃掉），
-				// 而行距只推进 itemH+4px，两者不会重叠
-				Gdiplus::RectF drawRf(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY), itemW,
-					static_cast<Gdiplus::REAL>(itemH + g_data.DPI(6)));
-				g.DrawString(grp.items[it], -1, &logFont, drawRf, &logFmt, &logBrush);
+				if (draw)
+				{
+					// 每行单独定位：行基线间距即 logLineStep（1.5 倍），
+					// 排版框取整行高即可，不再依赖 GDI+ 自己的行距
+					Gdiplus::PointF linePt(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY));
+					g.DrawString(lines[li].c_str(), -1, &logFont, linePt, &logFmt, &logBrush);
+				}
+				textY += logLineStep;
 			}
-			textY += itemH + g_data.DPI(4);
+
+			// 条目间距与行距同源：1.5 倍行距下的条目留白 = 基准行的半行高
+			textY += lineBaseH / 2;
 		}
 	}
 
 	return textY + g_data.DPI(24);
 }
 
-// 关于页自然总高：日志区起点与 DrawAboutPage 对齐（22 名称 + 28 版本行 + 24 间隔）
+// 关于页滚动内容自然总高：日志内容高 + 视口内上边距（顶部信息卡与底部固定区都不参与滚动）。
+// 必须把上边距算进来：绘制起点是「视口顶 + 上边距 - 滚动量」，若只按内容高算 maxScroll，
+// 滚到底时最后一行会被视口下缘裁掉上边距那么多（LayoutAboutLog 末尾的 24px 则充当底部留白）
 int CManagerDialog::MeasureAboutPageHeight()
 {
-	CRect clientRect;
-	GetClientRect(clientRect);
-	const int textX = m_menu_width + g_data.DPI(18) + g_data.DPI(24);
-	const int rightX = clientRect.Width() - g_data.DPI(18) - g_data.DPI(24);
+	CRect cardRect, logViewport;
+	GetAboutLayout(cardRect, logViewport);
+
+	const int textX = logViewport.left + g_data.DPI(ABOUT_LOG_PAD);
+	const int rightX = logViewport.right - g_data.DPI(ABOUT_LOG_PAD);
 
 	CClientDC dc(this);
 	Gdiplus::Graphics g(dc.GetSafeHdc());
 	g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
-	return LayoutAboutLog(g, false, textX, rightX, g_data.DPI(74));
+	// 起点传 0：本函数只回答「日志内容有多高」，与它被摆在哪无关
+	return g_data.DPI(ABOUT_LOG_PAD) + max(0, LayoutAboutLog(g, false, textX, rightX, 0));
 }
 
-void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRect)
+// 当前页滚动可视区高度：关于页只有日志区滚动（顶部信息卡固定），
+// 其余页为整个内容区。maxScroll 必须按这个高度算，否则关于页滚动行程会偏大
+int CManagerDialog::ScrollViewportHeight() const
 {
-	int panelH = max(contentRect.Height(), CalcPageContentHeight());
-	Gdiplus::RectF panelRf(static_cast<Gdiplus::REAL>(contentRect.left), static_cast<Gdiplus::REAL>(contentRect.top), static_cast<Gdiplus::REAL>(contentRect.Width()), static_cast<Gdiplus::REAL>(panelH));
-	Gdiplus::SolidBrush panelBg(Gdiplus::Color(255, 24, 27, 34));
-	g.FillRectangle(&panelBg, panelRf);
-	Gdiplus::Pen panelPen(Gdiplus::Color(255, 38, 42, 54), 1.0f);
-	g.DrawRectangle(&panelPen, panelRf);
+	if (m_current_page == PAGE_ABOUT)
+	{
+		CRect cardRect, logViewport;
+		GetAboutLayout(cardRect, logViewport);
+		return logViewport.Height();
+	}
 
-	int textX = contentRect.left + g_data.DPI(24);
-	int textY = contentRect.top + g_data.DPI(22);
-	int rightX = contentRect.right - g_data.DPI(24);
+	CRect contentRect;
+	GetScrollContentRect(contentRect);
+	return contentRect.Height();
+}
+
+void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
+{
+	CRect cardRect, logViewport;
+	GetAboutLayout(cardRect, logViewport);
+
+	const int pad = g_data.DPI(ABOUT_LOG_PAD);
+	Gdiplus::SolidBrush panelBg(Gdiplus::Color(255, 24, 27, 34));
+	Gdiplus::Pen panelPen(Gdiplus::Color(255, 38, 42, 54), 1.0f);
+
+	// ===== 信息卡：左侧名称/版本行，右侧更新状态 + 「检查更新」按钮（上下结构） =====
+	Gdiplus::RectF cardRf(static_cast<Gdiplus::REAL>(cardRect.left), static_cast<Gdiplus::REAL>(cardRect.top),
+		static_cast<Gdiplus::REAL>(cardRect.Width()), static_cast<Gdiplus::REAL>(cardRect.Height()));
+	g.FillRectangle(&panelBg, cardRf);
+	g.DrawRectangle(&panelPen, cardRf);
+
+	const CRect btnRect = CalcAboutUpdateBtnRect();
+	const int textX = cardRect.left + pad;
 
 	Gdiplus::Font nameFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(15)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-	Gdiplus::SolidBrush nameBrush(Gdiplus::Color(255, 241, 245, 249));
-	g.DrawString(L"TrafficMonitor 股票行情插件 (Stock Plugin)", -1, &nameFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &nameBrush);
-
-	textY += g_data.DPI(28);
 	Gdiplus::Font verFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+
+	// 左列两行（名称 + 版本行）在卡片内垂直居中：按字体实际行高算块高后再定位，
+	// 固定行距会让整块贴在顶部（卡片下半留白明显大于上半）
+	const int verRowY = g_data.DPI(6);   // 名称行与版本行之间的行距
+	const int nameRowH = static_cast<int>(nameFont.GetHeight(&g) + 0.5f);
+	const int verRowH = static_cast<int>(verFont.GetHeight(&g) + 0.5f);
+	const int leftBlockH = nameRowH + verRowY + verRowH;
+	int textY = cardRect.top + max(g_data.DPI(ABOUT_CARD_PAD), (cardRect.Height() - leftBlockH) / 2);
+
+	Gdiplus::SolidBrush nameBrush(Gdiplus::Color(255, 241, 245, 249));
+	const wchar_t* partName = L"TrafficMonitor 股票行情插件 (Stock Plugin)";
+	g.DrawString(partName, -1, &nameFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &nameBrush);
+
+	textY += nameRowH + verRowY;
 	Gdiplus::SolidBrush verBrush(Gdiplus::Color(255, 148, 163, 184));
 	Gdiplus::SolidBrush linkBrush(Gdiplus::Color(255, 56, 189, 248));
 
 	Gdiplus::StringFormat strFmt(Gdiplus::StringFormat::GenericTypographic());
 	Gdiplus::PointF curPt(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY));
 	Gdiplus::RectF boundRect;
+
+	// 名称行右缘（状态文字与它同高，是左侧最宽的一行）
+	g.MeasureString(partName, -1, &nameFont, Gdiplus::PointF(0.0f, 0.0f), &strFmt, &boundRect);
+	int leftColRight = textX + static_cast<int>(boundRect.Width + 0.5f);
 
 	// 1. "版本：v" STOCK_VERSION_STR "   |   作者："
 	const wchar_t* partVer = L"版本：v" STOCK_VERSION_STR L"   |   作者：";
@@ -5042,9 +5447,74 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRec
 	g.MeasureString(partRepo, -1, &verFont, curPt, &strFmt, &boundRect);
 	m_about_repo_rect = CRect(static_cast<int>(curPt.X), textY - g_data.DPI(2),
 		static_cast<int>(curPt.X + boundRect.Width), textY + g_data.DPI(18));
+	leftColRight = max(leftColRight, static_cast<int>(curPt.X + boundRect.Width + 0.5f));
 
-	textY += g_data.DPI(24);
-	textY = LayoutAboutLog(g, true, textX, rightX, textY);
+	// 更新状态文字：画在按钮正上方，以按钮水平中心居中（与下方按钮构成对称的上下结构）。
+	// 三种文案都控制在按钮宽度内，居中是真正的居中；仅当版本号异常长时才按边界收口
+	m_about_update_rect.SetRectEmpty();
+	if (!m_update_status_text.empty())
+	{
+		const bool clickable = !m_update_download_url.empty();
+		Gdiplus::Font stFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+		Gdiplus::SolidBrush stBrush(clickable ? Gdiplus::Color(255, 56, 189, 248)          // 品牌蓝：可点击下载
+			: (m_update_failed ? Gdiplus::Color(255, 245, 158, 11)                         // 暖黄：查询失败
+				: Gdiplus::Color(255, 148, 163, 184)));
+
+		const int stTop = btnRect.top - g_data.DPI(ABOUT_STATUS_GAP) - g_data.DPI(ABOUT_STATUS_H);
+		const int leftBound = leftColRight + g_data.DPI(12);
+		const int rightBound = cardRect.right - g_data.DPI(ABOUT_LOG_PAD);
+		const int bandW = rightBound - leftBound;
+		if (bandW > g_data.DPI(30))
+		{
+			// 宽度自己算：GenericTypographic 带 NoClip，靠它做省略号裁剪语义不确定
+			Gdiplus::RectF stBound;
+			g.MeasureString(m_update_status_text.c_str(), -1, &stFont, Gdiplus::PointF(0.0f, 0.0f), &strFmt, &stBound);
+			std::wstring shown = m_update_status_text;
+			int textW = static_cast<int>(stBound.Width + 0.5f);
+			if (textW > bandW)
+			{
+				while (!shown.empty())
+				{
+					shown.pop_back();
+					std::wstring cand = shown + L"…";
+					g.MeasureString(cand.c_str(), -1, &stFont, Gdiplus::PointF(0.0f, 0.0f), &strFmt, &stBound);
+					if (static_cast<int>(stBound.Width + 0.5f) <= bandW)
+					{
+						shown = cand;
+						break;
+					}
+				}
+				textW = static_cast<int>(stBound.Width + 0.5f);
+			}
+
+			const int btnCenter = (btnRect.left + btnRect.right) / 2;
+			const int textLeft = max(leftBound, min(btnCenter - textW / 2, rightBound - textW));
+			g.DrawString(shown.c_str(), -1, &stFont,
+				Gdiplus::PointF(static_cast<Gdiplus::REAL>(textLeft), static_cast<Gdiplus::REAL>(stTop)), &strFmt, &stBrush);
+
+			if (clickable)
+			{
+				// 点击区只覆盖文字实际范围：两侧留白不该也算成热区
+				m_about_update_rect = CRect(textLeft - g_data.DPI(4), stTop - g_data.DPI(2),
+					textLeft + textW, stTop + g_data.DPI(ABOUT_STATUS_H));
+			}
+		}
+	}
+
+	// ===== 更新日志：唯一滚动区（视口裁剪 + 负向滚动偏移） =====
+	{
+		// 日志底色与外框跟随视口，滚动时边框保持不动
+		Gdiplus::RectF logRf(static_cast<Gdiplus::REAL>(logViewport.left), static_cast<Gdiplus::REAL>(logViewport.top),
+			static_cast<Gdiplus::REAL>(logViewport.Width()), static_cast<Gdiplus::REAL>(logViewport.Height()));
+		g.FillRectangle(&panelBg, logRf);
+		g.DrawRectangle(&panelPen, logRf);
+
+		Gdiplus::GraphicsState st = g.Save();
+		g.SetClip(Gdiplus::RectF(static_cast<Gdiplus::REAL>(logViewport.left), static_cast<Gdiplus::REAL>(logViewport.top),
+			static_cast<Gdiplus::REAL>(logViewport.Width()), static_cast<Gdiplus::REAL>(logViewport.Height())));
+		LayoutAboutLog(g, true, logViewport.left + pad, logViewport.right - pad, logViewport.top + pad - m_page_scroll_y);
+		g.Restore(st);
+	}
 }
 
 void CManagerDialog::OnMouseMove(UINT nFlags, CPoint point)
@@ -5290,6 +5760,8 @@ BOOL CManagerDialog::OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message)
 		m_hover_group_tab >= 0 || m_hover_index_mode >= 0 || m_hover_display_area >= 0 ||
 		m_hover_opacity_preset >= 0 || m_hover_opacity_slider || m_is_dragging_opacity ||
 		m_hover_reset_btn ||
+		// 页头「发现新版本」状态文字（在滚动态之上，不受内容滚动影响）
+		(m_current_page == PAGE_ABOUT && m_about_update_rect.PtInRect(pt)) ||
 		(m_current_page == PAGE_ABOUT && InScrollContent(pt) &&
 			(m_about_author_rect.PtInRect(pt) || m_about_repo_rect.PtInRect(pt))))
 	{
@@ -5595,6 +6067,13 @@ void CManagerDialog::OnLButtonDown(UINT nFlags, CPoint point)
 		}
 	}
 
+	// 页头「发现新版本」状态文字：点击跳转下载页（矩形仅在可点击时非空）
+	if (m_current_page == PAGE_ABOUT && !m_update_download_url.empty() && m_about_update_rect.PtInRect(point))
+	{
+		ShellExecute(nullptr, L"open", m_update_download_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+		return;
+	}
+
 	if (m_current_page == PAGE_ABOUT && InScrollContent(point))
 	{
 		if (m_about_author_rect.PtInRect(point))
@@ -5809,8 +6288,17 @@ BOOL CManagerDialog::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
 		ScreenToClient(&clientPt);
 		CRect contentRect;
 		GetScrollContentRect(contentRect);
-		const int maxScroll = CalcPageContentHeight() - contentRect.Height();
-		if (maxScroll > 0 && contentRect.PtInRect(clientPt))
+		// 关于页只有更新日志区滚动：视口与命中判定都收窄到日志视口，
+		// 顶部信息卡（含「检查更新」按钮）上滚轮不滚动页面
+		CRect scrollArea = contentRect;
+		if (m_current_page == PAGE_ABOUT)
+		{
+			CRect cardRect, logViewport;
+			GetAboutLayout(cardRect, logViewport);
+			scrollArea = logViewport;
+		}
+		const int maxScroll = CalcPageContentHeight() - ScrollViewportHeight();
+		if (maxScroll > 0 && scrollArea.PtInRect(clientPt))
 		{
 			SetPageScroll(m_page_scroll_y + (zDelta > 0 ? -g_data.DPI(46) : g_data.DPI(46)));
 			return TRUE;
@@ -5875,6 +6363,11 @@ void CManagerDialog::OnSize(UINT nType, int cx, int cy)
 	CDialog::OnSize(nType, cx, cy);
 	if (m_search_dropdown.GetSafeHwnd())
 		m_search_dropdown.HidePopup();
+	// 窗口尺寸变化会改变滚动视口高度：放大后旧偏移可能超过新的 maxScroll，
+	// 内容底部会露出空白（关于页表现为日志框内留白）。这里直接收口再摆控件
+	const int maxScroll = max(0, CalcPageContentHeight() - ScrollViewportHeight());
+	if (m_page_scroll_y > maxScroll)
+		m_page_scroll_y = maxScroll;
 	UpdateControlsLayout();
 	Invalidate();
 }
@@ -7931,7 +8424,7 @@ bool CManagerDialog::IsDestructiveBtn(UINT nID) const
 }
 
 // 与浮动窗按钮同款：直角 + 1px 细边框 + 悬停/按下反馈；主操作品牌蓝，删除操作警示红
-void CManagerDialog::DrawFlatButton(CDC& dc, const CRect& r, const CString& text, bool primary, bool destructive, bool hot, bool pressed)
+void CManagerDialog::DrawFlatButton(CDC& dc, const CRect& r, const CString& text, bool primary, bool destructive, bool hot, bool pressed, bool disabled)
 {
 	COLORREF bgCol, borderCol, textCol;
 	if (primary)
@@ -7967,6 +8460,14 @@ void CManagerDialog::DrawFlatButton(CDC& dc, const CRect& r, const CString& text
 	if (pressed)
 	{
 		bgCol = RGB(max(0, GetRValue(bgCol) - 20), max(0, GetGValue(bgCol) - 20), max(0, GetBValue(bgCol) - 20));
+	}
+
+	// 禁用态（如「检查更新」查询进行中）：压暗底色与文字，且不响应悬停高亮
+	if (disabled)
+	{
+		bgCol = RGB(20, 22, 28);
+		borderCol = RGB(38, 42, 52);
+		textCol = RGB(100, 110, 125);
 	}
 
 	dc.FillSolidRect(r, bgCol);

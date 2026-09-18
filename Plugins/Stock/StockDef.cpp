@@ -1607,6 +1607,22 @@ void STOCK::StockData::addTimelinePointTo(const std::string& _json_data, std::ve
 							if (!minuteArr || !yyjson_is_arr(minuteArr))
 								minuteArr = yyjson_obj_get(innerData, "minute");
 
+							// 腾讯把交易日放在同级 date 字段（形如 "20260917"）。
+							// 逐行只有 HHmm，不带它落库就只能回退系统日期，
+							// 凌晨拉取会把上一交易日的数据误标成今天
+							std::string txDate;
+							{
+								const char* d = yyjson_get_str(yyjson_obj_get(innerData, "date"));
+								if (d != nullptr && strlen(d) == 8)
+								{
+									txDate.assign(d, 4);
+									txDate += "-";
+									txDate.append(d + 4, 2);
+									txDate += "-";
+									txDate.append(d + 6, 2);
+								}
+							}
+
 							if (minuteArr && yyjson_is_arr(minuteArr))
 							{
 								yyjson_val* minItem;
@@ -1629,6 +1645,9 @@ void STOCK::StockData::addTimelinePointTo(const std::string& _json_data, std::ve
 											pt.time = t.substr(0, 5);
 										else
 											pt.time = t;
+										// 带上交易日，供落库时标注正确的 trade_date
+										if (!txDate.empty())
+											pt.fullTime = txDate + " " + pt.time;
 										if (!CCommon::IsValidTimelineTime(pt.time, isHK, isSecid || isUS)) continue;
 										pt.price = static_cast<Price>(atof(parts[1].c_str()));
 										if (parts.size() >= 4)

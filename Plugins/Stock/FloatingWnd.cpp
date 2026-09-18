@@ -88,6 +88,19 @@ void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLeft, int 
 
 #define ORDER_BOOK_WIDTH          g_data.RDPI(168)     // 右侧信息面板宽度
 
+// 右侧信息按钮簇（自右向左：CM 筹码峰 / PK 盘口 / CC ETF持仓 / BS 交易台账）占用格数。
+// CM/PK 恒显示，CC 仅基金显示，BS 仅持仓股显示；最左格决定汇总行需预留的宽度，
+// 与布局必须同源，否则会遮挡盈亏数字。
+static int InfoBtnSlotCount(const std::wstring& stockId, bool showObBtns, bool isHolding)
+{
+	if (!showObBtns)
+		return 0;
+	int slots = 2;                                       // CM + PK
+	if (CCommon::IsFundCode(stockId)) ++slots;           // CC
+	if (isHolding) ++slots;                              // BS
+	return slots;
+}
+
 enum {
 	IDC_TIMELINE_BTN = 1001,
 	IDC_KLINE_BTN = 1002,
@@ -105,6 +118,7 @@ enum {
 	IDC_CHIP_PEAK_BTN = 1018,
 	IDC_ORDER_BOOK_BTN = 1019,
 	IDC_ETF_HOLDINGS_BTN = 1024,
+	IDC_BS_TRADES_BTN = 1030,
 	IDC_EXPAND_BTN = 1020,
 	IDC_TOGGLE_STOCK_LIST_BTN = 1021,
 	IDC_CALL_AUCTION_BTN = 1022,
@@ -156,6 +170,7 @@ BEGIN_MESSAGE_MAP(CFloatingWnd, CWnd)
 	ON_BN_CLICKED(IDC_CHIP_PEAK_BTN, &CFloatingWnd::OnBnClickedChipPeakBtn)
 	ON_BN_CLICKED(IDC_ORDER_BOOK_BTN, &CFloatingWnd::OnBnClickedOrderBookBtn)
 	ON_BN_CLICKED(IDC_ETF_HOLDINGS_BTN, &CFloatingWnd::OnBnClickedEtfHoldingsBtn)
+	ON_BN_CLICKED(IDC_BS_TRADES_BTN, &CFloatingWnd::OnBnClickedBsTradesBtn)
 	ON_BN_CLICKED(IDC_EXPAND_BTN, &CFloatingWnd::OnBnClickedExpandBtn)
 	ON_BN_CLICKED(IDC_TOGGLE_STOCK_LIST_BTN, &CFloatingWnd::OnBnClickedToggleStockListBtn)
 	ON_BN_CLICKED(IDC_SETTINGS_BTN, &CFloatingWnd::OnBnClickedSettingsBtn)
@@ -228,6 +243,10 @@ int CFloatingWnd::OnCreate(LPCREATESTRUCT lpCreateStruct)
 	CRect etfHoldingsBtnRect(0, 0, rightBtnWidth, btnHeight);
 	m_btnEtfHoldings.Create(_T("CC"), WS_CHILD | BS_OWNERDRAW, etfHoldingsBtnRect, this, IDC_ETF_HOLDINGS_BTN);
 	m_btnEtfHoldings.ShowWindow(SW_HIDE);
+
+	CRect bsTradesBtnRect(0, 0, rightBtnWidth, btnHeight);
+	m_btnBsTrades.Create(_T("BS"), WS_CHILD | BS_OWNERDRAW, bsTradesBtnRect, this, IDC_BS_TRADES_BTN);
+	m_btnBsTrades.ShowWindow(SW_HIDE);
 
 	CRect bollBtnRect(0, 0, rightBtnWidth, btnHeight);
 	m_btnBoll.Create(_T("BL"), WS_CHILD | BS_OWNERDRAW, bollBtnRect, this, IDC_BOLL_BTN);
@@ -649,19 +668,12 @@ void CFloatingWnd::OnPaint()
 			SafeSetWindowPos(m_btnExpand, w - closeBtnW * 2, headerBtnTop, closeBtnW, closeBtnH);
 			SafeSetWindowPos(m_btnToggleStockList, w - closeBtnW * 3, headerBtnTop, closeBtnW, closeBtnH);
 			SafeSetWindowPos(m_btnSettings, w - closeBtnW * 4, headerBtnTop, closeBtnW, closeBtnH);
-			// 筹码峰/盘口/持仓按钮定位到盘口标题栏
+			// 筹码峰/盘口/持仓/台账按钮定位到盘口标题栏
 			int obTitleH = g_data.RDPI(16);
 			int obBtnW = g_data.RDPI(34);
 			int obBtnH = min(obTitleH, g_data.RDPI(16));
 			int obBtnTop = headerHeight + relatedBarHeight + (obTitleH - obBtnH) / 2;
-			bool showObBtns = !isIndexKLine;
-			bool isEtf = CCommon::IsFundCode(m_stock_id);
-			SafeSetWindowPos(m_btnChipPeak, w - obBtnW, obBtnTop, obBtnW, obBtnH);
-			SafeShowWindow(m_btnChipPeak, showObBtns);
-			SafeSetWindowPos(m_btnOrderBook, w - obBtnW * 2, obBtnTop, obBtnW, obBtnH);
-			SafeShowWindow(m_btnOrderBook, showObBtns);
-			SafeSetWindowPos(m_btnEtfHoldings, w - obBtnW * 3, obBtnTop, obBtnW, obBtnH);
-			SafeShowWindow(m_btnEtfHoldings, showObBtns && isEtf);
+			LayoutInfoButtons(w, obBtnTop, obBtnW, obBtnH, !isIndexKLine);
 		}
 
 		// 左侧股票列表面板（无论分时数据是否加载都绘制）
@@ -685,11 +697,10 @@ void CFloatingWnd::OnPaint()
 			int textY = summaryY + max(0, (positionSummaryHeight - textH) / 2);
 			memDC.SetBkMode(TRANSPARENT);
 
-			const bool isEtf = CCommon::IsFundCode(m_stock_id);
 			// 背景/描边铺满整个图表区宽度；文本内容区为右上角按钮预留空间（无按钮则铺满）
 			const int obBtnW = g_data.RDPI(34);
 			const bool showObBtns = !isIndexKLine;
-			const int rightBtnsW = showObBtns ? ((isEtf ? 3 : 2) * obBtnW) : 0;
+			const int rightBtnsW = InfoBtnSlotCount(m_stock_id, showObBtns, IsHoldingStock()) * obBtnW;
 			const int summaryContentRight = min(chartWidth, showObBtns ? (w - rightBtnsW) : w);
 			const int summaryContentW = max(0, summaryContentRight - summaryX);
 
@@ -724,8 +735,14 @@ void CFloatingWnd::OnPaint()
 						}
 						if (stockData->info.prevClosePrice > 0)
 						{
-							totalPreviousCloseValue += stockData->info.prevClosePrice * holdingCount;
-							todayProfitLoss += (currentPrice - stockData->info.prevClosePrice) * holdingCount;
+							const double prevClose = stockData->info.prevClosePrice;
+							// “当日盈亏%”的分母用昨收持股市值：当天有买卖时，填写的持股数已减去卖出量，
+							// 需按今日成交还原回昨收持股（无成交时与填写的持股数一致），与券商口径对齐
+							totalPreviousCloseValue += prevClose * g_data.GetYesterdayHoldCount(code);
+							// 叠加今日成交修正：卖出部分按“卖价−昨收”、买入部分按“昨收−买价”结算，
+							// 该修正与现价无关，因此盘中恒定，只有现价那一项随行情跳动
+							todayProfitLoss += (currentPrice - prevClose) * holdingCount
+								+ g_data.GetTodayTradeAdjust(code, prevClose);
 						}
 						if (code == m_stock_id && costPrice > 0)
 						{
@@ -1224,14 +1241,7 @@ void CFloatingWnd::OnPaint()
 				int obBtnW = g_data.RDPI(34);
 				int obBtnH = min(obTitleH, g_data.RDPI(16));
 				int obBtnTop = headerHeight + relatedBarHeight + (obTitleH - obBtnH) / 2;
-				bool showObBtns = !isIndexKLine;
-				bool isEtf = CCommon::IsFundCode(m_stock_id);
-				SafeSetWindowPos(m_btnChipPeak, w - obBtnW, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnChipPeak, showObBtns);
-				SafeSetWindowPos(m_btnOrderBook, w - obBtnW * 2, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnOrderBook, showObBtns);
-				SafeSetWindowPos(m_btnEtfHoldings, w - obBtnW * 3, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnEtfHoldings, showObBtns && isEtf);
+				LayoutInfoButtons(w, obBtnTop, obBtnW, obBtnH, !isIndexKLine);
 			}
 			// 定位模式切换标签到副图标题栏右侧 [竞价] [分时] [日K] [周K] [月K]
 			int modeTabW = g_data.RDPI(38);
@@ -1266,7 +1276,12 @@ void CFloatingWnd::OnPaint()
 			SafeShowWindow(m_btnIndicatorKDJ, false);
 			SafeShowWindow(m_btnIndicatorWR, false);
 			SafeShowWindow(m_btnIndicatorRSI, false);				// 右侧盘口（竞价模式下盘口跟随PK开关）
-				if (IsInfoPanelVisible(isIndexKLine))
+				if (m_showBsTrades)
+				{
+					m_bsTradePanel.Draw(memDC, chartWidth, w, h - headerHeight - indexBarHeight - relatedBarHeight,
+						g_data.GetStockTrades(m_stock_id), m_bsScrollOffset, m_bsSelectedRow);
+				}
+				else if (IsInfoPanelVisible(isIndexKLine))
 				{
 					m_orderBookPanel.Draw(memDC, chartWidth, w, h - headerHeight - indexBarHeight - relatedBarHeight, realtimeData, klineData, m_viewMode);
 				}
@@ -1830,20 +1845,13 @@ void CFloatingWnd::OnPaint()
 				SafeSetWindowPos(m_btnSettings, w - closeBtnW * 4, top, closeBtnW, closeBtnH);
 			}
 
-			// 盘口标题栏右侧按钮定位（筹码峰、盘口、持仓按钮）
+			// 盘口标题栏右侧按钮定位（筹码峰、盘口、持仓、台账按钮）
 			{
 				int obTitleH = g_data.RDPI(16);
 				int obBtnW = g_data.RDPI(34);
 				int obBtnH = min(obTitleH, g_data.RDPI(16));
 				int obBtnTop = headerHeight + relatedBarHeight + (obTitleH - obBtnH) / 2;
-				bool showObBtns = !isIndexKLine;
-				bool isEtf = CCommon::IsFundCode(m_stock_id);
-				SafeSetWindowPos(m_btnChipPeak, w - obBtnW, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnChipPeak, showObBtns);
-				SafeSetWindowPos(m_btnOrderBook, w - obBtnW * 2, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnOrderBook, showObBtns);
-				SafeSetWindowPos(m_btnEtfHoldings, w - obBtnW * 3, obBtnTop, obBtnW, obBtnH);
-				SafeShowWindow(m_btnEtfHoldings, showObBtns && isEtf);
+				LayoutInfoButtons(w, obBtnTop, obBtnW, obBtnH, !isIndexKLine);
 			}
 
 			// 右侧盘口高度：不减xAxisLabelHeight（那是左侧走势图的时间标签，右侧不需要）
@@ -1900,6 +1908,11 @@ void CFloatingWnd::OnPaint()
 				if (stockData) holdingsData = stockData->etfHoldings;
 				m_etfHoldingsPanel.Draw(memDC, chartWidth, w, h - headerHeight - indexBarHeight - relatedBarHeight, holdingsData, m_etfHoldingsScrollOffset, m_stock_id,
 					g_data.GetFetchStatusEntries(m_stock_id));
+			}
+			else if (m_showBsTrades)
+			{
+				m_bsTradePanel.Draw(memDC, chartWidth, w, h - headerHeight - indexBarHeight - relatedBarHeight,
+					g_data.GetStockTrades(m_stock_id), m_bsScrollOffset, m_bsSelectedRow);
 			}
 			else if (IsInfoPanelVisible(isIndexKLine))
 			{
@@ -2213,6 +2226,31 @@ void CFloatingWnd::OnLButtonDown(UINT nFlags, CPoint point)
 			m_isEtfHoldingsDragMoved = false;
 			m_etfHoldingsDragStartPos = point;
 			m_etfHoldingsDragStartOffset = m_etfHoldingsScrollOffset;
+			SetCapture();
+			return;
+		}
+	}
+
+	// 右侧 BS 交易台账列表：按下开始拖动（列表区域，命中行时兼作选中/双击编辑）
+	if (m_viewMode != UI_VIEW_OVERVIEW && m_showBsTrades)
+	{
+		CRect clRect;
+		GetClientRect(&clRect);
+		bool isIndex = (GetStockPriority(m_stock_id) < 200);
+		bool isIndexKLine = isIndex && m_viewMode >= UI_VIEW_DAY_KLINE;
+		const int orderBookWidth = IsInfoPanelVisible(isIndexKLine) ? ORDER_BOOK_WIDTH : 0;
+		const int chartWidth = clRect.Width() - orderBookWidth;
+		const int headerHeight = g_data.RDPI(26);
+		const int obTitleH = g_data.RDPI(16);
+		const int listTop = headerHeight + obTitleH + CBsTradePanel::GetTableHeaderHeight();
+		const int listBottom = clRect.Height() - g_data.RDPI(20) - CBsTradePanel::GetSummaryHeight();
+
+		if (point.x >= chartWidth && point.x < clRect.Width() && point.y >= listTop && point.y < listBottom)
+		{
+			m_isBsDragging = true;
+			m_isBsDragMoved = false;
+			m_bsDragStartPos = point;
+			m_bsDragStartOffset = m_bsScrollOffset;
 			SetCapture();
 			return;
 		}
@@ -2566,6 +2604,105 @@ void CFloatingWnd::OnLButtonUp(UINT nFlags, CPoint point)
 		return;
 	}
 
+	if (m_isBsDragging)
+	{
+		m_isBsDragging = false;
+		ReleaseCapture();
+
+		if (!m_isBsDragMoved)
+		{
+			CRect clRect;
+			GetClientRect(&clRect);
+			bool isIndex = (GetStockPriority(m_stock_id) < 200);
+			bool isIndexKLine = isIndex && m_viewMode >= UI_VIEW_DAY_KLINE;
+			const int orderBookWidth = IsInfoPanelVisible(isIndexKLine) ? ORDER_BOOK_WIDTH : 0;
+			const int chartWidth = clRect.Width() - orderBookWidth;
+			const int height = clRect.Height() - g_data.RDPI(26) - g_data.RDPI(20);
+			std::vector<StockTradeRecord> trades = g_data.GetStockTrades(m_stock_id);
+			int hitIdx = CBsTradePanel::HitTest(point, chartWidth, clRect.Width(), height, m_bsScrollOffset, static_cast<int>(trades.size()));
+
+			// 窗口类未启用 CS_DBLCLKS，双击到达这里是同位置两次 WM_LBUTTONDOWN；
+			// 用「双击间隔内 + 同一行 + 位置接近」判定双击：行上=编辑该笔，空白=新增
+			const DWORD now = ::GetTickCount();
+			const bool dblClick = (m_bsLastClickRow == hitIdx) &&
+				(now - m_bsLastClickTick) <= ::GetDoubleClickTime() &&
+				abs(point.x - m_bsLastClickPos.x) <= g_data.RDPI(4) &&
+				abs(point.y - m_bsLastClickPos.y) <= g_data.RDPI(4);
+			m_bsLastClickTick = now;
+			m_bsLastClickPos = point;
+			m_bsLastClickRow = hitIdx;
+
+			if (dblClick)
+			{
+				// 双击后清掉双击计时，避免三击再触发一次
+				m_bsLastClickRow = -1;
+				m_bsLastClickTick = 0;
+
+				AFX_MANAGE_STATE(AfxGetStaticModuleState());
+				CDarkTradeEditDlg dlg(m_stock_id);
+				if (hitIdx >= 0 && hitIdx < static_cast<int>(trades.size()))
+				{
+					const StockTradeRecord& rec = trades[hitIdx];
+					dlg.m_is_new = false;
+					dlg.m_is_sell = rec.isSell;
+					dlg.m_amount = rec.amount;
+					dlg.m_price = rec.price;
+					if (rec.time.size() >= 16)
+					{
+						dlg.m_date_text = rec.time.substr(0, 10);
+						dlg.m_time_text = rec.time.substr(11, 5);
+					}
+				}
+				dlg.DoModal();
+				if (dlg.GetResult() == CDarkTradeEditDlg::RES_DELETE && hitIdx >= 0 && hitIdx < static_cast<int>(trades.size()))
+				{
+					g_data.DeleteStockTrade(m_stock_id, trades[hitIdx].id);
+					m_bsSelectedRow = -1;
+					m_bsScrollOffset = 0;
+				}
+				else if (dlg.GetResult() == CDarkTradeEditDlg::RES_OK)
+				{
+					std::wstring fullTime = dlg.m_date_text + L" " + dlg.m_time_text;
+					if (hitIdx >= 0 && hitIdx < static_cast<int>(trades.size()))
+					{
+						StockTradeRecord rec = trades[hitIdx];
+						rec.isSell = dlg.m_is_sell;
+						rec.time = fullTime;
+						rec.price = dlg.m_price;
+						rec.amount = dlg.m_amount;
+						g_data.UpdateStockTrade(m_stock_id, rec);
+						m_bsSelectedRow = hitIdx;
+					}
+					else
+					{
+						g_data.AddStockTrade(m_stock_id, dlg.m_is_sell, fullTime, dlg.m_price, dlg.m_amount);
+						// 新记录按时间插入，定位到其所在行
+						std::vector<StockTradeRecord> updated = g_data.GetStockTrades(m_stock_id);
+						m_bsSelectedRow = -1;
+						for (size_t i = 0; i < updated.size(); ++i)
+						{
+							if (updated[i].time == fullTime && updated[i].price == dlg.m_price && updated[i].amount == dlg.m_amount)
+								m_bsSelectedRow = static_cast<int>(i);
+						}
+					}
+				}
+				Invalidate();
+			}
+			else
+			{
+				// 单击：选中命中行（空白处清除选中）
+				if (m_bsSelectedRow != hitIdx)
+				{
+					m_bsSelectedRow = hitIdx;
+					Invalidate();
+				}
+			}
+		}
+		Invalidate();
+		CWnd::OnLButtonUp(nFlags, point);
+		return;
+	}
+
 	// 区域统计：结束选区拖动并定格统计（仅K线族视图）
 	if (m_isRegionDragging)
 	{
@@ -2666,10 +2803,11 @@ CFloatingWnd::UiState CFloatingWnd::CaptureUiState() const
 
 	// K线首页（图表）状态
 	st.viewMode = static_cast<int>(m_viewMode);
-	// 右侧面板三选互斥，快照保持互斥（ETF持仓 > 盘口 > 筹码峰，正常按钮逻辑下三者本就不会同真）
-	st.showEtfHoldings = m_showEtfHoldings;
-	st.showOrderBook = m_showOrderBook && !m_showEtfHoldings;
-	st.showChipPeak = m_showChipPeak && !m_showEtfHoldings && !st.showOrderBook;
+	// 右侧面板四选互斥，快照保持互斥（BS台账 > ETF持仓 > 盘口 > 筹码峰，正常按钮逻辑下四者本就不会同真）
+	st.showBsTrades = m_showBsTrades;
+	st.showEtfHoldings = m_showEtfHoldings && !m_showBsTrades;
+	st.showOrderBook = m_showOrderBook && !m_showEtfHoldings && !m_showBsTrades;
+	st.showChipPeak = m_showChipPeak && !m_showEtfHoldings && !st.showOrderBook && !m_showBsTrades;
 	st.showMA = m_showMA;
 	st.showBollBands = m_showBollBands;
 	st.timelineIndicator = static_cast<int>(m_timelineIndicator);
@@ -2718,10 +2856,11 @@ void CFloatingWnd::ApplyChartViewState(const UiState& st)
 		break;   // OVERVIEW 无进入分支（未再使用），回落保持当前模式
 	}
 
-	// 右侧面板三选（互斥；快照已保证互斥，恢复即覆盖）
+	// 右侧面板四选（互斥；快照已保证互斥，恢复即覆盖）
 	m_showChipPeak = st.showChipPeak;
-	m_showOrderBook = st.showOrderBook && !st.showEtfHoldings;
-	m_showEtfHoldings = st.showEtfHoldings;
+	m_showOrderBook = st.showOrderBook && !st.showEtfHoldings && !st.showBsTrades;
+	m_showEtfHoldings = st.showEtfHoldings && !st.showBsTrades;
+	m_showBsTrades = st.showBsTrades;
 	if (m_showChipPeak)
 		EnsureChipPeakData();
 	if (m_showEtfHoldings)
@@ -2778,7 +2917,7 @@ void CFloatingWnd::HideChartButtons(bool hide)
 		&m_btnTimeLine, &m_btnKLine, &m_btnWeekKLine, &m_btnMonthKLine, &m_btnCallAuction, &m_btnRegionStats,
 		&m_btnMA, &m_btnBoll, &m_btnIndicatorCJL, &m_btnIndicatorMACD,
 		&m_btnIndicatorKDJ, &m_btnIndicatorWR, &m_btnIndicatorRSI,
-		&m_btnChipPeak, &m_btnOrderBook, &m_btnEtfHoldings,
+		&m_btnChipPeak, &m_btnOrderBook, &m_btnEtfHoldings, &m_btnBsTrades,
 		&m_btnExpand, &m_btnToggleStockList, &m_btnKLineSource,
 	};
 	for (auto* b : btns)
@@ -3020,6 +3159,39 @@ void CFloatingWnd::OnMouseMove(UINT nFlags, CPoint point)
 		if (newOffset != m_etfHoldingsScrollOffset)
 		{
 			m_etfHoldingsScrollOffset = newOffset;
+			Invalidate();
+		}
+		CWnd::OnMouseMove(nFlags, point);
+		return;
+	}
+
+	// 右侧 BS 交易台账列表拖动处理
+	if (m_isBsDragging)
+	{
+		int dy = point.y - m_bsDragStartPos.y;
+		if (abs(dy) > 3)
+		{
+			m_isBsDragMoved = true;
+		}
+
+		CRect clRect;
+		GetClientRect(&clRect);
+		const int headerHeight = g_data.RDPI(26);
+		const int relatedBarHeight = 0;
+		const int indexBarHeight = g_data.RDPI(20);
+		const int obTitleH = g_data.RDPI(16);
+		int listAreaH = (clRect.Height() - headerHeight - relatedBarHeight - indexBarHeight - obTitleH)
+			- CBsTradePanel::GetTableHeaderHeight() - CBsTradePanel::GetSummaryHeight();
+		const int rowHeight = CBsTradePanel::GetRowHeight();
+		int itemCount = static_cast<int>(g_data.GetStockTrades(m_stock_id).size());
+		int totalH = itemCount * rowHeight;
+		int maxOffset = max(0, totalH - listAreaH);
+
+		int newOffset = m_bsDragStartOffset - dy;
+		newOffset = max(0, min(newOffset, maxOffset));
+		if (newOffset != m_bsScrollOffset)
+		{
+			m_bsScrollOffset = newOffset;
 			Invalidate();
 		}
 		CWnd::OnMouseMove(nFlags, point);
@@ -3494,7 +3666,6 @@ void CFloatingWnd::SetStockId(const std::wstring& stockId)
 	m_stock_id = stockId;
 	ClearRegionSelection(true);   // 换股时选区失效：退出区域统计避免残留旧标的统计
 	g_data.LoadFocusStockCache(m_stock_id);
-	g_data.LoadFocusStockCache(m_stock_id);
 	m_mc_return_stock_id.clear();   // 主动切换股票即结束临时 K 线查看
 	EnsureStockListVisible();
 	// 通知获取线程切换关注股票，线程自动重置计时器并立即获取新股数据
@@ -3515,6 +3686,10 @@ void CFloatingWnd::SetStockId(const std::wstring& stockId)
 		m_showJZCurve = CCommon::IsFundCode(m_stock_id);
 	}
 	m_etfHoldingsScrollOffset = 0;
+	m_bsScrollOffset = 0;
+	m_bsSelectedRow = -1;
+	m_bsLastClickRow = -1;
+	m_bsLastClickTick = 0;
 	if (!CCommon::IsFundCode(m_stock_id))
 	{
 		m_showEtfHoldings = false;
@@ -3523,6 +3698,9 @@ void CFloatingWnd::SetStockId(const std::wstring& stockId)
 	{
 		EnsureEtfHoldingsData();
 	}
+	// 台账只对持仓股有意义：切到未持仓的股票（自选股等）时收起 BS 面板
+	if (!IsHoldingStock())
+		m_showBsTrades = false;
 	UpdatePeriodComboVisibility();
 	Invalidate();
 }
@@ -3699,6 +3877,7 @@ void CFloatingWnd::UpdateModeButtons()
 		if (m_btnChipPeak.GetSafeHwnd()) m_btnChipPeak.Invalidate();
 		if (m_btnOrderBook.GetSafeHwnd()) m_btnOrderBook.Invalidate();
 		if (m_btnEtfHoldings.GetSafeHwnd()) m_btnEtfHoldings.Invalidate();
+		if (m_btnBsTrades.GetSafeHwnd()) m_btnBsTrades.Invalidate();
 
 		if (m_btnExpand.GetSafeHwnd()) m_btnExpand.Invalidate();
 
@@ -3747,6 +3926,8 @@ void CFloatingWnd::UpdatePeriodComboVisibility()
 	SafeShowWindow(m_btnChipPeak, m_viewMode != UI_VIEW_OVERVIEW);
 	SafeShowWindow(m_btnOrderBook, m_viewMode != UI_VIEW_OVERVIEW);
 	SafeShowWindow(m_btnEtfHoldings, m_viewMode != UI_VIEW_OVERVIEW && CCommon::IsFundCode(m_stock_id));
+	// 台账只对持仓股有意义，与 LayoutInfoButtons 的条件保持一致
+	SafeShowWindow(m_btnBsTrades, m_viewMode != UI_VIEW_OVERVIEW && IsHoldingStock());
 }
 
 BOOL CFloatingWnd::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
@@ -3851,6 +4032,42 @@ BOOL CFloatingWnd::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
 				if (newOffset != m_etfHoldingsScrollOffset)
 				{
 					m_etfHoldingsScrollOffset = newOffset;
+					Invalidate();
+				}
+			}
+		}
+		return TRUE;
+	}
+
+	// 1.2 如果在非总览模式且右侧 BS 交易台账面板显示时，鼠标在右侧面板区域，则滚动台账列表
+	if (m_viewMode != UI_VIEW_OVERVIEW && m_showBsTrades &&
+		clientPt.x >= chartRight && clientPt.x < clientRect.Width() &&
+		clientPt.y >= headerHeight + relatedBarHeight &&
+		clientPt.y < clientRect.Height() - indexBarHeight)
+	{
+		int itemCount = static_cast<int>(g_data.GetStockTrades(m_stock_id).size());
+		if (itemCount > 0)
+		{
+			int rowHeight = CBsTradePanel::GetRowHeight();
+			int tableHeaderH = CBsTradePanel::GetTableHeaderHeight();
+			int obTitleH = g_data.RDPI(16);
+			int listAreaH = (clientRect.Height() - headerHeight - relatedBarHeight - indexBarHeight - obTitleH)
+				- tableHeaderH - CBsTradePanel::GetSummaryHeight();
+			int totalH = itemCount * rowHeight;
+			int maxOffset = max(0, totalH - listAreaH);
+
+			if (maxOffset > 0)
+			{
+				int newOffset = m_bsScrollOffset;
+				if (zDelta > 0)
+					newOffset -= rowHeight;  // 向上滚
+				else
+					newOffset += rowHeight;  // 向下滚
+
+				newOffset = max(0, min(newOffset, maxOffset));
+				if (newOffset != m_bsScrollOffset)
+				{
+					m_bsScrollOffset = newOffset;
 					Invalidate();
 				}
 			}
@@ -4087,8 +4304,8 @@ void CFloatingWnd::OnBnClickedIndicatorMACDSignalBtn()
 
 bool CFloatingWnd::IsInfoPanelVisible(bool isIndexKLine) const
 {
-	// 右侧信息面板（盘口/筹码峰/持仓）可见性：大盘K线模式无盘口；PK隐藏时整体让位给图表
-	return !isIndexKLine && (m_showOrderBook || m_showChipPeak || m_showEtfHoldings);
+	// 右侧信息面板（盘口/筹码峰/持仓/台账）可见性：大盘K线模式无盘口；PK隐藏时整体让位给图表
+	return !isIndexKLine && (m_showOrderBook || m_showChipPeak || m_showEtfHoldings || m_showBsTrades);
 }
 
 void CFloatingWnd::OnBnClickedChipPeakBtn()
@@ -4102,6 +4319,7 @@ void CFloatingWnd::OnBnClickedChipPeakBtn()
 		m_showChipPeak = true;
 		m_showEtfHoldings = false;
 		m_showOrderBook = false;
+		m_showBsTrades = false;
 		EnsureChipPeakData();
 	}
 	UpdateModeButtons();
@@ -4119,6 +4337,7 @@ void CFloatingWnd::OnBnClickedOrderBookBtn()
 		m_showOrderBook = true;
 		m_showChipPeak = false;
 		m_showEtfHoldings = false;
+		m_showBsTrades = false;
 	}
 	UpdateModeButtons();
 	Invalidate();
@@ -4135,7 +4354,25 @@ void CFloatingWnd::OnBnClickedEtfHoldingsBtn()
 		m_showEtfHoldings = true;
 		m_showChipPeak = false;
 		m_showOrderBook = false;
+		m_showBsTrades = false;
 		EnsureEtfHoldingsData();
+	}
+	UpdateModeButtons();
+	Invalidate();
+}
+
+void CFloatingWnd::OnBnClickedBsTradesBtn()
+{
+	if (m_showBsTrades)
+	{
+		m_showBsTrades = false;
+	}
+	else
+	{
+		m_showBsTrades = true;
+		m_showChipPeak = false;
+		m_showOrderBook = false;
+		m_showEtfHoldings = false;
 	}
 	UpdateModeButtons();
 	Invalidate();
@@ -4191,6 +4428,32 @@ void CFloatingWnd::SafeShowWindow(CWnd& wnd, bool show)
 	{
 		wnd.ShowWindow(show ? SW_SHOW : SW_HIDE);
 	}
+}
+
+// 右侧信息按钮簇自右向左排布：CM(1) PK(2) [CC(3) 仅基金] BS(末格)。
+// CC 隐藏时 BS 顶替其格位，避免 BS 与 PK 之间留空档；末格序号即汇总行需预留的宽格数。
+void CFloatingWnd::LayoutInfoButtons(int w, int obBtnTop, int obBtnW, int obBtnH, bool showObBtns)
+{
+	SafeSetWindowPos(m_btnChipPeak, w - obBtnW, obBtnTop, obBtnW, obBtnH);
+	SafeShowWindow(m_btnChipPeak, showObBtns);
+	SafeSetWindowPos(m_btnOrderBook, w - obBtnW * 2, obBtnTop, obBtnW, obBtnH);
+	SafeShowWindow(m_btnOrderBook, showObBtns);
+
+	const bool isEtf = CCommon::IsFundCode(m_stock_id);
+	SafeSetWindowPos(m_btnEtfHoldings, w - obBtnW * 3, obBtnTop, obBtnW, obBtnH);
+	SafeShowWindow(m_btnEtfHoldings, showObBtns && isEtf);
+
+	// BS 紧邻 CC 左侧：CC 可见时占第 4 格，否则顶到第 3 格（不留空档）。
+	// 台账只对持仓股有意义，未持仓的股票（自选股等）不显示该按钮
+	const int bsSlot = isEtf ? 4 : 3;
+	SafeSetWindowPos(m_btnBsTrades, w - obBtnW * bsSlot, obBtnTop, obBtnW, obBtnH);
+	SafeShowWindow(m_btnBsTrades, showObBtns && IsHoldingStock());
+}
+
+// 当前股票是否持仓（台账/标记/BS 按钮均以此为准）
+bool CFloatingWnd::IsHoldingStock() const
+{
+	return g_data.GetHoldingCount(m_stock_id) > 0;
 }
 
 HBRUSH CFloatingWnd::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
@@ -4310,8 +4573,9 @@ void CFloatingWnd::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 	else if (nID == IDC_MONTH_KLINE_BTN) { isActive = (m_viewMode == UI_VIEW_MONTH_KLINE); }
 	else if (nID == IDC_REGION_STATS_BTN) { isActive = m_regionStatsMode; }
 	else if (nID == IDC_CHIP_PEAK_BTN) { isActive = m_showChipPeak; }
-	else if (nID == IDC_ORDER_BOOK_BTN) { isActive = !m_showChipPeak && !m_showEtfHoldings && m_showOrderBook; }
+	else if (nID == IDC_ORDER_BOOK_BTN) { isActive = !m_showChipPeak && !m_showEtfHoldings && !m_showBsTrades && m_showOrderBook; }
 	else if (nID == IDC_ETF_HOLDINGS_BTN) { isActive = m_showEtfHoldings; }
+	else if (nID == IDC_BS_TRADES_BTN) { isActive = m_showBsTrades; }
 	else if (nID == IDC_EXPAND_BTN) { isActive = m_expandedMode; }
 	else if (nID == IDC_TOGGLE_STOCK_LIST_BTN) { isActive = m_showStockList; }
 	else if (nID == IDC_SETTINGS_BTN) { isActive = m_settingsMode; }
@@ -4418,6 +4682,7 @@ void CFloatingWnd::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 	else if (nID == IDC_CHIP_PEAK_BTN) text = _T("CM");
 	else if (nID == IDC_ORDER_BOOK_BTN) text = _T("PK");
 	else if (nID == IDC_ETF_HOLDINGS_BTN) text = _T("CC");
+	else if (nID == IDC_BS_TRADES_BTN) text = _T("BS");
 	else if (nID == IDC_INDICATOR_MACD_BTN) text = _T("VOL");
 	else if (nID == IDC_INDICATOR_MACD_SIGNAL_BTN) text = _T("MACD");
 	else if (nID == IDC_INDICATOR_KDJ_BTN) text = _T("KDJ");
@@ -4869,6 +5134,12 @@ void CFloatingWnd::OnTimer(UINT_PTR nIDEvent)
 
 	if (nIDEvent == IDC_REFRESH_TIMER)
 	{
+		// DPI 变化检测：宿主是系统级 DPI 感知（清单 dpiAware=true），跨显示器拖动或
+		// 系统缩放调整后收不到 WM_DPICHANGED，只能靠轮询。DPI 变了要重建派生字体与
+		// 按钮位置，否则界面一直按旧 DPI 排版（字与控件整体偏大/偏小）
+		if (g_data.RefreshDpi())
+			OnDpiChanged();
+
 		// 行情中心视图：刷新时钟 + 拉取过期数据，并重绘（时钟每秒变化）
 		if (m_marketCenterMode)
 		{
@@ -4900,6 +5171,50 @@ void CFloatingWnd::OnTimer(UINT_PTR nIDEvent)
 		}
 	}
 	CWnd::OnTimer(nIDEvent);
+}
+
+// DPI 变更后重建按 DPI 派生的状态。
+// 窗口宽高来自配置的逻辑像素（RDPI 换算），DPI 变了必须按新值重算尺寸并重新贴边，
+// 否则窗口会保持旧 DPI 的像素尺寸：高 DPI 下内容被挤小、低 DPI 下留出大片空白。
+// 按钮等子控件位置由 OnPaint 每帧按当前 DPI 重排，这里只需触发一次重绘
+void CFloatingWnd::OnDpiChanged()
+{
+	const int WIDTH = g_data.RDPI(g_data.m_setting_data.m_kline_width);
+	const int HEIGHT = g_data.RDPI(g_data.m_setting_data.m_kline_height);
+
+	// 贴回原显示器工作区的同一角（与 Create 时的 AREA_* 口径一致）
+	CRect wndRect;
+	GetWindowRect(&wndRect);
+	const HMONITOR hMonitor = MonitorFromRect(&wndRect, MONITOR_DEFAULTTONEAREST);
+	MONITORINFO mi{ sizeof(MONITORINFO) };
+	GetMonitorInfo(hMonitor, &mi);
+	const CRect& wa = mi.rcWork;
+
+	int x = wndRect.left;
+	int y = wndRect.top;
+	switch (g_data.m_setting_data.m_display_area)
+	{
+	case AREA_LEFT_TOP:    x = wa.left + 3;               y = wa.top + 3;                break;
+	case AREA_RIGHT_TOP:   x = wa.right - WIDTH - 3;      y = wa.top + 3;                break;
+	case AREA_LEFT_BOTTOM: x = wa.left + 3;               y = wa.bottom - HEIGHT - 3;    break;
+	case AREA_CENTER:      x = wa.left + (wa.Width() - WIDTH) / 2; y = wa.top + (wa.Height() - HEIGHT) / 2; break;
+	case AREA_RIGHT_BOTTOM:
+	default:               x = wa.right - WIDTH - 3;      y = wa.bottom - HEIGHT - 3;    break;
+	}
+
+	SetWindowPos(nullptr, x, y, WIDTH, HEIGHT, SWP_NOZORDER | SWP_NOACTIVATE);
+
+	// 内嵌设置视图：先让它按新 DPI 重建字体（它缓存了三档字体，不刷新会内外字号不一致），
+	// 再铺满新尺寸的窗口
+	if (m_settingsMode && m_pSettingsDlg != nullptr && m_pSettingsDlg->GetSafeHwnd())
+	{
+		m_pSettingsDlg->OnHostDpiChanged();
+		CRect rcClient;
+		GetClientRect(&rcClient);
+		m_pSettingsDlg->MoveWindow(0, 0, rcClient.Width(), rcClient.Height());
+	}
+
+	Invalidate();
 }
 
 void CFloatingWnd::CheckHoverCardAutoHide()

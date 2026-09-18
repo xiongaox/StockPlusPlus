@@ -12,6 +12,7 @@
 #include "Stock.h"
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <set>
 
 // 时间标记结构体（供分时图绘制函数共用）
@@ -19,6 +20,17 @@ struct TimeMarker {
 	const TCHAR* label;
 	int minutesFromStart;
 };
+
+// B/S 成交标记配色：刻意避开 K 线的涨跌红绿（红/绿是蜡烛专用），
+// 改用蓝（买入）与橙（卖出），在白字标记上对比清晰且不会与蜡烛混淆
+static const COLORREF kBsBuyColor = RGB(59, 130, 246);
+static const COLORREF kBsSellColor = RGB(249, 115, 22);
+
+// 交易台账只对持仓股有意义：非持仓（自选股等）不画 B/S 标记
+static bool ShouldDrawBsMarkers(const std::wstring& stockId)
+{
+	return !stockId.empty() && g_data.GetHoldingCount(stockId) > 0;
+}
 
 // 辅助函数：绘制价格点标签（最高/最低价标注）
 static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLeft, int chartTop, int chartWidth, int chartHeight,
@@ -81,6 +93,110 @@ static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLef
 	}
 }
 
+// 交易台账 B/S 标记：正方形圆角小方标 + 细引线自影线端点向外延伸。
+// 买入接下影线（标在下方）、卖出接上影线（标在上方）。
+// 引线长度按当日蜡烛的像素高度等比缩放：缩放图表时蜡烛会变大，
+// 固定像素的间距在放大后显得贴脸，按比例走才能保持一致的视觉距离。
+// stackIndex 用于同一天多笔成交——改为纵向堆叠（而不是横向错位），保证标记始终对准柱子中心。
+static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int chartBottom,
+	int avoidTop = INT_MIN, int avoidBottom = INT_MIN, int stackIndex = 0)
+{
+	const CString txt = isBuy ? _T("B") : _T("S");
+	const COLORREF boxColor = isBuy ? kBsBuyColor : kBsSellColor;
+	CSize txtSize = memDC.GetTextExtent(txt);
+
+	// 外框尺寸沿用原字高（高度那个尺寸是对的），宽度补到与高度相等成为正方形。
+	// 注意别按长短边较大者算边长，那会把整个标记放大一圈
+	const int padY = g_data.RDPI(2);
+	const int side = txtSize.cy + padY * 2;
+	const int boxW = side;
+	const int boxH = side;
+
+	// 间距以方块边长为基准（两者在同一像素空间，避免 RDPI 在高 DPI 下缩小而与方块尺寸脱节）：
+	// 下限 2 倍边长，保证引线明显长于标记本身；蜡烛很大时再多给一点，免得上方的标记显得贴脸
+	int gap = boxH * 2;
+	if (avoidTop != INT_MIN && avoidBottom != INT_MIN)
+	{
+		const int span = avoidBottom - avoidTop;   // 蜡烛含影线的像素高度
+		if (span > 0)
+			gap = max(gap, span * 30 / 100);
+	}
+	// 同日多笔纵向堆叠，避免标记互相压住（横向保持对准柱子中心）
+	gap += stackIndex * (boxH + g_data.RDPI(2));
+
+	const int minTop = chartTop + g_data.RDPI(2);
+	const int maxTop = (chartBottom - g_data.RDPI(1) - boxH) < minTop ? minTop : (chartBottom - g_data.RDPI(1) - boxH);
+
+	// 首选侧：买入在下、卖出在上（与蜡烛涨跌色无关，跟成交方向走）
+	int boxTop = isBuy ? (y + gap) : (y - gap - boxH);
+	// 首选侧越界则翻到另一侧
+	if (boxTop < minTop || boxTop > maxTop)
+	{
+		const int flipped = isBuy ? (y - gap - boxH) : (y + gap);
+		if (flipped >= minTop && flipped <= maxTop)
+			boxTop = flipped;
+	}
+
+	// 与蜡烛（含影线）不重叠：重叠时优先推到与首选侧相反的一边
+	if (avoidTop != INT_MIN && avoidBottom != INT_MIN)
+	{
+		if (boxTop < avoidBottom && boxTop + boxH > avoidTop)
+		{
+			const int above = avoidTop - gap - boxH;
+			const int below = avoidBottom + gap;
+			const bool aboveOk = (above >= minTop && above <= maxTop);
+			const bool belowOk = (below >= minTop && below <= maxTop);
+			if (isBuy)
+			{
+				if (belowOk) boxTop = below;
+				else if (aboveOk) boxTop = above;
+			}
+			else
+			{
+				if (aboveOk) boxTop = above;
+				else if (belowOk) boxTop = below;
+			}
+		}
+	}
+	boxTop = max(minTop, min(boxTop, maxTop));
+
+	const int boxLeft = x - boxW / 2;
+
+	// 引线：自方块朝向影线端点的一侧中心，连到 (x, y)（y 即影线端点）
+	{
+		CPen leadPen(PS_SOLID, 1, boxColor);
+		CPen* pOldPen = memDC.SelectObject(&leadPen);
+		const int leadFrom = (boxTop > y) ? boxTop : boxTop + boxH;
+		memDC.MoveTo(x, leadFrom);
+		memDC.LineTo(x, y);
+		memDC.SelectObject(pOldPen);
+	}
+
+	// 圆角实底方块（GDI 无圆角矩形，借 GDI+ 路径绘制；作用域确保结束前刷回 HDC）
+	{
+		Gdiplus::Graphics g(memDC.GetSafeHdc());
+		g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+		Gdiplus::GraphicsPath path;
+		const Gdiplus::REAL r = static_cast<Gdiplus::REAL>(g_data.RDPI(3));
+		const Gdiplus::REAL l = static_cast<Gdiplus::REAL>(boxLeft);
+		const Gdiplus::REAL t = static_cast<Gdiplus::REAL>(boxTop);
+		const Gdiplus::REAL w = static_cast<Gdiplus::REAL>(boxW);
+		const Gdiplus::REAL h = static_cast<Gdiplus::REAL>(boxH);
+		path.AddArc(l, t, r * 2, r * 2, 180.0f, 90.0f);
+		path.AddArc(l + w - r * 2, t, r * 2, r * 2, 270.0f, 90.0f);
+		path.AddArc(l + w - r * 2, t + h - r * 2, r * 2, r * 2, 0.0f, 90.0f);
+		path.AddArc(l, t + h - r * 2, r * 2, r * 2, 90.0f, 90.0f);
+		path.CloseFigure();
+
+		Gdiplus::SolidBrush brush(Gdiplus::Color(255, GetRValue(boxColor), GetGValue(boxColor), GetBValue(boxColor)));
+		g.FillPath(&brush, &path);
+	}
+
+	memDC.SetTextColor(RGB(255, 255, 255));
+	memDC.SetBkMode(TRANSPARENT);
+	memDC.TextOut(x - txtSize.cx / 2, boxTop + (boxH - txtSize.cy) / 2, txt);
+}
+
 void CTimelineChart::DrawTimelineHeader(CDC& memDC, const TimelineDrawContext& ctx, const HoverState& hover)
 {
 	CPoint origOrg = memDC.GetViewportOrg();
@@ -92,7 +208,7 @@ void CTimelineChart::DrawTimelineHeader(CDC& memDC, const TimelineDrawContext& c
 		macdSignal = stockData->macdTrendSignal;
 
 	CString cacheStatus = (ctx.klineData && !ctx.klineData->empty()) || (ctx.timelinePoint && !ctx.timelinePoint->empty())
-		? _T("正在使用本地数据") : _T("正在获取数据");
+		? _T("本地缓存") : _T("正在获取数据");
 	// 顶栏右侧 4 个图标按钮（设置/收起分组/展开/关闭，各 RDPI(20)）+ 4px 间隙
 	const int buttonReserve = g_data.RDPI(84);
 	const int cacheRight = ctx.windowWidth - buttonReserve;
@@ -116,7 +232,9 @@ void CTimelineChart::DrawTimelineHeader(CDC& memDC, const TimelineDrawContext& c
 	CStatusBarPanel statusBarPanel;
 	statusBarPanel.DrawHeader(memDC, ctx.realtimeData, ctx.windowWidth, g_data.RDPI(26), macdSignal);
 
-	const CString cacheChoices[] = { cacheStatus, _T("本地缓存"), _T("缓存") };
+	// 空间不足时逐级退到更短文案；首个候选已是最短的「本地缓存」口径，
+	// 故后备只留「缓存」，不再重复收录同名字符串
+	const CString cacheChoices[] = { cacheStatus, _T("缓存") };
 	for (const auto& candidate : cacheChoices)
 	{
 		CSize cacheSize = memDC.GetTextExtent(candidate);
@@ -579,108 +697,6 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 		}
 	}
 
-	// 绘制基金净值曲线
-	if (ctx.realtimeData.IsETF())
-	{
-		auto priceToY = [&](double price) -> int {
-			return ctx.priceChartTop + ctx.priceChartHeight - static_cast<int>(round((price - minPrice) * unitY));
-			};
-
-		const auto& fullTimeline = *ctx.fullTimeline;
-		std::map<int, double> iopvByIndex;
-
-		STOCK::Price refPrice = ctx.realtimeData.currentPrice > 0 ? ctx.realtimeData.currentPrice : ctx.realtimeData.prevClosePrice;
-		if (refPrice <= 0 && !fullTimeline.empty())
-			refPrice = fullTimeline[0].price;
-
-		auto isValidIopv = [refPrice](double val) {
-			if (val <= 0) return false;
-			if (refPrice <= 0) return true;
-			return (val >= refPrice * 0.7 && val <= refPrice * 1.3);
-		};
-
-		// 优先使用内存中fullTimeline的iopv字段（ApplyTimeline/ApplyFundIOPV已填充）
-		for (int i = 0; i < static_cast<int>(fullTimeline.size()); i++)
-		{
-			if (isValidIopv(fullTimeline[i].iopv))
-			{
-				iopvByIndex[i] = fullTimeline[i].iopv;
-			}
-		}
-
-		// 始终从数据库补充净值数据（LoadLatestFundNavCache已过滤非交易时段，含午休11:30-13:00）
-		// 不依赖内存iopv的覆盖度判断，避免上午数据已占满一半时跳过数据库，导致下午曲线缺失
-		{
-			auto navPoints = g_data.GetDbManager().LoadLatestFundNavCache(hover.stockId);
-			if (!navPoints.empty())
-			{
-				std::map<std::string, int> fullTimeIndexMap;
-				for (int i = 0; i < static_cast<int>(fullTimeline.size()); i++)
-				{
-					std::string hhmm = fullTimeline[i].time.substr(0, 5);
-					fullTimeIndexMap[hhmm] = i;
-				}
-
-				for (const auto& nav : navPoints)
-				{
-					if (isValidIopv(nav.iopv))
-					{
-						auto it = fullTimeIndexMap.find(nav.time);
-						if (it != fullTimeIndexMap.end())
-						{
-							iopvByIndex[it->second] = nav.iopv;
-						}
-					}
-				}
-			}
-		}
-
-		// 追加实时IOPV到最后一个分时点
-		if (isValidIopv(ctx.realtimeData.iopv) && !fullTimeline.empty())
-		{
-			int lastIdx = static_cast<int>(fullTimeline.size()) - 1;
-			iopvByIndex[lastIdx] = ctx.realtimeData.iopv;
-		}
-		if (!iopvByIndex.empty())
-		{
-			const COLORREF navColor = RGB(160, 32, 240);
-			CPen navPen(PS_SOLID, 1, navColor);
-			CPen* pOldPen = memDC.SelectObject(&navPen);
-			bool firstNavPoint = true;
-
-			int startIdx = ctx.startIndex;
-			int visCount = ctx.visibleCount;
-			int drawnCount = 0;
-
-			for (const auto& kv : iopvByIndex)
-			{
-				int fullIdx = kv.first;
-				double iopvVal = kv.second;
-
-				if (fullIdx < startIdx || fullIdx >= startIdx + visCount)
-					continue;
-
-				int relIdx = fullIdx - startIdx;
-				int pointX = stretchToEdges
-					? static_cast<int>(ctx.chartWidth * relIdx / static_cast<float>(totalPoints - 1))
-					: static_cast<int>(ctx.chartWidth / static_cast<float>(xAxisPts) * relIdx) + static_cast<int>(ctx.chartWidth / static_cast<float>(xAxisPts) / 2);
-				int pointY = priceToY(iopvVal);
-				if (firstNavPoint)
-				{
-					memDC.MoveTo(pointX, pointY);
-					firstNavPoint = false;
-				}
-				else
-				{
-					memDC.LineTo(pointX, pointY);
-				}
-				drawnCount++;
-			}
-
-			memDC.SelectObject(pOldPen);
-		}
-	}
-
 	// 绘制智能分析买卖点标记
 	{
 		auto stockData = g_data.GetStockData(hover.stockId);
@@ -975,6 +991,52 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 			}
 		}
 	}
+
+	// 交易台账 B/S 标记：匹配可见数据点。
+	// 分时模式下数据点只有 HH:mm，只标注当日成交；趋势图（K线数据派生）fullTime 为完整日期，按日期匹配。
+	if (ShouldDrawBsMarkers(hover.stockId))
+	{
+		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
+		if (!trades.empty())
+		{
+			CTime now = CTime::GetCurrentTime();
+			std::wstring today;
+			{
+				CString t;
+				t.Format(_T("%04d-%02d-%02d"), now.GetYear(), now.GetMonth(), now.GetDay());
+				today = t.GetString();
+			}
+			for (const auto& rec : trades)
+			{
+				if (rec.time.size() < 16)
+					continue;
+				const std::wstring recDay = rec.time.substr(0, 10);
+				const std::wstring recTime = rec.time.substr(11, 5);
+				for (int i = 0; i < totalPoints; i++)
+				{
+					const auto& tp = timelinePoint[i];
+					// fullTime 为完整日期 = K线派生点（趋势图），按日期匹配；否则为当日分时点，按 HH:mm 匹配
+					bool matched = false;
+					if (tp.fullTime.size() >= 10)
+						matched = (tp.fullTime.compare(0, 10, CCommon::UnicodeToStr(recDay.c_str())) == 0);
+					else
+						matched = (recDay == today) && (CString(tp.time.c_str()) == CString(recTime.c_str()));
+					if (!matched)
+						continue;
+
+					STOCK::Price refPrice = rec.price > 0 ? rec.price : tp.price;
+					if (refPrice <= 0)
+						break;
+					float pointX = pointXAt(i);
+					float yVal = static_cast<float>((refPrice - minPrice) * unitY);
+					int anchorY = ctx.priceChartTop + ctx.priceChartHeight - static_cast<int>(yVal);
+					anchorY = max(ctx.priceChartTop, min(anchorY, ctx.priceChartTop + ctx.priceChartHeight));
+					DrawBsMarker(memDC, static_cast<int>(pointX), anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight);
+					break;
+				}
+			}
+		}
+	}
 }
 
 void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawContext& ctx, const HoverState& hover)
@@ -1247,6 +1309,34 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 			amount = static_cast<double>(item.volume) * item.price;
 		CString amountStr = CCommon::FormatAmount(amount);
 		rows.push_back({ _T("成交额"), amountStr, COLOR_TEXT_PRIMARY });
+
+		// 7. 均价（当日累计成交均价，即图上那条暖金色均价线；与标题栏"均:"同源）
+		//    并给出「偏离」= 该分钟价格相对均价的百分比，供判断买点/卖点
+		{
+			STOCK::Price avgPrice = item.averagePrice;
+			// 量纲自愈：旧缓存可能把均价缩小了约100倍，与现价偏差过大时乘回（与均价线绘制同一判据）
+			if (avgPrice > 0 && item.price > 0
+				&& avgPrice < item.price * 0.4 && std::abs(avgPrice * 100.0 - item.price) < item.price * 0.3)
+			{
+				avgPrice *= 100.0;
+			}
+			if (avgPrice > 0)
+			{
+				CString avgStr = isEtf ? CCommon::FormatETFPrice(avgPrice) : CCommon::FormatFloat(avgPrice);
+				rows.push_back({ _T("均价"), avgStr, RGB(255, 179, 0) });
+
+				if (item.price > 0)
+				{
+					const double dev = (item.price - avgPrice) / avgPrice * 100.0;
+					CString devStr;
+					devStr.Format(_T("%+.2f%%"), dev);
+					// 高于均价（正偏离）用红、低于用绿，与涨跌配色一致；接近 0 时用中性色
+					COLORREF devColor = (std::abs(dev) < 0.005) ? COLOR_TEXT_MUTED
+						: (dev > 0 ? COLOR_RED_UP : COLOR_GREEN_DOWN);
+					rows.push_back({ _T("偏离"), devStr, devColor });
+				}
+			}
+		}
 	}
 
 	// 动态添加副图指标数据到悬浮卡片
@@ -1497,6 +1587,36 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 		CBrush* pOldBrush = memDC.SelectObject(&brush);
 		memDC.Rectangle(leftX, bodyTop, leftX + barWidth, bodyBottom + 1);
 		memDC.SelectObject(pOldBrush);
+	}
+
+	// 交易台账 B/S 标记：按成交日期匹配可见 bar，方块置于K线外侧、引线自影线端点延伸出来
+	if (ShouldDrawBsMarkers(hover.stockId))
+	{
+		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
+		std::map<std::string, int> sameDaySeq;   // 同一交易日的第几笔：纵向堆叠，避免标注重叠
+		for (const auto& rec : trades)
+		{
+			if (rec.time.size() < 10)
+				continue;
+			std::string tradeDay = CCommon::UnicodeToStr(rec.time.substr(0, 10).c_str());
+			for (int i = 0; i < totalPoints && (klineStartIdx + i) < klineEndIdx; i++)
+			{
+				const auto& kp = klineData[klineStartIdx + i];
+				if (kp.day != tradeDay)
+					continue;
+
+				int seq = sameDaySeq[tradeDay]++;
+				// 横向严格对齐柱子中心（不再左右错位，否则标记会偏离蜡烛）
+				int centerX = static_cast<int>(ctx.chartWidth / static_cast<float>(totalPoints) * i)
+					+ static_cast<int>(barTotalWidth / 2);
+				// 引线自影线端点伸出：买入接下影线低点、卖出接上影线高点，
+				// 标记再从这个端点继续向外让开，保证离K线足够远
+				int anchorY = rec.isSell ? priceToY(kp.high) : priceToY(kp.low);
+				DrawBsMarker(memDC, centerX, anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight,
+					priceToY(kp.high), priceToY(kp.low), seq);
+				break;
+			}
+		}
 	}
 
 	if (hover.showMA)

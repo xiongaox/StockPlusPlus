@@ -9,7 +9,16 @@ $root = Resolve-Path "$PSScriptRoot\.."
 # 1. 自动识别或解析版本号
 $verHeaderPath = "$root\Plugins\Stock\Version.h"
 if ([string]::IsNullOrWhiteSpace($Version)) {
-    if (Test-Path $verHeaderPath) {
+    # 版本基准取「最新 Git Tag +1」：Tag 只在发包时产生，能保证 GitHub 发布号连续不断档。
+    # 若以 Version.h 为基准，一旦有人提前手改版本号，发包就会跳号
+    $latestTag = $null
+    if (Get-Command git -ErrorAction SilentlyContinue) {
+        try { $latestTag = (& git -C "$root" tag -l 'v*.*.*' --sort=-v:refname 2>$null | Select-Object -First 1) } catch { $latestTag = $null }
+    }
+    if ($latestTag -and $latestTag -match '^v(\d+)\.(\d+)\.(\d+)$') {
+        $Version = "$([int]$Matches[1]).$([int]$Matches[2]).$([int]$Matches[3] + 1)"
+        Write-Host "依据最新 Tag $latestTag 递增版本号: v$Version" -ForegroundColor Yellow
+    } elseif (Test-Path $verHeaderPath) {
         $content = Get-Content $verHeaderPath -Raw
         if ($content -match 'STOCK_VERSION_MAJOR\s+(\d+)' -and $content -match 'STOCK_VERSION_MINOR\s+(\d+)' -and $content -match 'STOCK_VERSION_PATCH\s+(\d+)') {
             $curMajor = [int]$Matches[1]
@@ -19,10 +28,11 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
         } else {
             $Version = "2.0.6"
         }
+        Write-Host "未找到可用 Tag，回退依据 Version.h 递增版本号: v$Version" -ForegroundColor Yellow
     } else {
         $Version = "2.0.6"
+        Write-Host "未找到可用 Tag 与 Version.h，回退默认版本: v$Version" -ForegroundColor Yellow
     }
-    Write-Host "未显式指定版本号，自动递增为: v$Version" -ForegroundColor Yellow
 }
 
 $cleanVer = $Version.TrimStart('v', 'V')
@@ -60,6 +70,50 @@ $versionHeader = @"
 "@
 
 Set-Content -Path $verHeaderPath -Value $versionHeader -Encoding UTF8
+
+# 1b. 更新日志闭环：给待发布的日期行补上本次版本号。
+# 规范：日常提交的日期行只写日期，版本号只在发包时出现（否则 GitHub 发布号会断档）。
+# kAboutLogGroups[] 按新->旧排列，顶部连续若干「无版本号」的日期分组都属于本次发布，一并补写；
+# 遇到已带版本号（历史发布）的分组即停止，绝不改写历史
+$mgrPath = "$root\Plugins\Stock\ManagerDialog.cpp"
+if (Test-Path $mgrPath) {
+    $mgrContent = Get-Content $mgrPath -Raw -Encoding UTF8
+    $groupsMatch = [regex]::Match($mgrContent, 'const AboutLogGroup\s+kAboutLogGroups\[\]\s*=\s*\{(?<rows>[\s\S]*?)\};')
+    if (-not $groupsMatch.Success) { throw "未能在 ManagerDialog.cpp 中定位 kAboutLogGroups[]，无法闭环更新日志！" }
+
+    $rowsBase = $groupsMatch.Groups['rows'].Index
+    $labelEdits = @()
+    foreach ($row in [regex]::Matches($groupsMatch.Groups['rows'].Value, '\{\s*L"(?<label>[^"]+)"\s*,\s*(?<array>\w+)\s*,')) {
+        $label = $row.Groups['label'].Value
+        if ($label -notmatch '^\d{4}-\d{2}-\d{2}$') { break }
+        $labelEdits += [pscustomobject]@{
+            Index  = $rowsBase + $row.Groups['label'].Index
+            Length = $row.Groups['label'].Length
+            Text   = "$label (v$cleanVer)"
+        }
+    }
+
+    if ($labelEdits.Count -eq 0) {
+        Write-Host ">>> 更新日志顶部日期行已带版本号，本次未补写（请确认日志已覆盖本次改动）" -ForegroundColor Yellow
+    } else {
+        # 从后往前替换，避免前面的改写让后面的下标错位
+        foreach ($edit in ($labelEdits | Sort-Object -Property Index -Descending)) {
+            $mgrContent = $mgrContent.Remove($edit.Index, $edit.Length).Insert($edit.Index, $edit.Text)
+        }
+        [System.IO.File]::WriteAllText($mgrPath, $mgrContent, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host ">>> 更新日志日期行已补写版本号 v$cleanVer（共 $($labelEdits.Count) 组）" -ForegroundColor Cyan
+    }
+}
+
+# 1c. 发布前置校验：日志里必须已存在本次版本号，否则说明本次改动还没写进日志。
+# 校验放在编译之前：否则要白等一轮 x64+x86 构建才会在生成发布说明时失败
+if (Test-Path $mgrPath) {
+    $mgrCheck = Get-Content $mgrPath -Raw -Encoding UTF8
+    $verToken = "(v$cleanVer)"
+    if ($mgrCheck -notmatch [regex]::Escape($verToken)) {
+        throw "更新日志中没有任何分组标记为 $verToken：请先在 ManagerDialog.cpp 的 kAboutLogGroups[] 顶部补充本次改动的日期分组（日期行只写日期），再执行发包"
+    }
+}
 
 # 2. 检查并关闭运行中的测试器
 $tester = Get-Process -Name "PluginTester" -ErrorAction SilentlyContinue
@@ -118,15 +172,22 @@ $mgrPath = "$root\Plugins\Stock\ManagerDialog.cpp"
 $bullets = @()
 if (Test-Path $mgrPath) {
     $mgrContent = Get-Content $mgrPath -Raw -Encoding UTF8
-    if ($mgrContent -match 'const wchar_t\*\s+items_\w+\[\]\s*=\s*\{([\s\S]*?)\};') {
-        $rawItems = $Matches[1]
-        $bullets = [regex]::Matches($rawItems, 'L"([^"]+)"') | ForEach-Object {
-            "- " + $_.Groups[1].Value.Trim()
+    # 只取「日期行已带本次版本号」的分组：这些正是本次发布的条目（可能跨多个日期）
+    $groupsMatch = [regex]::Match($mgrContent, 'const AboutLogGroup\s+kAboutLogGroups\[\]\s*=\s*\{(?<rows>[\s\S]*?)\};')
+    if ($groupsMatch.Success) {
+        foreach ($row in [regex]::Matches($groupsMatch.Groups['rows'].Value, '\{\s*L"(?<label>[^"]+)"\s*,\s*(?<array>\w+)\s*,')) {
+            if ($row.Groups['label'].Value -notlike "*(v$cleanVer)") { continue }
+            $arrName = [regex]::Escape($row.Groups['array'].Value)
+            $bodyMatch = [regex]::Match($mgrContent, 'const wchar_t\*\s+' + $arrName + '\[\]\s*=\s*\{(?<items>[\s\S]*?)\};')
+            if ($bodyMatch.Success) {
+                $bullets += [regex]::Matches($bodyMatch.Groups['items'].Value, 'L"([^"]+)"') | ForEach-Object { "- " + $_.Groups[1].Value.Trim() }
+            }
         }
     }
 }
 
-$bulletText = if ($bullets.Count -gt 0) { $bullets -join "`n" } else { "- •  【更新】 版本常规功能优化与性能提升" }
+if ($bullets.Count -eq 0) { throw "未能提取到 v$cleanVer 的更新日志：请确认 ManagerDialog.cpp 的 kAboutLogGroups[] 顶部包含本次发布的日期分组" }
+$bulletText = $bullets -join "`n"
 
 $releaseNotes = @"
 ### 🚀 Stock Plugin v$cleanVer 更新日志

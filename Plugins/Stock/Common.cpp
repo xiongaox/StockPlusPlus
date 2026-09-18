@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <set>
 #include <algorithm>
+#include <cwctype>
 #include "DataManager.h"
 #include "NetFetch.h"
 
@@ -550,6 +551,25 @@ std::wstring CCommon::GetPureCode(const std::wstring& fullCode)
 		return fullCode.substr(2);
 	}
 	return fullCode;
+}
+
+std::wstring CCommon::GetDisplayCode(const std::wstring& fullCode)
+{
+	// 仅把交易所前缀转大写（sz159558 -> SZ159558），数字/字母主体保持原样：
+	// 美股代码本身含小写字母，整体转大写并不合适
+	static const wchar_t* kExchanges[] = { L"rt_hk", L"r_hk", L"gb_", L"sz", L"sh", L"bj", L"hk", L"us", L"of", L"jj", L"nf", L"hf" };
+	std::wstring result = fullCode;
+	for (const wchar_t* ex : kExchanges)
+	{
+		const size_t len = wcslen(ex);
+		if (result.size() > len && result.compare(0, len, ex) == 0)
+		{
+			for (size_t i = 0; i < len; ++i)
+				result[i] = static_cast<wchar_t>(towupper(result[i]));
+			break;
+		}
+	}
+	return result;
 }
 
 static std::string UrlEncodeUtf8Helper(const std::wstring& wstr)

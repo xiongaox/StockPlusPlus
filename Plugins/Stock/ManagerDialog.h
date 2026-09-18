@@ -161,6 +161,9 @@ public:
 	std::function<void(bool)> m_on_settings_closed;
 	// 即时生效：读取全部控件值写入 g_data 并保存/热更新（原「确定」按钮的提交逻辑）
 	void ApplySettings();
+	// 宿主 DPI 变更后重建字体并整体重排。内嵌设置视图会长期开着，
+	// 且三档界面字体只在初始化时按 DPI 建一次，不刷新会出现内外字号不一致
+	void OnHostDpiChanged();
 
 	// 对话框数据
 #ifdef AFX_DESIGN_TIME
@@ -250,6 +253,15 @@ private:
 	CRect m_about_author_rect; // 关于页作者主页超链接区域
 	CRect m_about_repo_rect;   // 关于页项目仓库超链接区域
 
+	// 关于页「检查更新」按钮：查询在后台线程执行，完成后 PostMessage 回主线程刷新状态
+	CButton m_about_update_btn;
+	bool m_update_checking{ false };            // 查询中（按钮置灰显示「检查中…」）
+	bool m_update_failed{ false };              // 上次查询失败（状态文字用告警色提示）
+	std::wstring m_update_latest_version;       // 查到的最新版本号（如 "2.0.10"），空=未查到
+	std::wstring m_update_download_url;         // 新版本下载页地址
+	std::wstring m_update_status_text;          // 状态提示（已是最新/发现新版本/查询失败）
+	CRect m_about_update_rect;                  // 状态文字点击区（仅「发现新版本」时有效）
+
 	// 内部辅助方法
 	std::wstring GetStockName(const std::wstring& code);
 	// 「阈值提醒」列文本：形如 "+5% | -5%"，未设置的展示 "--"
@@ -260,10 +272,14 @@ private:
 	bool InScrollContent(CPoint point);                  // 点是否在右侧内容可视区内
 	void SetPageScroll(int scrollY);                     // 钳制滚动偏移并联动控件布局与重绘
 	int CalcPageContentHeight();                         // 当前页内容自然总高（0 = 不启用通用滚动）
+	int ScrollViewportHeight() const;                    // 当前页滚动可视区高度（关于页只算日志视口）
 	int MeasureMetricCard2Height(int rightWidth);        // 指标页候选库自然高度（与绘制排布一致）
 	int MeasureAboutPageHeight();                       // 关于页日志区自然高度（与绘制排布一致）
 	int LayoutAboutLog(Gdiplus::Graphics& g, bool draw, int textX, int rightX, int startY); // 日志区排版并返回结束 Y（draw=false 只量高）
 	int ContentBottomPad() const;                        // 内容区底部留白（内嵌无按钮条时收窄，分组页仍留操作按钮行）
+	// 关于页两段式几何（顶部固定信息卡 / 其下独立滚动日志区），绘制、量高与控件摆放共用
+	void GetAboutLayout(CRect& cardRect, CRect& logViewport) const;
+	CRect CalcAboutUpdateBtnRect() const; // 信息卡内右侧「检查更新」按钮矩形（状态文字与它共用右缘）
 	void ApplyIfEmbedded();                              // 内嵌模式即时提交设置（模态模式等「确定」）
 	void ApplyOpacity(int opacityPercent);               // 实时应用并推送背景透明度到宿主与当前窗口
 
@@ -273,7 +289,7 @@ private:
 	bool IsCheckCtrl(UINT nID) const;
 	bool IsPrimaryBtn(UINT nID) const;
 	bool IsDestructiveBtn(UINT nID) const;
-	void DrawFlatButton(CDC& dc, const CRect& rect, const CString& text, bool primary, bool destructive, bool hot, bool pressed);
+	void DrawFlatButton(CDC& dc, const CRect& rect, const CString& text, bool primary, bool destructive, bool hot, bool pressed, bool disabled = false);
 	void DrawControlBorder(Gdiplus::Graphics& g, UINT nID);
 	void DrawSectionTitle(Gdiplus::Graphics& g, int x, int y, const std::wstring& title);
 	// 单行 EDIT 不支持垂直居中：控件实际高度缩为字段高-8 并居中放置，
@@ -281,6 +297,8 @@ private:
 	void PlaceEditInField(UINT nID, const CRect& fieldRect);
 	bool TryAddMaDay(int day); // 校验并添加均线周期，失败时弹出对应提示，返回是否成功
 	bool TryAddMetric(const std::wstring& name); // 添加指标项（上限4项）
+	// 按当前 DPI 创建三档界面字体（初始化与 DPI 变更刷新共用，避免两处字号口径漂移）
+	void CreateUiFonts();
 	void SwitchPage(PageIndex page);
 	void SwitchGroupTab(int tab);
 	void UpdateControlsLayout();
@@ -297,11 +315,14 @@ private:
 	void DrawMetricPage(Gdiplus::Graphics& g, const CRect& contentRect);
 	void DrawWebDavPage(Gdiplus::Graphics& g, const CRect& contentRect);
 	void DrawApiHealthPage(Gdiplus::Graphics& g, const CRect& contentRect);
-	void DrawAboutPage(Gdiplus::Graphics& g, const CRect& contentRect);
-
+	void DrawAboutPage(Gdiplus::Graphics& g);
 	// ===== 接口检测页控件 =====
 	CButton m_api_test_btn;       // 接口检测页右上角「立即重新检测」按钮
 	bool m_api_probing{ false };
+
+	// 检查更新：后台查询完成后回主线程
+	afx_msg void OnBnClickedUpdateCheckBtn();
+	afx_msg LRESULT OnUpdateCheckFinished(WPARAM wParam, LPARAM lParam);
 
 protected:
 	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV 支持

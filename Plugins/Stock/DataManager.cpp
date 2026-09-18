@@ -1,4 +1,4 @@
-#include "pch.h"
+#include "pch.h"
 #include "DataManager.h"
 #include "Common.h"
 #include "Stock.h"
@@ -25,6 +25,15 @@ static std::string GetLocalDateString(time_t t)
 static std::string GetTodayDateString()
 {
 	return GetLocalDateString(time(nullptr));
+}
+
+// 当日日期串（宽字符版，与买入日期同格式），用于交易台账“今日成交”的过滤
+static std::wstring GetTodayDateStringW()
+{
+	CTime now = CTime::GetCurrentTime();
+	CString text;
+	text.Format(_T("%04d-%02d-%02d"), now.GetYear(), now.GetMonth(), now.GetDay());
+	return std::wstring(text.GetString());
 }
 
 // 将 "YYYY-MM-DD" 转为自 1970-01-01 起的天数（用于周K去重的周索引计算）
@@ -282,6 +291,8 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 	m_stock_alert_prices.clear();
 	// 加载每个股票的持仓配置
 	m_stock_positions.clear();
+	// 交易台账缓存（按股票惰性加载，写操作后失效）
+	m_trade_cache.clear();
 	// 加载每个股票的状态栏展示配置
 	m_stock_statusbar.clear();
 	// 加载每个股票的关联股票配置
@@ -849,6 +860,10 @@ void CDataManager::SaveConfig()
 			{
 				ini.WriteString(code.c_str(), L"buy_date", L"");
 			}
+			// 台账已迁移到数据库 trades 表：旧版 ini 的 today_trades 键写空清理，
+			// 避免升级后 ini 里残留昨天的流水文本造成误解
+			ini.WriteString(code.c_str(), L"today_trades", L"");
+			ini.WriteString(code.c_str(), L"today_trades_date", L"");
 		}
 
 		// 保存每个股票的状态栏展示配置
@@ -955,10 +970,54 @@ void CDataManager::SetHostFont(HFONT hFont)
 		return;
 	m_host_logfont = lf;
 	m_has_host_font = true;
+	RecalcFontScale();
+}
+
+// 由主机 LOGFONT 与当前 DPI 换算派生字体的缩放比例（100=不缩放）。
+// SetHostFont 与 DPI 变更刷新共用，保证两条路径口径一致
+void CDataManager::RecalcFontScale()
+{
+	if (!m_has_host_font)
+		return;
 	// 主机字号换算成96DPI下的逻辑高度，与9pt（约12px）基准比较得到缩放比例，
 	// 使派生字体在主机字号变化时同步缩放
-	int logicalHeight = -lf.lfHeight * 96 / max(96, m_dpi);
+	int logicalHeight = -m_host_logfont.lfHeight * 96 / max(96, m_dpi);
 	m_font_scale_percent = max(75, min(300, logicalHeight * 100 / 12));
+}
+
+// 重新读取系统 DPI。构造时只读一次，跨显示器拖动或系统缩放调整后不会自行更新，
+// 会导致界面按旧 DPI 排版（字体与控件尺寸整体偏大/偏小），必须重启宿主才恢复。
+// 返回 true 表示 DPI 确实变了，调用方需要重建字体/控件并重绘
+bool CDataManager::RefreshDpi()
+{
+	HDC hDC = ::GetDC(HWND_DESKTOP);
+	const int dpi = GetDeviceCaps(hDC, LOGPIXELSY);
+	::ReleaseDC(HWND_DESKTOP, hDC);
+
+	if (dpi <= 0 || dpi == m_dpi)
+		return false;
+
+	m_dpi = dpi;
+
+	// 图标按旧 DPI 加载（LoadImage 的宽高已烘进位图），须丢弃重取，否则高 DPI 下
+	// 仍用小位图拉伸显示。但 IDI_STOCK 已通过 Stock::GetPluginIcon() 交给宿主长期持有
+	// （宿主托盘/设置界面图标），销毁它会让宿主握到悬空句柄并可能在重绘时崩溃；
+	// 故只清理非宿主图标，IDI_STOCK 保持原样（图标尺寸略滞后属纯观感问题，可忽略）
+	for (auto it = m_icons.begin(); it != m_icons.end(); )
+	{
+		if (it->first == IDI_STOCK)
+		{
+			++it;
+			continue;
+		}
+		if (it->second != nullptr)
+			::DestroyIcon(it->second);
+		it = m_icons.erase(it);
+	}
+
+	// 字体缩放基准含 DPI 项，随之重算
+	RecalcFontScale();
+	return true;
 }
 
 HICON CDataManager::GetIcon(UINT id)
@@ -1685,6 +1744,115 @@ void CDataManager::SetPosition(const std::wstring& code, double cost, double cou
 		auto& codes = m_setting_data.m_position_codes;
 		codes.erase(std::remove(codes.begin(), codes.end(), code), codes.end());
 	}
+}
+
+std::vector<StockTradeRecord> CDataManager::GetStockTrades(const std::wstring& code)
+{
+	// 惰性加载：首次访问读库并缓存，写操作后失效重载（读取频率高，重绘时避免反复查库）
+	auto it = m_trade_cache.find(code);
+	if (it != m_trade_cache.end())
+		return it->second;
+	std::vector<StockTradeRecord> records = m_db_mgr.LoadTradeRecords(code);
+	m_trade_cache[code] = records;
+	return records;
+}
+
+long long CDataManager::AddStockTrade(const std::wstring& code, bool is_sell, const std::wstring& time,
+	double price, double amount, double fee)
+{
+	// trades 表 stock_name 非空：行情未就绪时用代码兜底
+	std::wstring name = code;
+	auto stockData = GetStockData(code);
+	if (stockData && !stockData->info.displayName.empty())
+		name = stockData->info.displayName;
+
+	const long long id = m_db_mgr.InsertTradeRecord(code, name, is_sell ? 1 : 0, time, price, amount, fee);
+	if (id > 0)
+		m_trade_cache.erase(code);
+	return id;
+}
+
+bool CDataManager::UpdateStockTrade(const std::wstring& code, const StockTradeRecord& record)
+{
+	const bool ok = m_db_mgr.UpdateTradeRecord(record.id, record.isSell ? 1 : 0, record.time,
+		record.price, record.amount, record.fee);
+	if (ok)
+		m_trade_cache.erase(code);
+	return ok;
+}
+
+bool CDataManager::DeleteStockTrade(const std::wstring& code, long long id)
+{
+	const bool ok = m_db_mgr.DeleteTradeRecord(id);
+	if (ok)
+		m_trade_cache.erase(code);
+	return ok;
+}
+
+std::wstring CDataManager::GetTradeKindLabel(const std::vector<StockTradeRecord>& trades, size_t index)
+{
+	// 按全量流水重放持仓推标签：首笔买入=建仓，其后买入=加仓，
+	// 卖出后仍有剩余=减仓，卖出后清零=清仓（台账缺历史时以流水自身为准）
+	if (index >= trades.size())
+		return std::wstring();
+	double hold = 0.0;
+	for (size_t i = 0; i < index; ++i)
+	{
+		if (trades[i].isSell)
+			hold -= trades[i].amount;
+		else
+			hold += trades[i].amount;
+		if (hold < 0.0)
+			hold = 0.0;
+	}
+	const StockTradeRecord& record = trades[index];
+	if (record.isSell)
+	{
+		hold -= record.amount;
+		return (hold <= 0.0) ? L"清仓" : L"减仓";
+	}
+	return (hold <= 0.0) ? L"建仓" : L"加仓";
+}
+
+double CDataManager::GetTodayTradeAdjust(const std::wstring& code, double prev_close)
+{
+	// 完整“当日参考盈亏” = (现价−昨收)×持股数 + 本修正值，与券商口径一致：
+	// 卖出部分按“卖价−昨收”结算，买入部分按“昨收−买价”结算。
+	// 该值与现价无关，因此盘中恒定，只有现价那一项随行情跳动。
+	// 手续费不计：券商“当日参考盈亏”同样不含费（ETF 卖出手续费为 0）。
+	if (prev_close <= 0)
+		return 0.0;
+	const std::wstring today = GetTodayDateStringW();
+	double adjust = 0.0;
+	for (const auto& record : GetStockTrades(code))
+	{
+		// 台账保留全部历史，当日盈亏只统计今天（time 前 10 位为 yyyy-MM-dd）的成交
+		if (record.time.compare(0, 10, today) != 0)
+			continue;
+		if (record.isSell)
+			adjust += record.amount * (record.price - prev_close);
+		else
+			adjust += record.amount * (prev_close - record.price);
+	}
+	return adjust;
+}
+
+double CDataManager::GetYesterdayHoldCount(const std::wstring& code)
+{
+	// 填写的持股数是“当前实际持股”，加上今日净卖出量即回到昨收持股；
+	// 今日无台账成交时结果就是填写的持股数，与旧口径完全一致
+	double hold = GetHoldingCount(code);
+	const std::wstring today = GetTodayDateStringW();
+	for (const auto& record : GetStockTrades(code))
+	{
+		if (record.time.compare(0, 10, today) != 0)
+			continue;
+		if (record.isSell)
+			hold += record.amount;
+		else
+			hold -= record.amount;
+	}
+	return hold;
 }
 
 bool CDataManager::GetShowInStatusBar(const std::wstring& code)
