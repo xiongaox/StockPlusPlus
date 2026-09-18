@@ -132,6 +132,7 @@ public:
 	int m_turnover_slot{ -1 };                           // 今日累计额覆盖的最后时间轴槽号（与曲线同槽对齐比较）
 	std::vector<MC::TrendSample> m_trend_curve;         // 涨跌家数分时（自积累）
 	std::vector<MC::EtfFlowSample> m_etf_flow_curve;    // ETF累计净流入分时（自积累）
+	std::wstring m_curve_date;                           // 上面两条自积累曲线所属交易日（跨日清零用）
 
 	// ===== 各数据集最后成功更新时间（0=从未成功）=====
 	time_t m_sectors_time{ 0 };
@@ -206,6 +207,8 @@ public:
 	// 按开市时间推进自积累曲线（在 FetchTrendDist/FetchEtfs 成功后调用）
 	void AppendTrendSample();
 	void AppendEtfFlowSample();
+	// 自积累曲线跨日清零（调用方需已持 m_mutex）
+	void RollCurveDateLocked();
 
 	// 主题归类：ETF 名称 → 主题关键词
 	static std::wstring DeriveTheme(const std::wstring& name);

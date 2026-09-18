@@ -383,6 +383,9 @@ bool CMarketCenterData::ApplySnapshot(DataSet ds, const std::string& payload, ti
 	if (ok)
 	{
 		std::lock_guard<std::mutex> lock(m_mutex);
+		// 快照只在 tradeDate == 今天时才走到这里（见函数开头校验），因此随快照恢复的
+		// 自积累曲线同属今天：把曲线日期一并盖章，否则首次采样会把它当跨日数据清掉
+		const std::wstring todayW(tradeDate.begin(), tradeDate.end());
 		switch (ds)
 		{
 		case DS_SECTORS: m_sectors=std::move(sectors); m_sectors_time=fetchedAt; break;
@@ -396,8 +399,15 @@ bool CMarketCenterData::ApplySnapshot(DataSet ds, const std::string& payload, ti
 			m_leader_inst=std::move(leaderInst);
 			m_leader_main=std::move(leaderMain);
 			m_fflow_time=fetchedAt;
+			m_curve_date=todayW;
 			break;
-		case DS_TREND: m_dist=std::move(dist); m_trend_curve=std::move(trendCurve); m_dist_time=fetchedAt; m_turnover_time=fetchedAt; break;
+		case DS_TREND:
+			m_dist=std::move(dist);
+			m_trend_curve=std::move(trendCurve);
+			m_dist_time=fetchedAt;
+			m_turnover_time=fetchedAt;
+			m_curve_date=todayW;
+			break;
 		default: break;
 		}
 	}
@@ -468,7 +478,10 @@ std::string CMarketCenterData::SerializeSnapshot(DataSet ds) const
 		JsonStringField(out, "name", m_leader_main.name); out += ",";
 		JsonDoubleField(out, "flow", m_leader_main.flow);
 		out += "}";
-		out += "]}"; break;
+		// 此处没有未闭合的数组，只补数据对象的右括号。多写一个 ']' 会让整份载荷无法解析，
+		// 启动时被 ApplySnapshot 判为非法并整条删除——沪深/指数能马上从服务端重取，
+		// 靠本地自积累的 ETF 曲线则永久丢失（表现为 ETF 净流入线老是画不出来）
+		out += "}"; break;
 	case DS_TREND:
 		out += "{\"time\":" + std::to_string(static_cast<long long>(m_dist.time)) + ",\"zt\":" + std::to_string(m_dist.zt) + ",\"dt\":" + std::to_string(m_dist.dt) + ",\"buckets\":{";
 		{ bool first=true; for (const auto& p:m_dist.buckets) { if(!first)out+=","; first=false; JsonKey(out,std::to_string(p.first).c_str()); out+=std::to_string(p.second); } }
@@ -1489,6 +1502,42 @@ bool CMarketCenterData::FetchTrendDist()
 }
 
 // ===== 自积累曲线采样 =====
+
+// 采样时刻是否落在可绘制的交易时段内，并把真实钟点写入 buf。
+// 时间轴只有 09:30~11:29 与 13:00~15:00（**没有 11:30 槽**，午休并入 13:00），
+// 落在轴外的戳会被 TimeIndex 判 -1 而画不出来，所以盘前/午休/盘后一律不采样：
+//   · 盘前与午休本就没有新数据（列表还是上一时段的值），采了只会与相邻点重复；
+//   · 盘后如果还给同一个收盘槽重复打戳，"同分钟覆盖写"会把它们压成一个点，
+//     曲线永远只有 1 个点、drawSeries 需要 ≥2 点，反而导致线画不出来。
+// 周末同理跳过（返回 false）。
+static bool SampleClock(wchar_t (&buf)[8])
+{
+	SYSTEMTIME st;
+	GetLocalTime(&st);
+	if (st.wDayOfWeek == 0 || st.wDayOfWeek == 6)
+		return false;
+	const int mins = st.wHour * 60 + st.wMinute;
+	const bool morning = (mins >= 9 * 60 + 30 && mins < 11 * 60 + 30);   // 09:30~11:29
+	const bool afternoon = (mins >= 13 * 60 && mins <= 15 * 60);         // 13:00~15:00
+	if (!morning && !afternoon)
+		return false;
+	swprintf_s(buf, L"%02d:%02d", mins / 60, mins % 60);
+	return true;
+}
+
+// 自积累曲线跨日清零：宿主可连续运行数天，不清会把昨天的点留在今天图上
+// （横轴只有一天，昨天的点会与今天重叠成假走势）。调用方需已持 m_mutex。
+void CMarketCenterData::RollCurveDateLocked()
+{
+	const std::string today = CurrentTradeDate();
+	std::wstring todayW(today.begin(), today.end());
+	if (m_curve_date == todayW)
+		return;
+	m_curve_date = todayW;
+	m_trend_curve.clear();
+	m_etf_flow_curve.clear();
+}
+
 void CMarketCenterData::AppendTrendSample()
 {
 	long long up, down;
@@ -1497,13 +1546,12 @@ void CMarketCenterData::AppendTrendSample()
 		up = m_dist.UpCount();
 		down = m_dist.DownCount();
 	}
-	time_t now = time(nullptr);
-	struct tm localTm{};
-	localtime_s(&localTm, &now);
 	wchar_t buf[8];
-	swprintf_s(buf, L"%02d:%02d", localTm.tm_hour, localTm.tm_min);
+	if (!SampleClock(buf))
+		return;
 
 	std::lock_guard<std::mutex> lock(m_mutex);
+	RollCurveDateLocked();
 	std::wstring t = buf;
 	// 同一分钟覆盖写，跨分钟追加
 	if (!m_trend_curve.empty() && m_trend_curve.back().time == t)
@@ -1521,13 +1569,12 @@ void CMarketCenterData::AppendEtfFlowSample()
 		std::lock_guard<std::mutex> lock(m_mutex);
 		for (auto& e : m_etfs) sum += e.inflow;
 	}
-	time_t now = time(nullptr);
-	struct tm localTm{};
-	localtime_s(&localTm, &now);
 	wchar_t buf[8];
-	swprintf_s(buf, L"%02d:%02d", localTm.tm_hour, localTm.tm_min);
+	if (!SampleClock(buf))
+		return;
 
 	std::lock_guard<std::mutex> lock(m_mutex);
+	RollCurveDateLocked();
 	std::wstring t = buf;
 	if (!m_etf_flow_curve.empty() && m_etf_flow_curve.back().time == t)
 		m_etf_flow_curve.back().inflow = sum;
