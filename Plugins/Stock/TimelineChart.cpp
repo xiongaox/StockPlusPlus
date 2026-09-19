@@ -32,6 +32,33 @@ static bool ShouldDrawBsMarkers(const std::wstring& stockId)
 	return !stockId.empty() && g_data.GetHoldingCount(stockId) > 0;
 }
 
+// 次数角标要从当前字体派生出一个小号字体来画普通数字，而不是用 Unicode 下标字符
+// （U+2080..2089）：雅黑、Arial 这些常见主机字体都没有这几个字形，会画成方框。
+// 只缩小字号、其余字型属性照抄，任何主机字体下都能得到 B₂ / S₄ 的下标观感，
+// 也不会像 CreateStockFont 那样把字体缩放系数叠加两次。
+static bool CreateBadgeFont(CFont& font, CDC& dc, int percent)
+{
+	LOGFONT lf{};
+	HFONT currentFont = static_cast<HFONT>(::GetCurrentObject(dc.GetSafeHdc(), OBJ_FONT));
+	if (currentFont == nullptr || ::GetObject(currentFont, sizeof(lf), &lf) != sizeof(lf) || lf.lfHeight == 0)
+		return false;
+
+	const LONG absHeight = lf.lfHeight < 0 ? -lf.lfHeight : lf.lfHeight;
+	lf.lfHeight = -max(1, static_cast<int>(absHeight * percent / 100));
+	return font.CreateFontIndirect(&lf) != FALSE;
+}
+
+// 次数角标文本：同一交易日同方向的多笔成交只画一个方块，次数以字母右侧的小号数字展示（如 B₃ / S₄）。
+// 只做一笔时返回空串，标记维持原样（不带角标）
+static CString FormatTradeCountBadge(int count)
+{
+	CString text;
+	const int clamped = max(0, min(count, 99));
+	if (clamped > 1)
+		text.Format(_T("%d"), clamped);
+	return text;
+}
+
 // 辅助函数：绘制价格点标签（最高/最低价标注）
 static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLeft, int chartTop, int chartWidth, int chartHeight,
 	STOCK::Price price, bool isHigh, COLORREF color)
@@ -97,32 +124,55 @@ static void DrawPricePointLabel(CDC& memDC, int pointX, int pointY, int chartLef
 // 买入接下影线（标在下方）、卖出接上影线（标在上方）。
 // 引线长度按当日蜡烛的像素高度等比缩放：缩放图表时蜡烛会变大，
 // 固定像素的间距在放大后显得贴脸，按比例走才能保持一致的视觉距离。
-// stackIndex 用于同一天多笔成交——改为纵向堆叠（而不是横向错位），保证标记始终对准柱子中心。
+// 同一天（分时下为同一分钟）同方向的多笔成交只调用本函数一次：标记合并成一个方块，
+// 次数由右下角角标表示（如 B₂ / S₄），避免多个方块纵向堆叠把价格区占满。
+// badgeFont 为角标用的小号字体（由调用方按主体字体派生一次传进来），为空表示不画角标。
 static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int chartBottom,
-	int avoidTop = INT_MIN, int avoidBottom = INT_MIN, int stackIndex = 0)
+	int avoidTop = INT_MIN, int avoidBottom = INT_MIN, int count = 1, CFont* badgeFont = nullptr)
 {
 	const CString txt = isBuy ? _T("B") : _T("S");
 	const COLORREF boxColor = isBuy ? kBsBuyColor : kBsSellColor;
 	CSize txtSize = memDC.GetTextExtent(txt);
 
-	// 外框尺寸沿用原字高（高度那个尺寸是对的），宽度补到与高度相等成为正方形。
-	// 注意别按长短边较大者算边长，那会把整个标记放大一圈
+	// 外框边长沿用原字高（高度那个尺寸是对的），方块恒为正方形。
+	// 注意别按长短边较大者算边长，那会把整个标记放大一圈。
+	// 角标与字母当作一个整体在方块里居中排版（读作 B₃ / S₄），而不是把数字钉在方块右下角：
+	// 钉角会让数字离字母很远、反而贴到方块边上。整体宽度超不过边长时方块一个像素都不动，
+	// 只有两位数这种放不下的极端情况才对称加宽，加宽以 x 为中心，字母与角标仍保持整体居中
+	CFont* pOldFont = nullptr;
+	const CString badgeTxt = FormatTradeCountBadge(count);
+	const bool hasBadge = !badgeTxt.IsEmpty() && badgeFont != nullptr;
+	CSize badgeSize(0, 0);
+	int badgeGap = 0;
 	const int padY = g_data.RDPI(2);
 	const int side = txtSize.cy + padY * 2;
-	const int boxW = side;
-	const int boxH = side;
+	int boxW = side;
+	int boxH = side;
+	if (hasBadge)
+	{
+		badgeGap = g_data.RDPI(1);
+		pOldFont = memDC.SelectObject(badgeFont);
+		badgeSize = memDC.GetTextExtent(badgeTxt);
+		memDC.SelectObject(pOldFont);
+
+		// 整体宽度超边长才加宽，且宽高同步长以保持正方形；不足边长时方块一个像素都不动，
+		// 多出的空间由整体居中吸收
+		const int pairW = txtSize.cx + badgeGap + badgeSize.cx;
+		if (pairW > boxW)
+			boxW = boxH = pairW;
+	}
+	// 「字母 + 角标」整体在方块内的起点（相对方块中心 x）
+	const int pairStart = hasBadge ? -((txtSize.cx + badgeGap + badgeSize.cx) / 2) : -txtSize.cx / 2;
 
 	// 间距以方块边长为基准（两者在同一像素空间，避免 RDPI 在高 DPI 下缩小而与方块尺寸脱节）：
 	// 下限 2 倍边长，保证引线明显长于标记本身；蜡烛很大时再多给一点，免得上方的标记显得贴脸
-	int gap = boxH * 2;
+	int gap = side * 2;
 	if (avoidTop != INT_MIN && avoidBottom != INT_MIN)
 	{
 		const int span = avoidBottom - avoidTop;   // 蜡烛含影线的像素高度
 		if (span > 0)
 			gap = max(gap, span * 30 / 100);
 	}
-	// 同日多笔纵向堆叠，避免标记互相压住（横向保持对准柱子中心）
-	gap += stackIndex * (boxH + g_data.RDPI(2));
 
 	const int minTop = chartTop + g_data.RDPI(2);
 	const int maxTop = (chartBottom - g_data.RDPI(1) - boxH) < minTop ? minTop : (chartBottom - g_data.RDPI(1) - boxH);
@@ -160,6 +210,7 @@ static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int
 	}
 	boxTop = max(minTop, min(boxTop, maxTop));
 
+	// 方块以 x 为中心（加宽时两边对称长，字母保持居中）
 	const int boxLeft = x - boxW / 2;
 
 	// 引线：自方块朝向影线端点的一侧中心，连到 (x, y)（y 即影线端点）
@@ -194,7 +245,17 @@ static void DrawBsMarker(CDC& memDC, int x, int y, bool isBuy, int chartTop, int
 
 	memDC.SetTextColor(RGB(255, 255, 255));
 	memDC.SetBkMode(TRANSPARENT);
-	memDC.TextOut(x - txtSize.cx / 2, boxTop + (boxH - txtSize.cy) / 2, txt);
+	// 字母与角标整体居中排版：字母在整体左侧、角标紧随其后并贴底（下标观感）。
+	// 无角标时 pairStart 就是原来的 -cx/2，渲染结果与改动前逐像素一致
+	const int textTop = boxTop + (boxH - txtSize.cy) / 2;
+	memDC.TextOut(x + pairStart, textTop, txt);
+	if (hasBadge)
+	{
+		memDC.SelectObject(badgeFont);
+		const int badgeTop = boxTop + boxH - badgeGap - badgeSize.cy;
+		memDC.TextOut(x + pairStart + txtSize.cx + badgeGap, badgeTop, badgeTxt);
+		memDC.SelectObject(pOldFont);
+	}
 }
 
 void CTimelineChart::DrawTimelineHeader(CDC& memDC, const TimelineDrawContext& ctx, const HoverState& hover)
@@ -992,13 +1053,17 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 		}
 	}
 
-	// 交易台账 B/S 标记：匹配可见数据点。
-	// 分时模式下数据点只有 HH:mm，只标注当日成交；趋势图（K线数据派生）fullTime 为完整日期，按日期匹配。
+	// 交易台账 B/S 标记：同一交易日、同一方向的多次做 T 只画一个标记，次数走右下角角标
+	// （B₂ / S₄），不再逐笔各占一个方块。
+	// 匹配口径按数据点携带的信息分三档：fullTime 带完整日期时间（东财/腾讯源的分时点）按
+	// 日期+分钟匹配；只带日期（K线派生的趋势图点）按日期匹配；都不带时退化为当日 HH:mm。
 	if (ShouldDrawBsMarkers(hover.stockId))
 	{
 		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
 		if (!trades.empty())
 		{
+			CFont badgeFont;
+			const bool hasBadgeFont = CreateBadgeFont(badgeFont, memDC, 65);
 			CTime now = CTime::GetCurrentTime();
 			std::wstring today;
 			{
@@ -1006,34 +1071,80 @@ void CTimelineChart::DrawTimelinePriceCurve(CDC& memDC, const TimelineDrawContex
 				t.Format(_T("%04d-%02d-%02d"), now.GetYear(), now.GetMonth(), now.GetDay());
 				today = t.GetString();
 			}
+
+			// 按「交易日 + 方向」归并：次数统计当天该方向的全部成交，
+			// 锚点取第一笔能落到可见数据点上的成交（pointIndex < 0 表示暂不可见）
+			struct BsMark { int pointIndex; bool isBuy; STOCK::Price price; int count; };
+			std::vector<BsMark> marks;
+			std::map<std::pair<std::wstring, bool>, size_t> markIndexOf;
 			for (const auto& rec : trades)
 			{
 				if (rec.time.size() < 16)
 					continue;
 				const std::wstring recDay = rec.time.substr(0, 10);
 				const std::wstring recTime = rec.time.substr(11, 5);
+				const std::string recFull = CCommon::UnicodeToStr(rec.time.substr(0, 16).c_str());
+				const std::string recDayStr = CCommon::UnicodeToStr(recDay.c_str());
+
+				int hitIndex = -1;
 				for (int i = 0; i < totalPoints; i++)
 				{
 					const auto& tp = timelinePoint[i];
-					// fullTime 为完整日期 = K线派生点（趋势图），按日期匹配；否则为当日分时点，按 HH:mm 匹配
 					bool matched = false;
-					if (tp.fullTime.size() >= 10)
-						matched = (tp.fullTime.compare(0, 10, CCommon::UnicodeToStr(recDay.c_str())) == 0);
+					if (tp.fullTime.size() >= 16)
+						matched = (tp.fullTime.compare(0, 16, recFull) == 0);
+					else if (tp.fullTime.size() >= 10)
+						matched = (tp.fullTime.compare(0, 10, recDayStr) == 0);
 					else
 						matched = (recDay == today) && (CString(tp.time.c_str()) == CString(recTime.c_str()));
-					if (!matched)
-						continue;
-
-					STOCK::Price refPrice = rec.price > 0 ? rec.price : tp.price;
-					if (refPrice <= 0)
+					if (matched)
+					{
+						hitIndex = i;
 						break;
-					float pointX = pointXAt(i);
-					float yVal = static_cast<float>((refPrice - minPrice) * unitY);
-					int anchorY = ctx.priceChartTop + ctx.priceChartHeight - static_cast<int>(yVal);
-					anchorY = max(ctx.priceChartTop, min(anchorY, ctx.priceChartTop + ctx.priceChartHeight));
-					DrawBsMarker(memDC, static_cast<int>(pointX), anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight);
-					break;
+					}
 				}
+
+				const auto key = std::make_pair(recDay, rec.isSell);
+				auto it = markIndexOf.find(key);
+				size_t markIdx = 0;
+				if (it == markIndexOf.end())
+				{
+					BsMark mark;
+					mark.pointIndex = hitIndex;
+					mark.isBuy = !rec.isSell;
+					mark.price = rec.price;
+					mark.count = 0;
+					marks.push_back(mark);
+					markIdx = marks.size() - 1;
+					markIndexOf[key] = markIdx;
+				}
+				else
+				{
+					markIdx = it->second;
+					// 首笔不在可见范围内时，用后续这一笔补上锚点
+					if (marks[markIdx].pointIndex < 0 && hitIndex >= 0)
+					{
+						marks[markIdx].pointIndex = hitIndex;
+						marks[markIdx].price = rec.price;
+					}
+				}
+				marks[markIdx].count++;
+			}
+
+			for (const auto& mark : marks)
+			{
+				if (mark.pointIndex < 0)
+					continue;
+				const auto& tp = timelinePoint[mark.pointIndex];
+				STOCK::Price refPrice = mark.price > 0 ? mark.price : tp.price;
+				if (refPrice <= 0)
+					continue;
+				float pointX = pointXAt(mark.pointIndex);
+				float yVal = static_cast<float>((refPrice - minPrice) * unitY);
+				int anchorY = ctx.priceChartTop + ctx.priceChartHeight - static_cast<int>(yVal);
+				anchorY = max(ctx.priceChartTop, min(anchorY, ctx.priceChartTop + ctx.priceChartHeight));
+				DrawBsMarker(memDC, static_cast<int>(pointX), anchorY, mark.isBuy, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight,
+					INT_MIN, INT_MIN, mark.count, hasBadgeFont ? &badgeFont : nullptr);
 			}
 		}
 	}
@@ -1589,32 +1700,60 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 		memDC.SelectObject(pOldBrush);
 	}
 
-	// 交易台账 B/S 标记：按成交日期匹配可见 bar，方块置于K线外侧、引线自影线端点延伸出来
+	// 交易台账 B/S 标记：按成交日期匹配可见 bar，方块置于K线外侧、引线自影线端点延伸出来。
+	// 同一交易日同方向的多笔成交合并成一个方块，次数走右下角角标（如 B₂ / S₄）
 	if (ShouldDrawBsMarkers(hover.stockId))
 	{
 		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
-		std::map<std::string, int> sameDaySeq;   // 同一交易日的第几笔：纵向堆叠，避免标注重叠
-		for (const auto& rec : trades)
+		if (!trades.empty())
 		{
-			if (rec.time.size() < 10)
-				continue;
-			std::string tradeDay = CCommon::UnicodeToStr(rec.time.substr(0, 10).c_str());
-			for (int i = 0; i < totalPoints && (klineStartIdx + i) < klineEndIdx; i++)
-			{
-				const auto& kp = klineData[klineStartIdx + i];
-				if (kp.day != tradeDay)
-					continue;
+			CFont badgeFont;
+			const bool hasBadgeFont = CreateBadgeFont(badgeFont, memDC, 65);
 
-				int seq = sameDaySeq[tradeDay]++;
+			// 先归并：同一 bar 同一方向算一个标记，第一笔决定锚点与绘制顺序
+			struct BsMark { int barIndex; bool isBuy; int count; };
+			std::vector<BsMark> marks;
+			std::map<std::pair<std::string, bool>, size_t> markIndexOf;
+			for (const auto& rec : trades)
+			{
+				if (rec.time.size() < 10)
+					continue;
+				std::string tradeDay = CCommon::UnicodeToStr(rec.time.substr(0, 10).c_str());
+				for (int i = 0; i < totalPoints && (klineStartIdx + i) < klineEndIdx; i++)
+				{
+					if (klineData[klineStartIdx + i].day != tradeDay)
+						continue;
+
+					auto key = std::make_pair(tradeDay, rec.isSell);
+					auto it = markIndexOf.find(key);
+					if (it == markIndexOf.end())
+					{
+						BsMark mark;
+						mark.barIndex = i;
+						mark.isBuy = !rec.isSell;
+						mark.count = 1;
+						marks.push_back(mark);
+						markIndexOf[key] = marks.size() - 1;
+					}
+					else
+					{
+						marks[it->second].count++;
+					}
+					break;
+				}
+			}
+
+			for (const auto& mark : marks)
+			{
+				const auto& kp = klineData[klineStartIdx + mark.barIndex];
 				// 横向严格对齐柱子中心（不再左右错位，否则标记会偏离蜡烛）
-				int centerX = static_cast<int>(ctx.chartWidth / static_cast<float>(totalPoints) * i)
+				int centerX = static_cast<int>(ctx.chartWidth / static_cast<float>(totalPoints) * mark.barIndex)
 					+ static_cast<int>(barTotalWidth / 2);
 				// 引线自影线端点伸出：买入接下影线低点、卖出接上影线高点，
 				// 标记再从这个端点继续向外让开，保证离K线足够远
-				int anchorY = rec.isSell ? priceToY(kp.high) : priceToY(kp.low);
-				DrawBsMarker(memDC, centerX, anchorY, !rec.isSell, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight,
-					priceToY(kp.high), priceToY(kp.low), seq);
-				break;
+				int anchorY = mark.isBuy ? priceToY(kp.low) : priceToY(kp.high);
+				DrawBsMarker(memDC, centerX, anchorY, mark.isBuy, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight,
+					priceToY(kp.high), priceToY(kp.low), mark.count, hasBadgeFont ? &badgeFont : nullptr);
 			}
 		}
 	}
