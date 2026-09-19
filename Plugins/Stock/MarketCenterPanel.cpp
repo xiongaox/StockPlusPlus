@@ -28,7 +28,7 @@ namespace
 	// 主力资金曲线色（demo MF_SERIES）
 	const COLORREF MF_SH = RGB(77, 138, 240);
 	const COLORREF MF_SZ = RGB(245, 166, 35);
-	const COLORREF MF_ETF = RGB(237, 91, 196);
+	const COLORREF MF_CYB = RGB(237, 91, 196);
 	const COLORREF MF_IDX = RGB(154, 161, 176);
 	// 资金流向曲线色（机构/主力/大户/散户，对应图一）
 	const COLORREF FLOW_INST = RGB(74, 144, 226);  // 机构（浅蓝）
@@ -1969,7 +1969,7 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 
 void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 {
-	DrawPageTitle(g, rc, L"实时主力资金", L"沪深两市大盘资金流");
+	DrawPageTitle(g, rc, L"实时主力资金", L"沪深创三大市场资金流");
 
 	auto f10 = MkFont(10);
 	auto f11 = MkFont(11);
@@ -1978,28 +1978,20 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 	auto f15b = MkFont(15, true);
 
 	// 拷贝数据（锁内浅拷贝）
-	std::vector<MC::FflowMinute> sh, sz;
+	std::vector<MC::FflowMinute> sh, sz, cyb;
 	std::vector<MC::IndexTrendPoint> idx;
-	std::vector<MC::EtfFlowSample> etfCurve;
-	double etfSumNow = 0;
-	bool etfHasSnap = false;
 	{
 		CMarketCenterData& mc = CMarketCenterData::Instance();
 		std::lock_guard<std::mutex> lock(mc.m_mutex);
 		sh = mc.m_fflow_sh;
 		sz = mc.m_fflow_sz;
+		cyb = mc.m_fflow_cyb;
 		idx = mc.m_index_trend;
-		etfCurve = mc.m_etf_flow_curve;
-		for (auto& e : mc.m_etfs)
-		{
-			etfSumNow += e.inflow;
-			etfHasSnap = true;
-		}
 	}
 
 	const int AXIS_N = 241;
 	std::vector<double> shArr(static_cast<size_t>(AXIS_N), NAN), szArr(static_cast<size_t>(AXIS_N), NAN),
-		etfArr(static_cast<size_t>(AXIS_N), NAN), idxArr(static_cast<size_t>(AXIS_N), NAN);
+		cybArr(static_cast<size_t>(AXIS_N), NAN), idxArr(static_cast<size_t>(AXIS_N), NAN);
 	auto put = [](std::vector<double>& arr, const std::wstring& t, double v) {
 		int i = CMarketCenterData::TimeIndex(t);
 		if (i >= 0 && i < static_cast<int>(arr.size()))
@@ -2007,7 +1999,7 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 	};
 	for (auto& f : sh) put(shArr, f.time, f.main / 1e8);
 	for (auto& f : sz) put(szArr, f.time, f.main / 1e8);
-	for (auto& f : etfCurve) put(etfArr, f.time, f.inflow / 1e8);
+	for (auto& f : cyb) put(cybArr, f.time, f.main / 1e8);
 	for (auto& p : idx) put(idxArr, p.time, p.price);
 
 	auto lastOf = [](const std::vector<double>& arr) -> double {
@@ -2016,10 +2008,7 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 				return arr[static_cast<size_t>(i)];
 		return NAN;
 		};
-	double shNow = lastOf(shArr), szNow = lastOf(szArr), etfNow = lastOf(etfArr), idxNow = lastOf(idxArr);
-	// ETF 曲线开窗才自积累、开窗前/盘外无点，图例回退到当前 ETF 快照合计，避免显示"--"
-	if (isnan(etfNow) && etfHasSnap)
-		etfNow = etfSumNow / 1e8;
+	double shNow = lastOf(shArr), szNow = lastOf(szArr), cybNow = lastOf(cybArr), idxNow = lastOf(idxArr);
 	bool hasAny = (!isnan(shNow) || !isnan(szNow) || !isnan(idxNow));
 	if (!hasAny)
 	{
@@ -2037,7 +2026,7 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 	MfCell mfCells[4] = {
 		{ L"主力净流入(沪)", MF_SH, shNow, false },
 		{ L"主力净流入(深)", MF_SZ, szNow, false },
-		{ L"ETF净流入", MF_ETF, etfNow, false },
+		{ L"创业板净流入", MF_CYB, cybNow, false },
 		{ L"上证指数", MF_IDX, idxNow, true },
 	};
 	const int cellW = statsRc.Width() / 4;
@@ -2100,7 +2089,7 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 		};
 	if (m_mainflow_series_mask & 1) mergeFlow(shArr);
 	if (m_mainflow_series_mask & 2) mergeFlow(szArr);
-	if (m_mainflow_series_mask & 4) mergeFlow(etfArr);
+	if (m_mainflow_series_mask & 4) mergeFlow(cybArr);
 	if (!flowAny) { flowLo = -10; flowHi = 10; }
 	double flowPad = max(1.0, (flowHi - flowLo) * 0.08);
 	flowLo -= flowPad; flowHi += flowPad;
@@ -2194,7 +2183,7 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 	if (m_mainflow_series_mask & 8 && idxAny) drawSeries(idxArr, MF_IDX, 1.2f, true);
 	if (m_mainflow_series_mask & 1) drawSeries(shArr, MF_SH, 1.8f, false);
 	if (m_mainflow_series_mask & 2) drawSeries(szArr, MF_SZ, 1.8f, false);
-	if (m_mainflow_series_mask & 4) drawSeries(etfArr, MF_ETF, 1.6f, false);
+	if (m_mainflow_series_mask & 4) drawSeries(cybArr, MF_CYB, 1.6f, false);
 }
 
 // ============ 页面4：涨跌趋势 ============

@@ -183,7 +183,7 @@ CMarketCenterData::DataSetState CMarketCenterData::GetDataSetState(DataSet ds, i
 		case DS_SECTORS: state.hasData = !m_sectors.empty(); state.fetchedAt = m_sectors_time; break;
 		case DS_SECTOR_TIMELINES: state.hasData = !m_sector_timelines.empty(); state.fetchedAt = m_sector_timelines_time; break;
 		case DS_ETFS: state.hasData = !m_etfs.empty(); state.fetchedAt = m_etfs_time; break;
-		case DS_MAINFLOW: state.hasData = !m_fflow_sh.empty() || !m_fflow_sz.empty() || !m_index_trend.empty(); state.fetchedAt = m_fflow_time; break;
+		case DS_MAINFLOW: state.hasData = !m_fflow_sh.empty() || !m_fflow_sz.empty() || !m_fflow_cyb.empty() || !m_index_trend.empty(); state.fetchedAt = m_fflow_time; break;
 		case DS_TREND: state.hasData = !m_dist.buckets.empty(); state.fetchedAt = m_dist_time; break;
 		default: break;
 		}
@@ -293,9 +293,8 @@ bool CMarketCenterData::ApplySnapshot(DataSet ds, const std::string& payload, ti
 	long long etfTotal = 0;
 	MC::UpDownDist dist;
 	std::vector<MC::TrendSample> trendCurve;
-	std::vector<MC::FflowMinute> fflowSh, fflowSz;
+	std::vector<MC::FflowMinute> fflowSh, fflowSz, fflowCyb;
 	std::vector<MC::IndexTrendPoint> indexTrend;
-	std::vector<MC::EtfFlowSample> etfFlow;
 	MC::MoneyFlowLeader leaderInst, leaderMain;
 	long long distTime = 0;
 	switch (ds)
@@ -349,7 +348,13 @@ bool CMarketCenterData::ApplySnapshot(DataSet ds, const std::string& payload, ti
 			};
 			parseFlow(yyjson_obj_get(data,"sh"), fflowSh); parseFlow(yyjson_obj_get(data,"sz"), fflowSz);
 			yyjson_val* arr=yyjson_obj_get(data,"index"); if(!yyjson_is_arr(arr)||yyjson_arr_size(arr)>2000) ok=false; else { size_t idx,max; yyjson_val* item; yyjson_arr_foreach(arr,idx,max,item){ if(!yyjson_is_obj(item)){ok=false;break;} MC::IndexTrendPoint v;v.time=JsonString(item,"time");v.price=JsonNumber(item,"a");if(v.time.empty()){ok=false;break;}indexTrend.push_back(std::move(v)); } }
-			arr=yyjson_obj_get(data,"etfFlow"); if(!yyjson_is_arr(arr)||yyjson_arr_size(arr)>1000) ok=false; else { size_t idx,max; yyjson_val* item; yyjson_arr_foreach(arr,idx,max,item){ if(!yyjson_is_obj(item)){ok=false;break;} MC::EtfFlowSample v;v.time=JsonString(item,"time");v.inflow=JsonNumber(item,"a");if(v.time.empty()){ok=false;break;}etfFlow.push_back(std::move(v)); } }
+			// cyb 缺省容忍：旧版载荷没有该字段，视为空数组即可（沪深/指数能立即重取，
+			// 不必因为多一个字段就把整条缓存判为损坏删掉）
+			arr=yyjson_obj_get(data,"cyb");
+			if (arr) {
+				if(!yyjson_is_arr(arr)||yyjson_arr_size(arr)>2000) ok=false;
+				else { size_t idx,max; yyjson_val* item; yyjson_arr_foreach(arr,idx,max,item){ if(!yyjson_is_obj(item)){ok=false;break;} MC::FflowMinute v;v.time=JsonString(item,"time");v.main=JsonNumber(item,"main");v.superBig=JsonNumber(item,"superBig");v.big=JsonNumber(item,"big");v.mid=JsonNumber(item,"mid");v.smallOrder=JsonNumber(item,"smallOrder");if(v.time.empty()){ok=false;break;}fflowCyb.push_back(std::move(v)); } }
+			}
 			yyjson_val* lInst = yyjson_obj_get(data, "leaderInst");
 			if (lInst && yyjson_is_obj(lInst)) {
 				leaderInst.code = JsonString(lInst, "code");
@@ -383,8 +388,8 @@ bool CMarketCenterData::ApplySnapshot(DataSet ds, const std::string& payload, ti
 	if (ok)
 	{
 		std::lock_guard<std::mutex> lock(m_mutex);
-		// 快照只在 tradeDate == 今天时才走到这里（见函数开头校验），因此随快照恢复的
-		// 自积累曲线同属今天：把曲线日期一并盖章，否则首次采样会把它当跨日数据清掉
+		// 快照只在 tradeDate == 今天时才走到这里（见函数开头校验）：对自带"今日"语义的
+		// 自积累曲线（涨跌家数）要一并盖章，否则首次采样会把它当跨日数据清掉
 		const std::wstring todayW(tradeDate.begin(), tradeDate.end());
 		switch (ds)
 		{
@@ -392,14 +397,14 @@ bool CMarketCenterData::ApplySnapshot(DataSet ds, const std::string& payload, ti
 		case DS_SECTOR_TIMELINES: m_sector_timelines=std::move(sectorTimelines); m_sector_timelines_time=fetchedAt; break;
 		case DS_ETFS: m_etfs=std::move(etfs); m_etf_total=etfTotal; m_etfs_time=fetchedAt; break;
 		case DS_MAINFLOW:
+			// 沪深创分时与指数分时都是服务端整日下发，不含自积累曲线，无需盖章
 			m_fflow_sh=std::move(fflowSh);
 			m_fflow_sz=std::move(fflowSz);
+			m_fflow_cyb=std::move(fflowCyb);
 			m_index_trend=std::move(indexTrend);
-			m_etf_flow_curve=std::move(etfFlow);
 			m_leader_inst=std::move(leaderInst);
 			m_leader_main=std::move(leaderMain);
 			m_fflow_time=fetchedAt;
-			m_curve_date=todayW;
 			break;
 		case DS_TREND:
 			m_dist=std::move(dist);
@@ -465,10 +470,10 @@ std::string CMarketCenterData::SerializeSnapshot(DataSet ds) const
 		for (size_t i=0;i<m_fflow_sh.size();++i) { if(i)out+=","; const auto& v=m_fflow_sh[i]; out+="{"; JsonStringField(out,"time",v.time); out+=","; JsonDoubleField(out,"main",v.main); out+=","; JsonDoubleField(out,"superBig",v.superBig); out+=","; JsonDoubleField(out,"big",v.big); out+=","; JsonDoubleField(out,"mid",v.mid); out+=","; JsonDoubleField(out,"smallOrder",v.smallOrder); out+="}"; }
 		out += "],\"sz\":[";
 		for (size_t i=0;i<m_fflow_sz.size();++i) { if(i)out+=","; const auto& v=m_fflow_sz[i]; out+="{"; JsonStringField(out,"time",v.time); out+=","; JsonDoubleField(out,"main",v.main); out+=","; JsonDoubleField(out,"superBig",v.superBig); out+=","; JsonDoubleField(out,"big",v.big); out+=","; JsonDoubleField(out,"mid",v.mid); out+=","; JsonDoubleField(out,"smallOrder",v.smallOrder); out+="}"; }
+		out += "],\"cyb\":[";
+		for (size_t i=0;i<m_fflow_cyb.size();++i) { if(i)out+=","; const auto& v=m_fflow_cyb[i]; out+="{"; JsonStringField(out,"time",v.time); out+=","; JsonDoubleField(out,"main",v.main); out+=","; JsonDoubleField(out,"superBig",v.superBig); out+=","; JsonDoubleField(out,"big",v.big); out+=","; JsonDoubleField(out,"mid",v.mid); out+=","; JsonDoubleField(out,"smallOrder",v.smallOrder); out+="}"; }
 		out += "],\"index\":[";
 		for (size_t i=0;i<m_index_trend.size();++i) { if(i)out+=","; const auto& v=m_index_trend[i]; writePoint(v.time,v.price); }
-		out += "],\"etfFlow\":[";
-		for (size_t i=0;i<m_etf_flow_curve.size();++i) { if(i)out+=","; const auto& v=m_etf_flow_curve[i]; writePoint(v.time,v.inflow); }
 		out += "],\"leaderInst\":{";
 		JsonStringField(out, "code", m_leader_inst.code); out += ",";
 		JsonStringField(out, "name", m_leader_inst.name); out += ",";
@@ -479,8 +484,8 @@ std::string CMarketCenterData::SerializeSnapshot(DataSet ds) const
 		JsonDoubleField(out, "flow", m_leader_main.flow);
 		out += "}";
 		// 此处没有未闭合的数组，只补数据对象的右括号。多写一个 ']' 会让整份载荷无法解析，
-		// 启动时被 ApplySnapshot 判为非法并整条删除——沪深/指数能马上从服务端重取，
-		// 靠本地自积累的 ETF 曲线则永久丢失（表现为 ETF 净流入线老是画不出来）
+		// 启动时被 ApplySnapshot 判为非法并整条删除（沪深/指数能马上从服务端重取，
+		// 但会白白丢掉一次已拉到的分时数据）
 		out += "}"; break;
 	case DS_TREND:
 		out += "{\"time\":" + std::to_string(static_cast<long long>(m_dist.time)) + ",\"zt\":" + std::to_string(m_dist.zt) + ",\"dt\":" + std::to_string(m_dist.dt) + ",\"buckets\":{";
@@ -911,7 +916,6 @@ bool CMarketCenterData::FetchEtfs()
 		m_etfs_time = time(nullptr);
 		MarkSuccess(DS_ETFS);
 	}
-	AppendEtfFlowSample();
 	return true;
 }
 
@@ -1038,11 +1042,12 @@ namespace
 
 bool CMarketCenterData::FetchMainFlow()
 {
-	std::vector<MC::FflowMinute> sh, sz;
+	std::vector<MC::FflowMinute> sh, sz, cyb;
 	std::vector<MC::IndexTrendPoint> trend;
 	MC::MoneyFlowLeader leaderInst, leaderMain;
 	bool okSh = FetchFflowForSecid(L"1.000001", sh);
 	bool okSz = FetchFflowForSecid(L"0.399001", sz);
+	bool okCyb = FetchFflowForSecid(L"0.399006", cyb);   // 创业板指
 	bool okIdx = FetchIndexTrends(trend);
 	bool okInst = FetchMoneyFlowLeader(L"f66", leaderInst);
 	bool okMain = FetchMoneyFlowLeader(L"f62", leaderMain);
@@ -1053,6 +1058,7 @@ bool CMarketCenterData::FetchMainFlow()
 		std::lock_guard<std::mutex> lock(m_mutex);
 		if (okSh) m_fflow_sh = std::move(sh);
 		if (okSz) m_fflow_sz = std::move(sz);
+		if (okCyb) m_fflow_cyb = std::move(cyb);
 		if (okIdx) m_index_trend = std::move(trend);
 		if (okInst) m_leader_inst = std::move(leaderInst);
 		if (okMain) m_leader_main = std::move(leaderMain);
@@ -1502,6 +1508,7 @@ bool CMarketCenterData::FetchTrendDist()
 }
 
 // ===== 自积累曲线采样 =====
+// 目前仅剩「涨跌家数分时」一条曲线走这条路（沪深创的资金流与指数分时都是服务端整日下发）。
 
 // 采样时刻是否落在可绘制的交易时段内，并把真实钟点写入 buf。
 // 时间轴只有 09:30~11:29 与 13:00~15:00（**没有 11:30 槽**，午休并入 13:00），
@@ -1535,7 +1542,6 @@ void CMarketCenterData::RollCurveDateLocked()
 		return;
 	m_curve_date = todayW;
 	m_trend_curve.clear();
-	m_etf_flow_curve.clear();
 }
 
 void CMarketCenterData::AppendTrendSample()
@@ -1560,26 +1566,4 @@ void CMarketCenterData::AppendTrendSample()
 		m_trend_curve.push_back({ t, up, down });
 	if (m_trend_curve.size() > 300)
 		m_trend_curve.erase(m_trend_curve.begin());
-}
-
-void CMarketCenterData::AppendEtfFlowSample()
-{
-	double sum = 0;
-	{
-		std::lock_guard<std::mutex> lock(m_mutex);
-		for (auto& e : m_etfs) sum += e.inflow;
-	}
-	wchar_t buf[8];
-	if (!SampleClock(buf))
-		return;
-
-	std::lock_guard<std::mutex> lock(m_mutex);
-	RollCurveDateLocked();
-	std::wstring t = buf;
-	if (!m_etf_flow_curve.empty() && m_etf_flow_curve.back().time == t)
-		m_etf_flow_curve.back().inflow = sum;
-	else
-		m_etf_flow_curve.push_back({ t, sum });
-	if (m_etf_flow_curve.size() > 300)
-		m_etf_flow_curve.erase(m_etf_flow_curve.begin());
 }

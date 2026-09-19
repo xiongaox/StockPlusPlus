@@ -78,13 +78,6 @@ namespace MC
 		long long down{ 0 };
 	};
 
-	// ETF 累计净流入采样点（主力资金页 ETF 曲线）
-	struct EtfFlowSample
-	{
-		std::wstring time;
-		double inflow{ 0.0 };     // 全市场ETF主力净流入合计(元)
-	};
-
 	// 资金流向领头股（机构/主力）
 	struct MoneyFlowLeader
 	{
@@ -120,6 +113,7 @@ public:
 	long long m_etf_total{ 0 };                          // 服务端报告的 ETF 总数
 	std::vector<MC::FflowMinute> m_fflow_sh;            // 上证主力资金分时
 	std::vector<MC::FflowMinute> m_fflow_sz;            // 深证主力资金分时
+	std::vector<MC::FflowMinute> m_fflow_cyb;           // 创业板指主力资金分时（服务端 240 点）
 	std::vector<MC::IndexTrendPoint> m_index_trend;     // 上证指数分时
 	MC::MoneyFlowLeader m_leader_inst;                  // 机构领头股
 	MC::MoneyFlowLeader m_leader_main;                  // 主力领头股
@@ -131,8 +125,7 @@ public:
 	std::wstring m_turnover_yday_date;                   // 分时曲线覆盖的交易日(如"2026-09-15")
 	int m_turnover_slot{ -1 };                           // 今日累计额覆盖的最后时间轴槽号（与曲线同槽对齐比较）
 	std::vector<MC::TrendSample> m_trend_curve;         // 涨跌家数分时（自积累）
-	std::vector<MC::EtfFlowSample> m_etf_flow_curve;    // ETF累计净流入分时（自积累）
-	std::wstring m_curve_date;                           // 上面两条自积累曲线所属交易日（跨日清零用）
+	std::wstring m_curve_date;                           // 上面那条自积累曲线所属交易日（跨日清零用）
 
 	// ===== 各数据集最后成功更新时间（0=从未成功）=====
 	time_t m_sectors_time{ 0 };
@@ -200,13 +193,12 @@ public:
 	// 取数入口（在取数线程调用；每项成功后写入仓库并返回 true）
 	bool FetchSectors();        // 行业板块主力净流入（双向 Top60）
 	bool FetchEtfs();           // ETF 全量分页抓取（pz=100 × N）
-	bool FetchMainFlow();       // 沪深 fflow 分时 + 上证指数 trends2 + ETF曲线采样
+	bool FetchMainFlow();       // 沪深创 fflow 分时 + 上证指数 trends2
 	bool FetchSectorTimelines(); // 15个代表板块分时走向
 	bool FetchTrendDist();      // 涨跌分布 + 涨停/跌停池 + 沪深成交额
 
-	// 按开市时间推进自积累曲线（在 FetchTrendDist/FetchEtfs 成功后调用）
+	// 按开市时间推进自积累曲线（在 FetchTrendDist 成功后调用）
 	void AppendTrendSample();
-	void AppendEtfFlowSample();
 	// 自积累曲线跨日清零（调用方需已持 m_mutex）
 	void RollCurveDateLocked();
 
