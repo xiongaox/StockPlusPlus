@@ -87,6 +87,7 @@ namespace
 	const UINT WM_APP_API_PROBE_FINISHED = WM_APP + 131;
 	const UINT WM_APP_SEARCH_RESULT_READY = WM_APP + 132;
 	const UINT WM_APP_UPDATE_CHECK_FINISHED = WM_APP + 133;
+	const UINT WM_APP_BACKUP_DELETED = WM_APP + 134;  // 备份列表弹窗：云端删除完成
 	const UINT IDC_API_TEST_BTN = 1197;
 	const UINT IDC_ABOUT_UPDATE_BTN = 1200;   // 1198/1199 已被分组排序/删除分组占用
 
@@ -704,7 +705,8 @@ public:
 	}
 };
 
-// 暗色主题云端备份选择弹窗：列出云端历史备份，选中一份后返回 IDOK
+// 暗色主题云端备份选择弹窗：列出云端历史备份，选中一份后返回 IDOK；
+// 左下角「删除」可移除选中的一份（网络操作同样走后台线程，完成后回到本窗口刷新列表）
 class CBackupListDialog : public CDialog
 {
 public:
@@ -719,11 +721,24 @@ public:
 	CFlatHeaderCtrl m_hdr; // 复用主界面的自绘扁平深色表头
 	CButton m_btnOk;
 	CButton m_btnCancel;
+	CButton m_btnDelete;
+	SettingData m_settings;      // WebDAV 连接参数（删除走后台线程，不能用对话框控件值）
+	bool m_deleteBusy{ false };  // 删除进行中：期间禁用按钮并阻止关闭
 
-	enum { IDC_BACKUP_LIST = 2100 };
+	enum { IDC_BACKUP_LIST = 2100, IDC_BACKUP_DELETE = 2101 };
 
-	CBackupListDialog(const std::vector<WebDavBackupEntry>& entries, CWnd* pParent = nullptr)
-		: CDialog(), m_entries(entries)
+	// 删除结果经此消息回到本对话框（含结果对象，失败时附带错误文案）
+	struct DeleteResult
+	{
+		bool ok{ false };
+		bool postFailed{ false };
+		std::wstring fileName;
+		std::wstring displayName;
+		std::wstring errMsg;
+	};
+
+	CBackupListDialog(const std::vector<WebDavBackupEntry>& entries, const SettingData& settings, CWnd* pParent = nullptr)
+		: CDialog(), m_entries(entries), m_settings(settings)
 	{
 		m_dark_brush.CreateSolidBrush(RGB(24, 27, 34));
 		m_list_brush.CreateSolidBrush(RGB(13, 15, 21));
@@ -796,32 +811,6 @@ public:
 		m_list.InsertColumn(0, L"备份时间", LVCFMT_LEFT, listRect.Width() - sizeW - g_data.DPI(40));
 		m_list.InsertColumn(1, L"大小", LVCFMT_RIGHT, sizeW);
 
-		for (size_t i = 0; i < m_entries.size(); ++i)
-		{
-			int idx = m_list.InsertItem(static_cast<int>(i), m_entries[i].displayName.c_str());
-			if (idx >= 0)
-			{
-				wchar_t sizeBuf[32]{};
-				unsigned long long n = m_entries[i].sizeBytes;
-				if (n >= 1024ULL * 1024ULL)
-					swprintf_s(sizeBuf, L"%.1f MB", n / (1024.0 * 1024.0));
-				else if (n >= 1024ULL)
-					swprintf_s(sizeBuf, L"%.1f KB", n / 1024.0);
-				else
-					swprintf_s(sizeBuf, L"%llu B", n);
-				m_list.SetItemText(idx, 1, sizeBuf);
-				m_list.SetItemData(idx, i);
-			}
-		}
-		// 按实际客户区（已扣除纵向滚动条）自适应列宽，任何份数下都不出横向滚动条
-		CRect listClient;
-		m_list.GetClientRect(&listClient);
-		m_list.SetColumnWidth(0, listClient.Width() - sizeW - g_data.DPI(2));
-		m_list.SetColumnWidth(1, sizeW);
-
-		// 默认选中最新一份
-		m_list.SetItemState(0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-
 		int btnW = g_data.DPI(62);
 		int btnH = g_data.DPI(26);
 		int btnY = rc.bottom - btnH - g_data.DPI(12);
@@ -831,6 +820,13 @@ public:
 		m_btnCancel.Create(_T("取消"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW,
 			CRect(rc.right - btnW - g_data.DPI(8), btnY, rc.right - g_data.DPI(8), btnY + btnH), this, IDCANCEL);
 		m_btnCancel.SetFont(&m_font);
+		// 删除按钮单独放最左边，远离「恢复」，避免误按（与交易录入弹窗同一摆放约定）
+		m_btnDelete.Create(_T("删除"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW,
+			CRect(marginX, btnY, marginX + btnW, btnY + btnH), this, IDC_BACKUP_DELETE);
+		m_btnDelete.SetFont(&m_font);
+
+		// 灌条目 + 定列宽 + 默认选中（放在按钮创建之后：空列表时要按 m_entries 禁用「恢复」）
+		FillBackupList();
 
 		m_list.SetFocus();
 		// 显式显示窗口：宿主取数线程消息流密集时模态循环的空闲显示（MLF_SHOWONIDLE）
@@ -847,6 +843,13 @@ public:
 
 	void OnRestore()
 	{
+		if (m_deleteBusy)
+			return;
+		if (m_entries.empty())
+		{
+			MessageBox(L"云端已无备份可恢复，请先上传一份。", L"提示", MB_ICONINFORMATION | MB_OK);
+			return;
+		}
 		int idx = m_list.GetNextItem(-1, LVNI_SELECTED);
 		if (idx < 0)
 		{
@@ -857,6 +860,126 @@ public:
 		m_selectedFile = entry.fileName;
 		m_selectedName = entry.displayName;
 		EndDialog(IDOK);
+	}
+
+	// 按 m_entries 重建列表内容（删除成功后原地刷新），并更新标题提示的份数
+	void FillBackupList()
+	{
+		m_list.DeleteAllItems();
+		for (size_t i = 0; i < m_entries.size(); ++i)
+		{
+			int idx = m_list.InsertItem(static_cast<int>(i), m_entries[i].displayName.c_str());
+			if (idx < 0)
+				continue;
+			wchar_t sizeBuf[32]{};
+			unsigned long long n = m_entries[i].sizeBytes;
+			if (n >= 1024ULL * 1024ULL)
+				swprintf_s(sizeBuf, L"%.1f MB", n / (1024.0 * 1024.0));
+			else if (n >= 1024ULL)
+				swprintf_s(sizeBuf, L"%.1f KB", n / 1024.0);
+			else
+				swprintf_s(sizeBuf, L"%llu B", n);
+			m_list.SetItemText(idx, 1, sizeBuf);
+			m_list.SetItemData(idx, i);
+		}
+		// 按实际客户区（已扣除纵向滚动条）自适应列宽，任何份数下都不出横向滚动条
+		int sizeW = g_data.DPI(95);
+		CRect listClient;
+		m_list.GetClientRect(&listClient);
+		m_list.SetColumnWidth(0, listClient.Width() - sizeW - g_data.DPI(2));
+		m_list.SetColumnWidth(1, sizeW);
+
+		wchar_t tip[96]{};
+		swprintf_s(tip, L"云端共有 %d 份备份，请选择要恢复到本地的一份：", static_cast<int>(m_entries.size()));
+		m_label.SetWindowText(tip);
+
+		if (!m_entries.empty())
+			m_list.SetItemState(0, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+
+		// 全删空后没有可恢复的目标，禁用「恢复」按钮避免误点
+		m_btnOk.EnableWindow(!m_entries.empty() && !m_deleteBusy);
+	}
+
+	// 删除在途时禁止关闭窗口：后台线程持有本窗口句柄用于回投结果，
+	// 窗口先销毁会让结果无人接收（这里直接拦住，比事后兜底更简单可靠）
+	void OnCancelClose()
+	{
+		if (m_deleteBusy)
+		{
+			MessageBox(L"正在删除云端备份，请稍候…", L"提示", MB_ICONINFORMATION | MB_OK);
+			return;
+		}
+		EndDialog(IDCANCEL);
+	}
+
+	void SetDeleteBusy(bool busy)
+	{
+		m_deleteBusy = busy;
+		m_btnDelete.EnableWindow(!busy);
+		m_btnOk.EnableWindow(!busy && !m_entries.empty());
+		m_btnCancel.EnableWindow(!busy);
+		m_btnDelete.SetWindowText(busy ? _T("删除中…") : _T("删除"));
+	}
+
+	void OnDelete()
+	{
+		if (m_deleteBusy)
+			return;
+		int idx = m_list.GetNextItem(-1, LVNI_SELECTED);
+		if (idx < 0)
+		{
+			MessageBox(L"请先在列表中选择要删除的备份", L"提示", MB_ICONWARNING | MB_OK);
+			return;
+		}
+		const WebDavBackupEntry entry = m_entries[static_cast<size_t>(m_list.GetItemData(idx))];
+
+		CString confirmMsg;
+		confirmMsg.Format(_T("确定要删除云端的这份备份吗？\n\n%s\n\n删除后无法撤销。"), entry.displayName.c_str());
+		if (MessageBox(confirmMsg, L"确认删除", MB_ICONQUESTION | MB_YESNO) != IDYES)
+			return;
+
+		// 网络操作必须离开主线程（宿主主线程上等待光标/网络层会空指针崩溃），
+		// 与主界面 WebDAV 操作同一约定：后台线程 + 完成后 PostMessage 回本窗口。
+		// 删除期间本窗口禁止关闭（见 OnCancel），因此消息必定有人接收
+		SetDeleteBusy(true);
+		HWND hWnd = GetSafeHwnd();
+		SettingData settings = m_settings;
+		std::thread([hWnd, settings, entry]() {
+			AFX_MANAGE_STATE(AfxGetStaticModuleState());
+			auto* r = new DeleteResult();
+			r->fileName = entry.fileName;
+			r->displayName = entry.displayName;
+			r->ok = CWebDavSync::DeleteBackup(settings, entry.fileName, r->errMsg);
+			if (!::PostMessage(hWnd, WM_APP_BACKUP_DELETED, 0, (LPARAM)r))
+				delete r;
+		}).detach();
+	}
+
+	void OnDeleteFinished(DeleteResult* result)
+	{
+		std::unique_ptr<DeleteResult> guard(result);
+		if (!result)
+			return;
+		SetDeleteBusy(false);
+		if (!result->ok)
+		{
+			MessageBox((L"删除失败：\n" + result->errMsg).c_str(), L"删除失败", MB_ICONERROR | MB_OK);
+			return;
+		}
+		// 从本地列表移除该项再重建（云端已删除，顺序与排序保持不变）
+		m_entries.erase(std::remove_if(m_entries.begin(), m_entries.end(),
+			[&](const WebDavBackupEntry& e) { return e.fileName == result->fileName; }), m_entries.end());
+		FillBackupList();
+
+		// 该份是云端最后一份：列表已空，明确告知，避免看起来像删除失败
+		if (m_entries.empty())
+			MessageBox(L"已删除选中的云端备份，云端现在没有任何备份了。", L"删除成功", MB_ICONINFORMATION | MB_OK);
+	}
+
+	// ESC 与标题栏关闭按钮不经过 WM_COMMAND，统一在这里拦成 OnCancelClose
+	virtual void OnCancel() override
+	{
+		OnCancelClose();
 	}
 
 	virtual LRESULT WindowProc(UINT message, WPARAM wParam, LPARAM lParam) override
@@ -894,7 +1017,12 @@ public:
 				}
 				if (LOWORD(wParam) == IDCANCEL)
 				{
-					EndDialog(IDCANCEL);
+					OnCancelClose();
+					return 0;
+				}
+				if (LOWORD(wParam) == IDC_BACKUP_DELETE)
+				{
+					OnDelete();
 					return 0;
 				}
 			}
@@ -911,6 +1039,17 @@ public:
 				}
 			}
 		}
+		else if (message == WM_APP_BACKUP_DELETED)
+		{
+			OnDeleteFinished(reinterpret_cast<DeleteResult*>(lParam));
+			return 0;
+		}
+		else if (message == WM_CLOSE)
+		{
+			// 标题栏关闭按钮：删除在途时一并拦住（OnCancel 只管 ESC / 取消按钮）
+			OnCancelClose();
+			return 0;
+		}
 		else if (message == WM_DRAWITEM)
 		{
 			LPDRAWITEMSTRUCT pDI = (LPDRAWITEMSTRUCT)lParam;
@@ -920,18 +1059,39 @@ public:
 				dc.Attach(pDI->hDC);
 				CRect rect = pDI->rcItem;
 				UINT state = pDI->itemState;
-				CString text = (pDI->CtlID == IDOK) ? _T("恢复") : _T("取消");
+				CString text;
+				if (pDI->CtlID == IDOK) text = _T("恢复");
+				else if (pDI->CtlID == IDC_BACKUP_DELETE) text = m_deleteBusy ? _T("删除中…") : _T("删除");
+				else text = _T("取消");
 
-				bool isOk = (pDI->CtlID == IDOK);
 				COLORREF bgColor;
-				if (isOk)
+				COLORREF textColor;
+				if (pDI->CtlID == IDOK)
+				{
 					bgColor = (state & ODS_SELECTED) ? RGB(29, 78, 216) : RGB(37, 99, 235);
+					textColor = RGB(255, 255, 255);
+				}
+				else if (pDI->CtlID == IDC_BACKUP_DELETE)
+				{
+					// 危险操作沿用交易录入弹窗的暗红配色，与「恢复」蓝明显区分
+					bgColor = (state & ODS_SELECTED) ? RGB(60, 15, 22) : RGB(40, 20, 26);
+					textColor = RGB(248, 113, 113);
+				}
 				else
+				{
 					bgColor = (state & ODS_SELECTED) ? RGB(20, 25, 35) : RGB(30, 35, 46);
+					textColor = RGB(255, 255, 255);
+				}
+				// 禁用态（删除进行中）压暗，避免看起来还能点
+				if (state & ODS_DISABLED)
+				{
+					bgColor = RGB(28, 32, 42);
+					textColor = RGB(120, 128, 142);
+				}
 
 				dc.FillSolidRect(rect, bgColor);
 				dc.SetBkMode(TRANSPARENT);
-				dc.SetTextColor(RGB(255, 255, 255));
+				dc.SetTextColor(textColor);
 				CFont* pOldFont = dc.SelectObject(&m_font);
 				dc.DrawText(text, rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 				dc.SelectObject(pOldFont);
@@ -4697,7 +4857,7 @@ void CManagerDialog::DrawWebDavPage(Gdiplus::Graphics& g, const CRect& contentRe
 	Gdiplus::SolidBrush tipBrush(Gdiplus::Color(255, 148, 163, 184));
 	int tipY = card2Top + g_data.DPI(140);
 
-	g.DrawString(L"提示：每次备份以时间戳独立存档（云端保留最近 30 份），恢复时可在历史备份列表中任选一份。", -1, &tipFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(rightLeft + g_data.DPI(18)), static_cast<Gdiplus::REAL>(tipY)), &tipBrush);
+	g.DrawString(L"提示：每次备份以时间戳独立存档（云端保留最近 30 份，含 BS 交易台账），恢复时任选一份。", -1, &tipFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(rightLeft + g_data.DPI(18)), static_cast<Gdiplus::REAL>(tipY)), &tipBrush);
 
 	// 上次同步时间放在卡片 2 标题行右端，避免与左侧提示文字挤在同一行
 	if (!m_data.m_webdav_last_sync_time.empty())
@@ -5108,6 +5268,9 @@ namespace
 	};
 
 	const wchar_t* kItems_0918[] = {
+		L"•  【修复】 行情中心主力资金页的「ETF净流入」曲线老是画不出来：该页缓存载荷末尾多写了一个右方括号，整份 JSON 非法、启动时被判定为损坏而整条删除，靠本地自积累的 ETF 曲线因此每次重启都归零（沪深/指数能立即从服务端重取，唯独这条线再也回不来）；同时曲线采样改用真实交易时刻且只在开市时段记录、并在跨日自动清零，点位数不再被压成一个",
+		L"•  【新增】 云端备份列表弹窗左下角新增「删除」按钮，可移除选中的云端备份（二次确认后生效，删除完成即刷新列表与份数）",
+		L"•  【修复】 WebDAV 云端备份与恢复补齐 BS 交易台账：台账存于独立的 stock_trades.db，此前不在备份文件内，换机恢复后台账整份丢失（只剩配置与自选股）。现备份文件在配置之后附带台账数据段，恢复时一并写回数据库；旧版备份不含该段则只还原配置并给出提示",
 		L"•  【优化】 关于页更新日志正文行距调整为 1.5 倍，长条目折行后阅读更舒展",
 		L"•  【优化】 首页顶栏缓存状态文案由「正在使用本地数据」精简为「本地缓存」"
 	};
@@ -7143,7 +7306,7 @@ LRESULT CManagerDialog::OnWebDavResult(WPARAM, LPARAM lParam)
 			g_data.SaveConfig();
 
 			Invalidate();
-			MessageBox(L"已成功将全部配置与自选股备份至 WebDAV 云端（本次以时间戳独立存档）！", L"备份成功", MB_ICONINFORMATION | MB_OK);
+			MessageBox(L"已成功将全部配置、自选股与 BS 交易台账备份至 WebDAV 云端（本次以时间戳独立存档）！", L"备份成功", MB_ICONINFORMATION | MB_OK);
 		}
 		else
 		{
@@ -7163,13 +7326,14 @@ LRESULT CManagerDialog::OnWebDavResult(WPARAM, LPARAM lParam)
 			break;
 		}
 
-		// 弹出备份选择列表，选中并确认覆盖后再下载应用
+		// 弹出备份选择列表，选中并确认覆盖后再下载应用；
+		// 列表里还可在云端删除选中备份（删除用启动本次拉取时的连接参数，与列表同源）
 		{
-			CBackupListDialog dlg(result->backups, this);
+			CBackupListDialog dlg(result->backups, m_data, this);
 			if (dlg.DoModal(this) == IDOK && !dlg.m_selectedFile.empty())
 			{
 				CString confirmMsg;
-				confirmMsg.Format(_T("已选择备份：%s\n恢复将覆盖本地当前的股票列表与全部配置，是否继续？"),
+				confirmMsg.Format(_T("已选择备份：%s\n恢复将覆盖本地当前的股票列表、全部配置与 BS 交易台账，是否继续？"),
 					dlg.m_selectedName.c_str());
 				if (MessageBox(confirmMsg, L"确认恢复", MB_ICONQUESTION | MB_YESNO) != IDYES)
 					break;
@@ -7194,18 +7358,15 @@ LRESULT CManagerDialog::OnWebDavResult(WPARAM, LPARAM lParam)
 
 void CManagerDialog::ApplyWebDavRestore(const std::string& data, const std::wstring& backupName)
 {
-	// 将云端备份内容写入本地 INI 并重载配置
-	std::wstring configPath = g_data.GetConfigPath();
-	std::ofstream outFile(configPath, std::ios::binary | std::ios::trunc);
-	if (!outFile.is_open())
+	// 写 ini + 重建台账（备份含台账段时）+ 重载配置，与启动自动同步共用同一入口
+	std::wstring errMsg;
+	bool ledgerRestored = false;
+	if (!CWebDavSync::ApplyBackupPayload(data, errMsg, &ledgerRestored))
 	{
-		MessageBox((L"无法写入本地配置文件: " + configPath).c_str(), L"恢复失败", MB_ICONERROR | MB_OK);
+		MessageBox((L"恢复失败：\n" + errMsg).c_str(), L"恢复失败", MB_ICONERROR | MB_OK);
 		return;
 	}
-	outFile.write(data.data(), static_cast<std::streamsize>(data.size()));
-	outFile.close();
 
-	g_data.LoadConfig(L"");
 	Stock::Instance().SendStockInfoRequest();
 
 	m_data = g_data.m_setting_data;
@@ -7244,6 +7405,9 @@ void CManagerDialog::ApplyWebDavRestore(const std::string& data, const std::wstr
 		okMsg = L"已成功从 WebDAV 云端恢复配置并加载！";
 	else
 		okMsg.Format(_T("已成功恢复 %s 的云端备份并加载！"), backupName.c_str());
+	// 旧版备份（本次改版前上传）不含台账段，如实说明，避免用户以为台账丢了
+	if (!ledgerRestored)
+		okMsg += L"\n\n提示：该备份不含交易台账（BS 记录），本地台账保持原样未变动。";
 	MessageBox(okMsg, L"恢复成功", MB_ICONINFORMATION | MB_OK);
 }
 
