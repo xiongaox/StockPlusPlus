@@ -1700,64 +1700,6 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 		memDC.SelectObject(pOldBrush);
 	}
 
-	// 交易台账 B/S 标记：按成交日期匹配可见 bar，方块置于K线外侧、引线自影线端点延伸出来。
-	// 同一交易日同方向的多笔成交合并成一个方块，次数走右下角角标（如 B₂ / S₄）
-	if (ShouldDrawBsMarkers(hover.stockId))
-	{
-		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
-		if (!trades.empty())
-		{
-			CFont badgeFont;
-			const bool hasBadgeFont = CreateBadgeFont(badgeFont, memDC, 65);
-
-			// 先归并：同一 bar 同一方向算一个标记，第一笔决定锚点与绘制顺序
-			struct BsMark { int barIndex; bool isBuy; int count; };
-			std::vector<BsMark> marks;
-			std::map<std::pair<std::string, bool>, size_t> markIndexOf;
-			for (const auto& rec : trades)
-			{
-				if (rec.time.size() < 10)
-					continue;
-				std::string tradeDay = CCommon::UnicodeToStr(rec.time.substr(0, 10).c_str());
-				for (int i = 0; i < totalPoints && (klineStartIdx + i) < klineEndIdx; i++)
-				{
-					if (klineData[klineStartIdx + i].day != tradeDay)
-						continue;
-
-					auto key = std::make_pair(tradeDay, rec.isSell);
-					auto it = markIndexOf.find(key);
-					if (it == markIndexOf.end())
-					{
-						BsMark mark;
-						mark.barIndex = i;
-						mark.isBuy = !rec.isSell;
-						mark.count = 1;
-						marks.push_back(mark);
-						markIndexOf[key] = marks.size() - 1;
-					}
-					else
-					{
-						marks[it->second].count++;
-					}
-					break;
-				}
-			}
-
-			for (const auto& mark : marks)
-			{
-				const auto& kp = klineData[klineStartIdx + mark.barIndex];
-				// 横向严格对齐柱子中心（不再左右错位，否则标记会偏离蜡烛）
-				int centerX = static_cast<int>(ctx.chartWidth / static_cast<float>(totalPoints) * mark.barIndex)
-					+ static_cast<int>(barTotalWidth / 2);
-				// 引线自影线端点伸出：买入接下影线低点、卖出接上影线高点，
-				// 标记再从这个端点继续向外让开，保证离K线足够远
-				int anchorY = mark.isBuy ? priceToY(kp.low) : priceToY(kp.high);
-				DrawBsMarker(memDC, centerX, anchorY, mark.isBuy, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight,
-					priceToY(kp.high), priceToY(kp.low), mark.count, hasBadgeFont ? &badgeFont : nullptr);
-			}
-		}
-	}
-
 	if (hover.showMA)
 	{
 		// 周期与颜色来自「均线日配置」页
@@ -1890,6 +1832,66 @@ void CTimelineChart::DrawDayKLinePriceChart(CDC& memDC, const TimelineDrawContex
 			int loY = priceToY(loPrice);
 			DrawPricePointLabel(memDC, loX, loY, 0, ctx.priceChartTop, ctx.chartWidth, ctx.priceChartHeight,
 				loPrice, false, COLOR_GREEN_DOWN);
+		}
+	}
+
+	// 交易台账 B/S 标记：按成交日期匹配可见 bar，方块置于K线外侧、引线自影线端点延伸出来。
+	// 同一交易日同方向的多笔成交合并成一个方块，次数走右下角角标（如 B₂ / S₄）。
+	// 放在函数最后（分时走的是同一口径）：MA/布林带/高低价标注都会横穿标记方块，
+	// 只要先于它们绘制，标记就会被线条盖住。
+	if (ShouldDrawBsMarkers(hover.stockId))
+	{
+		std::vector<StockTradeRecord> trades = g_data.GetStockTrades(hover.stockId);
+		if (!trades.empty())
+		{
+			CFont badgeFont;
+			const bool hasBadgeFont = CreateBadgeFont(badgeFont, memDC, 65);
+
+			// 先归并：同一 bar 同一方向算一个标记，第一笔决定锚点与绘制顺序
+			struct BsMark { int barIndex; bool isBuy; int count; };
+			std::vector<BsMark> marks;
+			std::map<std::pair<std::string, bool>, size_t> markIndexOf;
+			for (const auto& rec : trades)
+			{
+				if (rec.time.size() < 10)
+					continue;
+				std::string tradeDay = CCommon::UnicodeToStr(rec.time.substr(0, 10).c_str());
+				for (int i = 0; i < totalPoints && (klineStartIdx + i) < klineEndIdx; i++)
+				{
+					if (klineData[klineStartIdx + i].day != tradeDay)
+						continue;
+
+					auto key = std::make_pair(tradeDay, rec.isSell);
+					auto it = markIndexOf.find(key);
+					if (it == markIndexOf.end())
+					{
+						BsMark mark;
+						mark.barIndex = i;
+						mark.isBuy = !rec.isSell;
+						mark.count = 1;
+						marks.push_back(mark);
+						markIndexOf[key] = marks.size() - 1;
+					}
+					else
+					{
+						marks[it->second].count++;
+					}
+					break;
+				}
+			}
+
+			for (const auto& mark : marks)
+			{
+				const auto& kp = klineData[klineStartIdx + mark.barIndex];
+				// 横向严格对齐柱子中心（不再左右错位，否则标记会偏离蜡烛）
+				int centerX = static_cast<int>(ctx.chartWidth / static_cast<float>(totalPoints) * mark.barIndex)
+					+ static_cast<int>(barTotalWidth / 2);
+				// 引线自影线端点伸出：买入接下影线低点、卖出接上影线高点，
+				// 标记再从这个端点继续向外让开，保证离K线足够远
+				int anchorY = mark.isBuy ? priceToY(kp.low) : priceToY(kp.high);
+				DrawBsMarker(memDC, centerX, anchorY, mark.isBuy, ctx.priceChartTop, ctx.priceChartTop + ctx.priceChartHeight,
+					priceToY(kp.high), priceToY(kp.low), mark.count, hasBadgeFont ? &badgeFont : nullptr);
+			}
 		}
 	}
 }
