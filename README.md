@@ -161,6 +161,57 @@
 3. 编译 `utilities` 基础库工程，然后编译 `Stock` 工程。
 4. 编译输出产物位于 `bin/x64/Release/Stock.dll`。
 
+### 编译 ARM64EC（ARM 设备原生版）
+
+本项目**只发布 x64 / x86 两个预编译包**，不提供 ARM64EC 预编译包（原因见下方说明）。如果你在骁龙 / Surface Pro X 等 ARM 设备上想要原生速度，可以自行编译，配置现成可用。
+
+> **先确认是否真的需要**：ARM64EC 版 TrafficMonitor **可以直接加载 x64 版插件**（Windows 会跑在 x64 模拟层上），功能完全一致，只是速度非原生。多数人直接用 Release 里的 x64 包即可。
+
+#### 1. 安装 ARM64EC 工具链
+
+ARM64EC 需要额外安装两样东西，**普通 VS 安装默认不含**（`platform` 选 ARM64EC 时会报 `MSB8020 无法找到 v143 的生成工具`）：
+
+```powershell
+# 需管理员权限；--installPath 换成你本机 VS 的安装路径
+vs_installer.exe modify --installPath "<VS安装路径>" --add Microsoft.VisualStudio.Component.VC.Tools.ARM64EC
+```
+
+- `<VS安装路径>` 一般形如 `C:\Program Files\Microsoft Visual Studio\2022\Community` 或 `D:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools`。
+- 也可用图形界面：打开 **Visual Studio Installer** → 修改 → **单个组件** → 勾选 **MSVC v143 - VS 2022 C++ ARM64EC 生成工具**（含 ARM64 生成工具）。
+- 装完可以这样自检（两项都应在）：`<MSVC版本目录>\lib\arm64ec` 存在，且 Windows SDK 的 `Lib\<版本>\ucrt\arm64` 存在。
+
+#### 2. 编译
+
+**方式一：Visual Studio 界面**
+
+1. 打开 `Stock++.sln`；
+2. 顶部配置下拉选择 **Release | ARM64EC**；
+3. 依次编译 `utilities`、`Stock` 两个工程；
+4. 产物位于 `bin/ARM64EC/Release/Stock.dll`。
+
+**方式二：命令行**
+
+```powershell
+# MSBuild 路径按本机实际位置调整
+& "<MSBuild路径>\MSBuild.exe" "Stock++.sln" /p:Configuration=Release /p:Platform=ARM64EC /t:Stock /m
+```
+
+产物同样在 `bin\ARM64EC\Release\Stock.dll`，把它复制到 `TrafficMonitor\plugins\` 即可。
+
+#### 3. 验证产物是不是真的 ARM64EC
+
+这一步**必须做**，因为 ARM64EC 的最终 DLL 在 PE 头里**故意报告 `8664 machine (x64)`**，光看"是 x64 还是 ARM64"根本区分不出来。正确的判据是它含有 ARM64EC 专属的节区 `.a64xrm`（ARM64X 重定向表）与 `.hexpthk`（混合导出跳板）：
+
+```powershell
+# 用 VS 开发者命令行的 dumpbin
+dumpbin /headers bin\ARM64EC\Release\Stock.dll | Select-String "machine|a64xrm|hexpthk"
+```
+
+- ✅ 正确产物：机器码显示 `8664 machine (x64) (ARM64X)`，且能看到 `.a64xrm` / `.hexpthk` 节区。
+- ❌ 若显示 `8664 machine (x64)` **没有** `(ARM64X)` 后缀、也没有那两个节区，说明编出来的其实是普通 x64——此时工具链没装对，请回到第 1 步。
+
+> **为什么不提供 ARM64EC 预编译包**：本仓库历史上确实挂过 `Stock_V*_arm64ec.zip`，但发包脚本只是给上一版**改文件名**、从未重新编译，导致那份包内容一直停留在 2025-03-08 的 Stock v1.13，且与上游 `zhongyang219/TrafficMonitorPlugins` 的 `Stock_V1.13_arm64ec.zip` 字节完全一致——下载它的用户拿到的是缺全部新功能的旧版。现已下架该包，改为文档指导自行编译，避免再次出现"包名与内容不符"。
+
 ---
 
 ## ❓ 常见问题 (Q&A)
