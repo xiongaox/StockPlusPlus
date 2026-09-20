@@ -59,6 +59,8 @@ tools/debug/
 webdav_root/
 webdav_log.txt
 *.out.txt
+# tools 下划线开头的临时探测脚本与其产物（.py 已被上面 *.py 覆盖，这里管 .txt/.json）
+tools/_*
 _session_data.json
 _session_export.html
 *.lnk

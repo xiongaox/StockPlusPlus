@@ -1013,8 +1013,10 @@ namespace
 
 	bool FetchMoneyFlowLeader(const wchar_t* fid, MC::MoneyFlowLeader& out)
 	{
+		// f13 是市场标识（1=沪市 0=深市）：顺手拼成全码存下来，供点击跳转该股 K 线用。
+		// 沪深 A 股其实也能靠 f12 首位猜市场，但 f13 是服务端给的权威值，不必猜。
 		std::wstring url = L"https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=1&po=1&np=1&fltt=2&invt=2&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23&fid="
-			+ std::wstring(fid) + L"&fields=f12,f14," + std::wstring(fid);
+			+ std::wstring(fid) + L"&fields=f12,f13,f14," + std::wstring(fid);
 		std::string resp;
 		if (!HttpGet(url, resp)) return false;
 		yyjson_doc* doc = yyjson_read(resp.c_str(), resp.size(), 0);
@@ -1028,7 +1030,11 @@ namespace
 			yyjson_val* item = yyjson_arr_get_first(diff);
 			if (item && yyjson_is_obj(item))
 			{
-				out.code = JsonString(item, "f12");
+				const std::wstring pure = JsonString(item, "f12");
+				const double market = JsonNumber(item, "f13", -1.0);
+				if (market == 1.0) out.code = L"sh" + pure;
+				else if (market == 0.0) out.code = L"sz" + pure;
+				else out.code = pure;   // f13 缺失时留裸码，由 LeaderFullCodeAt 兜底补前缀
 				out.name = JsonString(item, "f14");
 				std::string fidStr = CCommon::UnicodeToStr(fid, false);
 				out.flow = JsonNumber(item, fidStr.c_str(), 0.0);
@@ -1182,7 +1188,9 @@ bool CMarketCenterData::FetchSectorTimelines()
 // ===== 涨跌分布 + 涨停/跌停池 + 沪深成交额 =====
 namespace
 {
-	bool FetchZDPool(const char* api, long long& count)
+	// 涨停/跌停池：一次请求同时拿到「总数」与「完整名单」。名单供点击分布柱子后的弹窗使用，
+	// 因此涨停/跌停两档的弹窗是零额外请求的（名单本来就在这份响应里，此前只取了 tc 便丢弃）。
+	bool FetchZDPool(const char* api, long long& count, std::vector<MC::TrendListRow>& out)
 	{
 		time_t now = time(nullptr);
 		struct tm localTm{};
@@ -1200,6 +1208,26 @@ namespace
 		yyjson_val* data = root ? yyjson_obj_get(root, "data") : nullptr;
 		if (data)
 		{
+			yyjson_val* pool = yyjson_obj_get(data, "pool");
+			if (pool && yyjson_is_arr(pool))
+			{
+				out.clear();
+				yyjson_val* item;
+				yyjson_arr_iter iter;
+				yyjson_arr_iter_init(pool, &iter);
+				while ((item = yyjson_arr_iter_next(&iter)))
+				{
+					if (!item || !yyjson_is_obj(item)) continue;
+					MC::TrendListRow row;
+					row.code = JsonString(item, "c");
+					row.name = JsonString(item, "n");
+					row.price = JsonNumber(item, "p", 0.0) / 100.0;   // 池内价格以「分」给出
+					row.pct = JsonNumber(item, "zdp", 0.0);
+					row.market = static_cast<int>(JsonNumber(item, "m", -1.0));
+					row.extra = static_cast<int>(JsonNumber(item, "lbc", 0.0));   // 连板数（跌停池无此字段）
+					if (!row.code.empty()) out.push_back(std::move(row));
+				}
+			}
 			// tc = 池内总数
 			yyjson_val* tc = yyjson_obj_get(data, "tc");
 			if (tc && yyjson_is_uint(tc))
@@ -1207,15 +1235,11 @@ namespace
 				count = static_cast<long long>(yyjson_get_uint(tc));
 				ok = true;
 			}
-			else if (data != nullptr)
+			else if (!out.empty())
 			{
 				// 无 tc 时以 pool 数组长度兜底
-				yyjson_val* pool = yyjson_obj_get(data, "pool");
-				if (pool && yyjson_is_arr(pool))
-				{
-					count = yyjson_arr_size(pool);
-					ok = true;
-				}
+				count = static_cast<long long>(out.size());
+				ok = true;
 			}
 		}
 		yyjson_doc_free(doc);
@@ -1406,8 +1430,8 @@ bool CMarketCenterData::FetchTrendDist()
 	if (!gotDist)
 		return false;
 
-	FetchZDPool("ZTPool", dist.zt);
-	FetchZDPool("DTPool", dist.dt);
+	FetchZDPool("ZTPool", dist.zt, dist.ztList);
+	FetchZDPool("DTPool", dist.dt, dist.dtList);
 
 	// 沪深京成交额：主口径为指数分时（今日累计 + 昨日全天 + 昨日分时累计曲线，东财"较前一日同期"同款数据基础）；
 	// 分时不可用时退回原日K口径（仅今日累计/昨日全天，无曲线）。北交所北证50为全市场口径补全。
@@ -1505,6 +1529,115 @@ bool CMarketCenterData::FetchTrendDist()
 	}
 	AppendTrendSample();
 	return true;
+}
+
+// 涨跌趋势「分档名单」的一页：东财条件选股接口，支持按涨跌幅区间在服务端过滤。
+// lo/hi 为涨跌幅百分比，区间取 [lo, hi)；无上限档（如 >10%）把 hi 传 >= 1e8。
+// 该接口单次最多返回 100 条（与列表接口同），故调用方按页取。
+bool CMarketCenterData::FetchTrendBinPage(double lo, double hi, int page,
+	std::vector<MC::TrendListRow>& out, int& total)
+{
+	// 比较运算符与等号做百分号编码，避免个别 HTTP 栈对原始 '>' '<' '=' 挑剔
+	wchar_t filter[192];
+	if (lo == hi)                                  // 平盘：恰好等于该值
+		swprintf_s(filter, L"(CHANGE_RATE%%3D%.2f)", lo);
+	else if (lo <= -1e8)                           // 无下限（如 <-10%）
+		swprintf_s(filter, L"(CHANGE_RATE%%3C%.2f)", hi);
+	else if (hi >= 1e8)                            // 无上限（如 >10%）
+		swprintf_s(filter, L"(CHANGE_RATE%%3E%%3D%.2f)", lo);
+	else
+		swprintf_s(filter, L"(CHANGE_RATE%%3E%%3D%.2f)(CHANGE_RATE%%3C%.2f)", lo, hi);
+
+	std::wstring url = L"https://data.eastmoney.com/dataapi/xuangu/list?st=CHANGE_RATE&sr=-1&ps=100&p="
+		+ std::to_wstring(page)
+		+ L"&sty=SECURITY_CODE,SECURITY_NAME_ABBR,NEW_PRICE,CHANGE_RATE&filter=" + filter
+		+ L"&source=SELECT_SECURITIES&client=WEB";
+
+	std::string resp;
+	if (!HttpGet(url, resp)) return false;
+	yyjson_doc* doc = yyjson_read(resp.c_str(), resp.size(), 0);
+	if (!doc) return false;
+
+	bool ok = false;
+	yyjson_val* root = yyjson_doc_get_root(doc);
+	yyjson_val* result = root ? yyjson_obj_get(root, "result") : nullptr;
+	if (result)
+	{
+		total = static_cast<int>(JsonNumber(result, "count", 0.0));
+		yyjson_val* arr = yyjson_obj_get(result, "data");
+		if (arr && yyjson_is_arr(arr))
+		{
+			out.clear();
+			yyjson_val* item;
+			yyjson_arr_iter iter;
+			yyjson_arr_iter_init(arr, &iter);
+			while ((item = yyjson_arr_iter_next(&iter)))
+			{
+				if (!item || !yyjson_is_obj(item)) continue;
+				MC::TrendListRow row;
+				row.code = JsonString(item, "SECURITY_CODE");
+				row.name = JsonString(item, "SECURITY_NAME_ABBR");
+				row.price = JsonNumber(item, "NEW_PRICE", 0.0);
+				row.pct = JsonNumber(item, "CHANGE_RATE", 0.0);
+				// 市场取自 SECUCODE 后缀（600845.SH / 300014.SZ / 920132.BJ）——
+				// 北交所 92xxxx 靠代码首位猜会误判成沪市，这里以接口给的后缀为准
+				const std::wstring secucode = JsonString(item, "SECUCODE");
+				if (secucode.size() >= 2)
+				{
+					const std::wstring suffix = secucode.substr(secucode.size() - 2);
+					row.market = (suffix == L"SH") ? 1 : ((suffix == L"BJ") ? 2 : 0);
+				}
+				if (!row.code.empty()) out.push_back(std::move(row));
+			}
+			ok = true;
+		}
+	}
+	yyjson_doc_free(doc);
+	return ok;
+}
+
+void CMarketCenterData::RequestTrendBinPage(int token, double lo, double hi, int page, HWND notifyWnd, bool restart)
+{
+	{
+		std::lock_guard<std::mutex> lock(m_mutex);
+		if (restart)
+		{
+			m_trend_bin = TrendBinCache{};
+			m_trend_bin.token = token;
+		}
+		// token 不符说明用户已经换档/关窗，这一页没必要再取；在途时不重复投递，等它回来
+		if (m_trend_bin.token != token) return;
+		if (m_trend_bin.inflight || m_trend_bin.finished) return;
+		m_trend_bin.inflight = true;
+		m_trend_bin.requestedPage = page;
+		m_trend_bin.failed = false;
+	}
+
+	// 走股票取数线程的后台队列（插队优先执行）：不能占用 UI 线程，也不要和行情中心自己的取数线程抢
+	CStockFetchThread::Instance().PostHighPriorityBackgroundTask([this, token, lo, hi, page, notifyWnd]() {
+		std::vector<MC::TrendListRow> rows;
+		int total = 0;
+		const bool ok = FetchTrendBinPage(lo, hi, page, rows, total);
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			if (m_trend_bin.token != token) return;   // 结果已过期：直接丢弃
+			m_trend_bin.inflight = false;
+			if (!ok)
+			{
+				m_trend_bin.failed = true;
+			}
+			else
+			{
+				m_trend_bin.total = total;
+				if (rows.empty())
+					m_trend_bin.finished = true;      // 该档已取完
+				else
+					m_trend_bin.rows.insert(m_trend_bin.rows.end(), rows.begin(), rows.end());
+			}
+		}
+		if (notifyWnd && ::IsWindow(notifyWnd))
+			::PostMessage(notifyWnd, WM_APP + 140, 0, 0);   // 复用「行情中心数据到达」，触发重绘
+	});
 }
 
 // ===== 自积累曲线采样 =====

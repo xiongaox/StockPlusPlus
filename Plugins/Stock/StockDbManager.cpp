@@ -167,6 +167,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 	// 同连接上的分时/快照写入交错，无超时会静默丢掉整批K线缓存
 	sqlite3_busy_timeout(m_db, 3000);
 
+
 	// 创建交易记录表
 	const char* sql = "CREATE TABLE IF NOT EXISTS trades ("
 		"id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -860,10 +861,22 @@ bool CStockDbManager::SaveTimelineCache(const std::wstring& stockCode, const std
 	STOCKDB_LOCK();
 	if (m_db == nullptr || data.empty()) return false;
 
+	// 逐点写入必须包在一个事务里，不能让 sqlite 逐步隐式提交：一整天分时是 240 个点左右，
+	// 逐步提交就是 240 次提交、240 次 WAL 落盘与索引维护，实测（真库副本）逐条 131ms vs 单事务 3.7ms。
+	// 更要紧的是这些提交全在 DB 锁里跑：曾实测本函数持锁 8.9 秒，同期 UI 线程读缓存只能干等，
+	// 表现为「从K线右键返回行情中心」卡住好几秒（切股票同理，两者都要同步读一次缓存）。
+	// 包成事务同时也让整批写入原子化，不会再写出半截数据
+	if (sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK)
+		return false;
+
 	const char* sql = "INSERT OR IGNORE INTO timeline_cache(stock_code, trade_date, time, volume, price, average_price, amount, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?);";
 	sqlite3_stmt* stmt = nullptr;
 	int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr);
-	if (rc != SQLITE_OK) return false;
+	if (rc != SQLITE_OK)
+	{
+		sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+		return false;
+	}
 
 	bool isSecid = CCommon::IsEmSecidCode(stockCode);
 	bool isHK = (stockCode.find(kHK) == 0);
@@ -894,6 +907,15 @@ bool CStockDbManager::SaveTimelineCache(const std::wstring& stockCode, const std
 			ok = false;
 	}
 	sqlite3_finalize(stmt);
+	if (ok)
+	{
+		if (sqlite3_exec(m_db, "COMMIT;", nullptr, nullptr, nullptr) != SQLITE_OK)
+			ok = false;
+	}
+	else
+	{
+		sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+	}
 	return ok;
 }
 
@@ -1399,10 +1421,19 @@ bool CStockDbManager::SaveFundNavCache(const std::wstring& stockCode, const std:
 	STOCKDB_LOCK();
 	if (m_db == nullptr || data.empty()) return false;
 
+	// 同 SaveTimelineCache：整天净值也是 240 个点左右，逐条提交等于 240 次 fsync，
+	// 会把全局 DB 锁占住数秒，必须整批一个事务
+	if (sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK)
+		return false;
+
 	const char* sql = "INSERT OR IGNORE INTO fund_nav_cache(stock_code, trade_date, time, nav, updated_at) VALUES(?, ?, ?, ?, ?);";
 	sqlite3_stmt* stmt = nullptr;
 	int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr);
-	if (rc != SQLITE_OK) return false;
+	if (rc != SQLITE_OK)
+	{
+		sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+		return false;
+	}
 
 	std::string tradeDate = GetTodayDateString();
 	time_t now = time(nullptr);
@@ -1422,6 +1453,15 @@ bool CStockDbManager::SaveFundNavCache(const std::wstring& stockCode, const std:
 			ok = false;
 	}
 	sqlite3_finalize(stmt);
+	if (ok)
+	{
+		if (sqlite3_exec(m_db, "COMMIT;", nullptr, nullptr, nullptr) != SQLITE_OK)
+			ok = false;
+	}
+	else
+	{
+		sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+	}
 	return ok;
 }
 
@@ -1495,13 +1535,26 @@ bool CStockDbManager::SaveTransactions(const std::wstring& stockCode,
 	STOCKDB_LOCK();
 	if (m_db == nullptr || data.empty()) return false;
 
+	// 先删后插包在一个事务里：逐条提交时每次 fsync 都要几毫秒到几十毫秒，
+	// 一整天的逐笔成交（数千条）会长时间占住全局 DB 锁；顺便让"删旧+写新"变成原子操作
+	if (sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK)
+		return false;
+
 	// 先删除同一天同一股票的历史明细，避免重复累加（同一天数据是幂等覆盖的）
-	if (!DeleteTransactions(stockCode, tradeDate)) return false;
+	if (!DeleteTransactions(stockCode, tradeDate))
+	{
+		sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+		return false;
+	}
 
 	const char* sql = "INSERT INTO transaction(code, trade_date, time_key, price, vol, buyorsell) VALUES(?, ?, ?, ?, ?, ?);";
 	sqlite3_stmt* stmt = nullptr;
 	int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr);
-	if (rc != SQLITE_OK) return false;
+	if (rc != SQLITE_OK)
+	{
+		sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+		return false;
+	}
 
 	bool ok = true;
 	for (const auto& item : data)
@@ -1520,6 +1573,15 @@ bool CStockDbManager::SaveTransactions(const std::wstring& stockCode,
 			ok = false;
 	}
 	sqlite3_finalize(stmt);
+	if (ok)
+	{
+		if (sqlite3_exec(m_db, "COMMIT;", nullptr, nullptr, nullptr) != SQLITE_OK)
+			ok = false;
+	}
+	else
+	{
+		sqlite3_exec(m_db, "ROLLBACK;", nullptr, nullptr, nullptr);
+	}
 	return ok;
 }
 

@@ -42,7 +42,7 @@ $minor = if ($parts.Length -gt 1) { $parts[1] } else { "0" }
 $patch = if ($parts.Length -gt 2) { $parts[2] } else { "0" }
 $displayVer = if ($parts.Length -gt 2 -and $parts[2] -ne "0") { "$major.$minor.$patch" } else { "$major.$minor" }
 
-Write-Host ">>> [1/5] 正在更新 Version.h 为版本: v$displayVer ($major.$minor.$patch.0)..." -ForegroundColor Cyan
+Write-Host ">>> [1/6] 正在更新 Version.h 为版本: v$displayVer ($major.$minor.$patch.0)..." -ForegroundColor Cyan
 
 $versionHeader = @"
 #pragma once
@@ -118,7 +118,7 @@ if (Test-Path $mgrPath) {
 # 2. 检查并关闭运行中的测试器
 $tester = Get-Process -Name "PluginTester" -ErrorAction SilentlyContinue
 if ($tester) {
-    Write-Host ">>> [2/5] 检测到 PluginTester 运行中，正在关闭以释放 Stock.dll 占用..." -ForegroundColor Yellow
+    Write-Host ">>> [2/6] 检测到 PluginTester 运行中，正在关闭以释放 Stock.dll 占用..." -ForegroundColor Yellow
     Stop-Process -Name "PluginTester" -Force
 }
 
@@ -128,42 +128,55 @@ if (-not (Test-Path $msbuild)) {
     $msbuild = "MSBuild.exe"
 }
 
-Write-Host ">>> [3/5] 正在编译 Release x64..." -ForegroundColor Cyan
+Write-Host ">>> [3/6] 正在编译 Release x64..." -ForegroundColor Cyan
 & $msbuild "$root\Stock++.sln" /p:Configuration=Release /p:Platform=x64 /t:Stock /m /v:q
 if ($LASTEXITCODE -ne 0) { throw "x64 编译失败！" }
 
-Write-Host ">>> [3/5] 正在编译 Release x86..." -ForegroundColor Cyan
+Write-Host ">>> [3/6] 正在编译 Release x86..." -ForegroundColor Cyan
 & $msbuild "$root\Stock++.sln" /p:Configuration=Release /p:Platform=x86 /t:Stock /m /v:q
 if ($LASTEXITCODE -ne 0) { throw "x86 编译失败！" }
 
-# 4. 打包输出至 download 目录
-Write-Host ">>> [4/5] 正在打包发布产物到 download 目录..." -ForegroundColor Cyan
-# 清理历史旧版本 zip 包
-Get-ChildItem -Path "$root\download" -Filter "Stock_V*_x64.zip" | Remove-Item -Force
-Get-ChildItem -Path "$root\download" -Filter "Stock_V*_x86.zip" | Remove-Item -Force
-$x64Zip = "$root\download\Stock_V${cleanVer}_x64.zip"
-$x86Zip = "$root\download\Stock_V${cleanVer}_x86.zip"
-Compress-Archive -Path "$root\bin\x64\Release\Stock.dll" -DestinationPath $x64Zip -Force
-Compress-Archive -Path "$root\bin\Release\Stock.dll" -DestinationPath $x86Zip -Force
+# 4. 产物闸门 + 打包（本仓库只发布 x64 / x86 两个预编译包）。
+# ARM64EC 不再提供预编译包：需要原生版的用户请照 README「编译 ARM64EC」一节自行编译。
+$candidates = @(
+    [pscustomobject]@{ Dll = "$root\bin\x64\Release\Stock.dll"; Zip = "$root\download\Stock_V${cleanVer}_x64.zip"; Arch = 'x64' },
+    [pscustomobject]@{ Dll = "$root\bin\Release\Stock.dll";     Zip = "$root\download\Stock_V${cleanVer}_x86.zip"; Arch = 'x86' }
+)
 
-# 同步更名现有的 arm64ec 包（若存在）
-$armOld = Get-ChildItem -Path "$root\download" -Filter "Stock_V*_arm64ec.zip" | Select-Object -First 1
-if ($armOld) {
-    $armNew = "$root\download\Stock_V${cleanVer}_arm64ec.zip"
-    if ($armOld.FullName -ne $armNew) {
-        Move-Item -Path $armOld.FullName -Destination $armNew -Force
+# 4a. 产物闸门：必须在 Compress-Archive 之前校验并中止。
+# 否则即便中止，download 里也已经躺着一只贴着新版本号的坏包，
+# 而 CI 正是拿 download\Stock_V*.zip 直接上传到 Release 的——校验就等于没做。
+$expectVer = "$major.$minor.$patch.0"
+foreach ($item in $candidates) {
+    if (-not (Test-Path $item.Dll)) { throw "缺少 $($item.Arch) 产物：$($item.Dll)（编译未成功？）" }
+    $actualVer = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($item.Dll).FileVersion
+    if ($actualVer -ne $expectVer) {
+        throw "产物版本不符：$($item.Dll) 报告 $actualVer，期望 $expectVer。疑似残留的旧文件被拿来冒充本次发布，已中止发包（未写出任何 zip）"
     }
+}
+
+# 4b. 打包输出至 download 目录（校验通过后才写文件）
+Write-Host ">>> [4/6] 正在打包发布产物到 download 目录..." -ForegroundColor Cyan
+# 先清掉所有历史 Stock_V*.zip：其中也包括任何残留的 arm64ec 包。
+# 那些包历史上只是被改名冒充新版本（内容实为 2025-03-08 的 Stock v1.13 旧版），
+# 留在 download 里会被 CI 的通配符一并上传到 Release，必须就地清掉。
+Get-ChildItem -Path "$root\download" -Filter 'Stock_V*.zip' -ErrorAction SilentlyContinue | Remove-Item -Force
+foreach ($item in $candidates) {
+    Compress-Archive -Path $item.Dll -DestinationPath $item.Zip -Force
+    Write-Host "    已打包 $($item.Arch): $($item.Zip)" -ForegroundColor Green
 }
 
 # 5. 更新 download/plugin_download.md
 Write-Host ">>> [5/6] 同步更新 download/plugin_download.md 下载链接..." -ForegroundColor Cyan
 $dlDocPath = "$root\download\plugin_download.md"
 if (Test-Path $dlDocPath) {
-    (Get-Content $dlDocPath -Raw -Encoding UTF8) `
+    $dlDoc = (Get-Content $dlDocPath -Raw -Encoding UTF8) `
         -replace 'Stock_V[a-zA-Z0-9\.]+_x64\.zip', "Stock_V${cleanVer}_x64.zip" `
-        -replace 'Stock_V[a-zA-Z0-9\.]+_x86\.zip', "Stock_V${cleanVer}_x86.zip" `
-        -replace 'Stock_V[a-zA-Z0-9\.]+_arm64ec\.zip', "Stock_V${cleanVer}_arm64ec.zip" |
-        Set-Content $dlDocPath -Encoding UTF8
+        -replace 'Stock_V[a-zA-Z0-9\.]+_x86\.zip', "Stock_V${cleanVer}_x86.zip"
+    # 本仓库不再发布 ARM64EC 预编译包：表格里若还留着该行就整行删掉，
+    # 页面上绝不出现指向不存在文件的链接。
+    $dlDoc = ($dlDoc -split "`r?`n" | Where-Object { $_ -notmatch '^(?i)\s*\|\s*\*\*ARM64EC' }) -join "`r`n"
+    Set-Content $dlDocPath -Value $dlDoc -Encoding UTF8
 }
 
 # 6. 提取更新日志并生成 RELEASE_NOTES.md
@@ -198,7 +211,10 @@ $bulletText
 ### 📦 安装包说明
 - **x64 推荐版**：适用于绝大多数 64 位 Windows 系统及 64 位 TrafficMonitor
 - **x86 兼容版**：适用于 32 位系统环境
-- **ARM64EC 原生版**：适用于高通骁龙芯片 / Surface Pro X 等 ARM 架构设备
+
+> **ARM64 设备（骁龙 / Surface Pro X 等）**：请直接使用上面的 **x64 版**——ARM64EC 版 TrafficMonitor
+> 可以正常加载 x64 插件（走系统模拟执行，功能完全一致，仅速度非原生）。
+> 本项目不再提供 ARM64EC 预编译包；确需原生版本请参照 README 的「编译 ARM64EC」一节自行编译。
 "@
 
 $releaseNotesPath = "$root\RELEASE_NOTES.md"
@@ -209,6 +225,5 @@ Write-Host "=================================================" -ForegroundColor 
 Write-Host "🎉 Stock 插件 Release v$cleanVer 打包完成！" -ForegroundColor Green
 Write-Host "=================================================" -ForegroundColor Green
 Write-Host "产物文件：" -ForegroundColor Green
-Write-Host "  - $x64Zip"
-Write-Host "  - $x86Zip"
+foreach ($item in $candidates) { Write-Host "  - $($item.Zip)" }
 Write-Host "  - $releaseNotesPath"

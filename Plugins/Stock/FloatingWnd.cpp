@@ -148,6 +148,8 @@ BEGIN_MESSAGE_MAP(CFloatingWnd, CWnd)
 	ON_MESSAGE((WM_USER + 100), OnUpdateStatus)
 	ON_MESSAGE((CMarketCenterPanel::WM_MC_DATA_UPDATED), OnMarketCenterDataUpdated)
 	ON_MESSAGE((CMarketCenterPanel::WM_MC_ETF_CLICKED), OnMcEtfClicked)
+	ON_MESSAGE((CMarketCenterPanel::WM_MC_STOCK_CLICKED), OnMcStockClicked)
+	ON_MESSAGE((CMarketCenterPanel::WM_MC_BIN_ROW_CLICKED), OnMcBinRowClicked)
 	ON_MESSAGE((WM_USER + 102), OnShowEditDialog)
 	ON_MESSAGE((WM_USER + 103), OnShowAddDialog)
 	ON_MESSAGE((WM_USER + 104), OnShowTradeDialog)
@@ -328,13 +330,37 @@ LRESULT CFloatingWnd::OnMcEtfClicked(WPARAM wParam, LPARAM lParam)
 {
 	UNREFERENCED_PARAMETER(lParam);
 	// 行情中心点击某只 ETF：跳转首页日K临时查看，右键可返回行情中心
-	std::wstring full = McEtfFullCode(m_marketCenterPanel.EtfCodeAt(static_cast<int>(wParam)));
-	if (full.empty())
-		return 0;
+	JumpToStockFromMarketCenter(McEtfFullCode(m_marketCenterPanel.EtfCodeAt(static_cast<int>(wParam))));
+	return 0;
+}
+
+LRESULT CFloatingWnd::OnMcStockClicked(WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(lParam);
+	// 资金流向页点击底部领头股名称（wParam：0=机构领头 1=主力领头）：
+	// 与点 ETF 走同一条跳转路径（首页日K临时查看，右键返回行情中心）
+	JumpToStockFromMarketCenter(m_marketCenterPanel.LeaderFullCodeAt(static_cast<int>(wParam)));
+	return 0;
+}
+
+LRESULT CFloatingWnd::OnMcBinRowClicked(WPARAM wParam, LPARAM lParam)
+{
+	UNREFERENCED_PARAMETER(lParam);
+	// 涨跌趋势页点击分档浮层里的某一行（wParam：面板快照内的行下标）→ 跳该股日K。
+	// 同样只传下标、由面板侧取全码：行是浮层滚动中的快照，跨线程传指针会悬空
+	JumpToStockFromMarketCenter(m_marketCenterPanel.BinRowFullCodeAt(static_cast<int>(wParam)));
+	return 0;
+}
+
+// 行情中心 → 首页日K 的临时查看跳转（ETF 行与领头股共用）
+void CFloatingWnd::JumpToStockFromMarketCenter(const std::wstring& fullCode)
+{
+	if (fullCode.empty())
+		return;
 	std::wstring oldId = m_stock_id;
-	if (oldId == full)
-		return 0;   // 点的就是当前股票，无需进入临时视图
-	SetStockId(full);
+	if (oldId == fullCode)
+		return;   // 点的就是当前股票，无需进入临时视图
+	SetStockId(fullCode);
 	SetDayKLineModeDefaults();
 	m_marketCenterMode = false;   // 跳转首页（退出行情中心视图，恢复图表按钮）
 	HideChartButtons(false);
@@ -347,7 +373,6 @@ LRESULT CFloatingWnd::OnMcEtfClicked(WPARAM wParam, LPARAM lParam)
 	// SetStockId 会清空临时状态，这里重新记下来源股票供返回按钮恢复
 	m_mc_return_stock_id = oldId;
 	Invalidate();
-	return 0;
 }
 
 CFloatingWnd::CFloatingWnd() : m_isDestroying(FALSE), m_klineDataLoaded(false), m_viewMode(UI_VIEW_DAY_KLINE)
@@ -2798,6 +2823,7 @@ CFloatingWnd::UiState CFloatingWnd::CaptureUiState() const
 	st.settingsMode = m_settingsMode;
 	const CMarketCenterPanel::BrowseSnapshot browse = m_marketCenterPanel.CaptureBrowseState();
 	st.mcPage = browse.page;
+	st.mcReturnStockId = m_mc_return_stock_id;
 	st.mcSectorViewMode = browse.sectorViewMode;
 	st.mcTreemapMode = browse.treemapMode;
 
@@ -2888,19 +2914,39 @@ void CFloatingWnd::ApplyChartViewState(const UiState& st)
 	Invalidate();
 }
 
+void CFloatingWnd::CarryOverBrowseState(int page, int sectorViewMode, int treemapMode, const std::wstring& returnStockId)
+{
+	CMarketCenterPanel::BrowseSnapshot browse;
+	browse.page = page;
+	browse.sectorViewMode = sectorViewMode;
+	browse.treemapMode = treemapMode;
+	m_marketCenterPanel.RestoreBrowseState(browse);
+	m_mc_return_stock_id = returnStockId;
+}
+
 void CFloatingWnd::RestoreUiState(const UiState& st)
 {
 	// 先恢复首页图表视图状态（行情中心/设置退出后回到的就是这个状态）
 	ApplyChartViewState(st);
 
-	// 行情中心：先还原面板页签/子视图，再走标准进入分支（隐藏图表按钮、绑定通知窗口并按当前页拉数）
-	if (st.marketCenterMode && !m_marketCenterMode)
+	// 行情中心的面板页签/子视图必须先无条件还原：点击领头股/ETF 跳去看 K 线时，
+	// 行情中心已退出（marketCenterMode=false），若只在「进入行情中心」时才还原，
+	// 一旦悬浮窗被重建（关掉重开、测试器重载插件），面板会退回默认的「板块资金流」页——
+	// 此时右键只能回到第一页，用户看到的就是「回不到资金流向」。面板是纯绘制对象、
+	// 随窗口重建一起重置，所以这条还原不能挂在进入分支里。
 	{
 		CMarketCenterPanel::BrowseSnapshot browse;
 		browse.page = st.mcPage;
 		browse.sectorViewMode = st.mcSectorViewMode;
 		browse.treemapMode = st.mcTreemapMode;
 		m_marketCenterPanel.RestoreBrowseState(browse);
+		// 临时视图的来源股票同理：随窗口重建带走，否则重开后右键还原不了跳转前的股票
+		m_mc_return_stock_id = st.mcReturnStockId;
+	}
+
+	// 行情中心进入分支：隐藏图表按钮、绑定通知窗口并按当前页拉数
+	if (st.marketCenterMode && !m_marketCenterMode)
+	{
 		ToggleMarketCenter();
 	}
 	// 内嵌设置视图：与行情中心互斥，按保存状态原地重建

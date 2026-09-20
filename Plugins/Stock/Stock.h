@@ -95,6 +95,7 @@ private:
 	int m_floating_mc_page{ 0 };
 	int m_floating_mc_sector_view{ 0 };
 	int m_floating_mc_treemap_mode{ 0 };
+	std::wstring m_floating_mc_return_stock;    // 行情中心跳转来的临时 K 线视图：跳转前的股票（空=不在临时视图）
 	// K线首页（图表）状态（对应 CFloatingWnd::UiState 字段）
 	int m_floating_view_mode{ 3 };              // UIViewMode（3=日K 默认）
 	bool m_floating_show_chip_peak{ false };
