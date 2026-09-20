@@ -1,4 +1,4 @@
-#include "pch.h"
+#include "pch.h"
 #include "DataManager.h"
 #include "Common.h"
 #include "Stock.h"

@@ -124,6 +124,41 @@ namespace
 		return CSize(static_cast<int>(bound.Width) + 1, static_cast<int>(bound.Height) + 1);
 	}
 
+	// 涨跌趋势页分档表：与 DrawTrendPage 的柱子**顺序一一对应**（两处必须同源，否则点柱子会开错档）。
+	// lo/hi 为涨跌幅百分比、区间取 [lo, hi)；source 说明该档名单从哪来：
+	//   0=按区间筛选（条件选股接口）  1=涨停池  2=跌停池  3=恰好等于 lo（平盘）
+	struct TrendBinDef { const wchar_t* label; double lo; double hi; int source; };
+	const TrendBinDef kTrendBins[] = {
+		{ L"涨停",    0.0,    0.0,  1 },
+		{ L">10%",   10.0,    1e9,  0 },
+		{ L"7~10%",   7.0,   10.0,  0 },
+		{ L"5~7%",    5.0,    7.0,  0 },
+		{ L"3~5%",    3.0,    5.0,  0 },
+		{ L"0~3%",    1.0,    3.0,  0 },   // 与柱子口径一致：分布库里 [0,1) 单列，故本档从 1 起
+		{ L"平盘",    0.0,    0.0,  3 },
+		{ L"0~-3",   -3.0,    0.0,  0 },
+		{ L"-3~-5",  -5.0,   -3.0,  0 },
+		{ L"-5~-7",  -7.0,   -5.0,  0 },
+		{ L"-7~-10",-10.0,   -7.0,  0 },
+		{ L"<-10%",  -1e9,  -10.0,  0 },
+		{ L"跌停",    0.0,    0.0,  2 },
+	};
+	const int kTrendBinCount = static_cast<int>(sizeof(kTrendBins) / sizeof(kTrendBins[0]));
+
+	// 六位代码 → 插件内部全码。优先用接口给的市场标记；缺标记时按编码惯例兜底。
+	// 注意北交所在前判断：92xxxx 属于北交所，若按"9 开头=沪"会把它们错认成沪市 B 股
+	std::wstring ToFullStockCode(const std::wstring& code, int market)
+	{
+		if (code.size() != 6) return code;
+		if (market == 1) return L"sh" + code;
+		if (market == 2) return L"bj" + code;
+		if (market == 0) return L"sz" + code;
+		const wchar_t c0 = code[0];
+		if (c0 == L'4' || c0 == L'8' || (c0 == L'9' && code[1] == L'2')) return L"bj" + code;
+		if (c0 == L'6' || c0 == L'5' || c0 == L'9') return L"sh" + code;
+		return L"sz" + code;
+	}
+
 	void FillCard(Gdiplus::Graphics& g, const CRect& rc, COLORREF bg = MC_CARD, COLORREF border = MC_BORDER)
 	{
 		Gdiplus::SolidBrush b(Gdi(bg));
@@ -375,6 +410,9 @@ void CMarketCenterPanel::SwitchPage(McPage page)
 	m_hover_moneyflow_card = -1;
 	m_hover_moneyflow_idx = -1;
 	m_theme_panel_open = false;
+	// 分档浮层挂在"涨跌趋势页的某根柱子"上：离开该页就没了归属，一并收起（在途请求按令牌作废）
+	if (m_bin_panel_open)
+		CloseBinPanel();
 	// 切页后拉取该页数据（懒加载；数据到达由悬浮窗 WM_MC_DATA_UPDATED 触发重绘）
 	RequestData();
 	// 重绘由悬浮窗在 HandleLButtonDown 后 Invalidate 完成
@@ -399,6 +437,36 @@ std::wstring CMarketCenterPanel::EtfCodeAt(int idx) const
 	if (idx < 0 || idx >= static_cast<int>(m_etfs_snapshot.size()))
 		return std::wstring();
 	return m_etfs_snapshot[static_cast<size_t>(idx)].code;
+}
+
+std::wstring CMarketCenterPanel::LeaderFullCodeAt(int kind) const
+{
+	const MC::MoneyFlowLeader& leader = (kind == 1) ? m_moneyflow_cache.leaderMain : m_moneyflow_cache.leaderInst;
+	std::wstring code = leader.code;
+	if (code.empty())
+		return std::wstring();
+
+	// 已经是带市场前缀的全码（sh/sz/bj…）就直接用
+	if (code.rfind(L"sh", 0) == 0 || code.rfind(L"sz", 0) == 0 || code.rfind(L"bj", 0) == 0)
+		return code;
+
+	// 兜底：旧缓存里可能存的是裸 6 位码（f13 探测之前抓的），按 A 股编码惯例补前缀
+	if (code.size() == 6)
+	{
+		const wchar_t c0 = code[0];
+		if (c0 == L'6' || c0 == L'5' || c0 == L'9') return L"sh" + code;   // 沪市主板/B股/基金
+		if (c0 == L'0' || c0 == L'3' || c0 == L'2' || c0 == L'1') return L"sz" + code;   // 深市主板/创业板/B股
+		if (c0 == L'4' || c0 == L'8') return L"bj" + code;                 // 北交所
+	}
+	return code;
+}
+
+std::wstring CMarketCenterPanel::BinRowFullCodeAt(int idx) const
+{
+	if (idx < 0 || idx >= static_cast<int>(m_bin_rows.size()))
+		return std::wstring();
+	const MC::TrendListRow& row = m_bin_rows[static_cast<size_t>(idx)];
+	return ToFullStockCode(row.code, row.market);
 }
 
 CMarketCenterData::DataSet CMarketCenterPanel::CurrentDataSet() const
@@ -460,6 +528,19 @@ void CMarketCenterPanel::RefreshSnapshots()
 		m_etf_total = mc.m_etf_total;
 		m_etfs_snapshot_time = mc.m_etfs_time;
 		BuildThemeInflow();
+	}
+	// 分档浮层：把数据层缓存的行同步进面板快照。只对「按区间分页取」的档位（source 0/3）有效——
+	// 涨停/跌停的名单是开档那一刻直接从池子里拷过来的，不经过这份缓存。
+	// 只在条数变化时拷贝：一档可能上千行，每帧整体复制没有必要（取数到点时会 PostMessage 触发重绘）
+	if (m_bin_panel_open && m_bin_open_bin >= 0 && m_bin_open_bin < kTrendBinCount
+		&& (kTrendBins[m_bin_open_bin].source == 0 || kTrendBins[m_bin_open_bin].source == 3)
+		&& mc.m_trend_bin.token == m_bin_token)
+	{
+		if (mc.m_trend_bin.rows.size() != m_bin_rows.size())
+			m_bin_rows = mc.m_trend_bin.rows;
+		m_bin_total = mc.m_trend_bin.total;
+		m_bin_finished = mc.m_trend_bin.finished;
+		m_bin_failed = mc.m_trend_bin.failed;
 	}
 }
 
@@ -1807,7 +1888,14 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 	}
 
 	if (!hasAny)
+	{
+		// 无数据时领头条不会重绘，必须主动清空热区与悬停态：
+		// 否则上一次绘制留下的矩形仍会命中点击，用户点到一片空白却跳转
+		m_moneyflow_leader_rects[0].SetRectEmpty();
+		m_moneyflow_leader_rects[1].SetRectEmpty();
+		m_hover_moneyflow_leader = -1;
 		return;
+	}
 
 	// 底部领头股票条：预留空间高 24px
 	const int leaderH = g_data.DPI(24);
@@ -1819,7 +1907,13 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 	CRect plotRc(chartRc.left + padL, chartRc.top + padT, chartRc.right - padR, chartRc.bottom - padB);
 	m_moneyflow_plot_rect = plotRc; // 供 HandleMouseMove 做精准 Hover 判断
 	if (plotRc.Width() < g_data.DPI(100) || plotRc.Height() < g_data.DPI(60))
+	{
+		// 空间不足时同样不画领头条：热区必须一并清掉，避免命中看不见的旧矩形
+		m_moneyflow_leader_rects[0].SetRectEmpty();
+		m_moneyflow_leader_rects[1].SetRectEmpty();
+		m_hover_moneyflow_leader = -1;
 		return;
+	}
 
 	// 单 Y 轴范围：包含可见曲线并包含 0 轴
 	double flowLo = 0, flowHi = 0;
@@ -1949,19 +2043,72 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 		CRect instLeadRc(leaderRc.left, leaderRc.top, midX - g_data.DPI(10), leaderRc.bottom);
 		CRect mainLeadRc(midX + g_data.DPI(10), leaderRc.top, leaderRc.right, leaderRc.bottom);
 
-		// 机构领头：中际旭创 57.10亿
-		std::wstring instLeadStr = L"机构领头：";
-		if (m_moneyflow_cache.leaderInst.name.empty()) instLeadStr += L"--";
-		else instLeadStr += m_moneyflow_cache.leaderInst.name + L"  " + FormatYi(m_moneyflow_cache.leaderInst.flow, 2);
-
-		// 主力领头：杭电股份 3.30亿
-		std::wstring mainLeadStr = L"主力领头：";
-		if (m_moneyflow_cache.leaderMain.name.empty()) mainLeadStr += L"--";
-		else mainLeadStr += m_moneyflow_cache.leaderMain.name + L"  " + FormatYi(m_moneyflow_cache.leaderMain.flow, 2);
-
 		auto f11bLead = MkFont(11, true);
-		DrawStr(g, instLeadStr, f11bLead.get(), instLeadRc, FLOW_INST);
-		DrawStr(g, mainLeadStr, f11bLead.get(), mainLeadRc, FLOW_MAIN, 255, Gdiplus::StringAlignmentFar);
+
+		// 拆成「前缀 + 股票名 + 金额」三段绘制：只有股票名可点击跳转 K 线，
+		// 因此需要单独的矩形，不能整体一次 DrawStr（否则热区无法只覆盖名字）。
+		// 左侧机构领头左对齐、右侧主力领头右对齐，两段名字各自按同侧定位。
+		auto drawLeader = [&](const MC::MoneyFlowLeader& leader, const CRect& rowRc, COLORREF color,
+			const wchar_t* prefix, int kind, bool alignRight)
+		{
+			const std::wstring pre = prefix;
+			m_moneyflow_leader_rects[kind].SetRectEmpty();
+
+			if (leader.name.empty())
+			{
+				DrawStr(g, pre + L"--", f11bLead.get(), rowRc, color, 255,
+					alignRight ? Gdiplus::StringAlignmentFar : Gdiplus::StringAlignmentNear);
+				return;
+			}
+
+			const std::wstring amt = FormatYi(leader.flow, 2);
+			if (alignRight)
+			{
+				// 右对齐：先量出各段宽度，从右往左反推起点，保证整体贴右且名字热区精确
+				CSize szAmt = MeasureStr(g, f11bLead.get(), amt);
+				CSize szName = MeasureStr(g, f11bLead.get(), leader.name);
+				CSize szPre = MeasureStr(g, f11bLead.get(), pre);
+				int gap = g_data.DPI(6);
+				int nameL = rowRc.right - szAmt.cx - gap - szName.cx;
+				int preL = nameL - szPre.cx;
+				DrawStr(g, pre, f11bLead.get(), CRect(preL, rowRc.top, preL + szPre.cx, rowRc.bottom), color, 255, Gdiplus::StringAlignmentNear);
+				CRect nameRc(nameL, rowRc.top, nameL + szName.cx, rowRc.bottom);
+				bool hot = (m_hover_moneyflow_leader == kind);
+				DrawStr(g, leader.name, f11bLead.get(), nameRc, color, 255, Gdiplus::StringAlignmentNear);
+				if (hot)
+				{
+					// 悬停下划线：沿用文字色，避免引入新配色
+					Gdiplus::Pen ul(Gdi(color), 1.0f);
+					int uy = nameRc.bottom - g_data.DPI(3);
+					g.DrawLine(&ul, Gdiplus::REAL(nameRc.left), Gdiplus::REAL(uy), Gdiplus::REAL(nameRc.right), Gdiplus::REAL(uy));
+				}
+				m_moneyflow_leader_rects[kind] = nameRc;
+				DrawStr(g, amt, f11bLead.get(), CRect(nameRc.right + gap, rowRc.top, rowRc.right, rowRc.bottom), color, 255, Gdiplus::StringAlignmentFar);
+			}
+			else
+			{
+				// 左对齐：前缀 → 名字 → 金额依次向右侧排布
+				CSize szPre = MeasureStr(g, f11bLead.get(), pre);
+				CSize szName = MeasureStr(g, f11bLead.get(), leader.name);
+				int gap = g_data.DPI(6);
+				DrawStr(g, pre, f11bLead.get(), CRect(rowRc.left, rowRc.top, rowRc.left + szPre.cx, rowRc.bottom), color, 255, Gdiplus::StringAlignmentNear);
+				int nameL = rowRc.left + szPre.cx;
+				CRect nameRc(nameL, rowRc.top, nameL + szName.cx, rowRc.bottom);
+				bool hot = (m_hover_moneyflow_leader == kind);
+				DrawStr(g, leader.name, f11bLead.get(), nameRc, color, 255, Gdiplus::StringAlignmentNear);
+				if (hot)
+				{
+					Gdiplus::Pen ul(Gdi(color), 1.0f);
+					int uy = nameRc.bottom - g_data.DPI(3);
+					g.DrawLine(&ul, Gdiplus::REAL(nameRc.left), Gdiplus::REAL(uy), Gdiplus::REAL(nameRc.right), Gdiplus::REAL(uy));
+				}
+				m_moneyflow_leader_rects[kind] = nameRc;
+				DrawStr(g, amt, f11bLead.get(), CRect(nameRc.right + gap, rowRc.top, rowRc.right, rowRc.bottom), color, 255, Gdiplus::StringAlignmentNear);
+			}
+		};
+
+		drawLeader(m_moneyflow_cache.leaderInst, instLeadRc, FLOW_INST, L"机构领头：", 0, false);
+		drawLeader(m_moneyflow_cache.leaderMain, mainLeadRc, FLOW_MAIN, L"主力领头：", 1, true);
 	}
 }
 
@@ -2381,6 +2528,12 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 
 	if (dist.buckets.empty())
 	{
+		// 分布数据还没到位：清掉上一帧的柱子命中区，否则会点到已经不存在的柱子。
+		// 分档浮层同理收起——它的名单是跟着某根柱子来的，柱子没了就无从归属
+		m_dist_bars.clear();
+		m_hover_dist_bar = -1;
+		if (m_bin_panel_open)
+			CloseBinPanel();
 		auto f12 = MkFont(12);
 		DrawStatus(g, CRect(rc.left, blockRc.bottom, rc.right, rc.bottom), CMarketCenterData::DS_TREND, L"正在获取涨跌分布…", f12.get());
 		return;
@@ -2404,20 +2557,21 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 	long long ge10 = max(0LL, bucketSum(10, INT_MAX) - zt);
 	long long le_10 = max(0LL, bucketSum(INT_MIN, -10) - dt);
 	struct DistBin { const wchar_t* label; long long count; int kind; /*0 up 1 flat 2 down*/ };
+	// 与 kTrendBins 严格同序：标签统一取自分档表，避免绘制与浮层各写一份档位定义而漂移
 	DistBin bins[13] = {
-		{ L"涨停", zt, 0 },
-		{ L">10%", ge10, 0 },
-		{ L"7~10%", bucketSum(7, 9), 0 },
-		{ L"5~7%", bucketSum(5, 6), 0 },
-		{ L"3~5%", bucketSum(3, 4), 0 },
-		{ L"0~3%", bucketSum(1, 2), 0 },
-		{ L"平盘", dist.FlatCount(), 1 },
-		{ L"0~-3", bucketSum(-2, -1), 2 },
-		{ L"-3~-5", bucketSum(-4, -3), 2 },
-		{ L"-5~-7", bucketSum(-6, -5), 2 },
-		{ L"-7~-10", bucketSum(-9, -7), 2 },
-		{ L"<-10%", le_10, 2 },
-		{ L"跌停", dt, 2 },
+		{ kTrendBins[0].label, zt, 0 },
+		{ kTrendBins[1].label, ge10, 0 },
+		{ kTrendBins[2].label, bucketSum(7, 9), 0 },
+		{ kTrendBins[3].label, bucketSum(5, 6), 0 },
+		{ kTrendBins[4].label, bucketSum(3, 4), 0 },
+		{ kTrendBins[5].label, bucketSum(1, 2), 0 },
+		{ kTrendBins[6].label, dist.FlatCount(), 1 },
+		{ kTrendBins[7].label, bucketSum(-2, -1), 2 },
+		{ kTrendBins[8].label, bucketSum(-4, -3), 2 },
+		{ kTrendBins[9].label, bucketSum(-6, -5), 2 },
+		{ kTrendBins[10].label, bucketSum(-9, -7), 2 },
+		{ kTrendBins[11].label, le_10, 2 },
+		{ kTrendBins[12].label, dt, 2 },
 	};
 	long long maxCnt = 1;
 	for (auto& b : bins)
@@ -2449,8 +2603,216 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 		FillRounded(g, barRc, c, 0);
 		DrawStrMid(g, FormatInt(bins[i].count), f9.get(), CRect(barRc.left - g_data.DPI(8), barRc.top - g_data.DPI(14), barRc.right + g_data.DPI(8), barRc.top - g_data.DPI(2)), MC_TEXT_SUB);
 		DrawStrMid(g, bins[i].label, f9.get(), CRect(cx - slotW / 2, distPlot.bottom + g_data.DPI(4), cx + slotW / 2, distPlot.bottom + g_data.DPI(18)), MC_TEXT_SUB);
-		m_dist_bars.push_back({ barRc, i });
+		// 命中区取整个槽位（含柱底与标签）：柱子很矮时也能点得到
+		m_dist_bars.push_back({ CRect(cx - slotW / 2, distPlot.top, cx + slotW / 2, distPlot.bottom + g_data.DPI(20)), i });
 	}
+
+	// 分档浮层：点柱子后叠加在分布区之上（与 ETF 主题浮层同一套观感与交互）
+	if (m_bin_panel_open)
+		DrawBinPanel(g, distRc);
+}
+
+// ===== 涨跌趋势页：分档浮层（点柱子看这一档的成分股）=====
+
+void CMarketCenterPanel::OpenBinPanel(int bin)
+{
+	if (bin < 0 || bin >= kTrendBinCount)
+		return;
+
+	m_bin_open_bin = bin;
+	m_bin_token++;                     // 换档即作废在途请求，避免上一档的结果串进来
+	m_bin_scroll = 0;
+	m_bin_scroll_max = 0;
+	m_hover_bin_row = -1;
+	m_hover_bin_close = false;
+	m_bin_failed = false;
+	m_bin_finished = false;
+	m_bin_rows.clear();
+	m_bin_total = 0;
+	m_bin_panel_title = kTrendBins[bin].label;   // 档位名；总数/加载态在绘制时拼
+	m_bin_panel_open = true;
+
+	const TrendBinDef& def = kTrendBins[bin];
+	if (def.source == 1 || def.source == 2)
+	{
+		// 涨停/跌停：涨跌分布那一趟请求已把池内名单一并带回，开档零额外请求、即时可看
+		CMarketCenterData& mc = CMarketCenterData::Instance();
+		std::lock_guard<std::mutex> lock(mc.m_mutex);
+		const std::vector<MC::TrendListRow>& src = (def.source == 1) ? mc.m_dist.ztList : mc.m_dist.dtList;
+		m_bin_rows = src;
+		m_bin_total = static_cast<int>(src.size());
+		m_bin_finished = true;
+	}
+	else
+	{
+		// 其余档只有家数、没有名单：向数据层要第一页（后台线程取，回来后 PostMessage 触发重绘）
+		CMarketCenterData::Instance().RequestTrendBinPage(m_bin_token, def.lo, def.hi, 1, m_notify_wnd, true);
+	}
+}
+
+void CMarketCenterPanel::CloseBinPanel()
+{
+	m_bin_panel_open = false;
+	m_bin_open_bin = -1;
+	m_bin_token++;                     // 关窗同样作废在途请求：结果回来时直接丢弃
+	m_bin_rows.clear();
+	m_bin_total = 0;
+	m_bin_scroll = 0;
+	m_bin_scroll_max = 0;
+	m_hover_bin_row = -1;
+	m_hover_bin_close = false;
+	m_bin_failed = false;
+	m_bin_finished = false;
+}
+
+void CMarketCenterPanel::DrawBinPanel(Gdiplus::Graphics& g, const CRect& areaRc)
+{
+	auto f10 = MkFont(10);
+	auto f10b = MkFont(10, true);
+	auto f11 = MkFont(11);
+	auto f11b = MkFont(11, true);
+	auto f12b = MkFont(12, true);
+
+	// 贴在分布图右侧、上下不出分布区：浮层里的命中矩形就是这里算出来的，
+	// 尺寸必须与 HandleLButtonDown/HandleMouseMove 完全同源
+	const int panelW = g_data.DPI(330);
+	m_bin_panel_rect = CRect(areaRc.right - panelW, areaRc.top, areaRc.right, areaRc.bottom);
+	FillCard(g, m_bin_panel_rect, MC_CARD);
+
+	Gdiplus::Pen borderPen(Gdi(MC_BORDER), 1.0f);
+	g.DrawRectangle(&borderPen, m_bin_panel_rect.left, m_bin_panel_rect.top,
+		m_bin_panel_rect.Width(), m_bin_panel_rect.Height());
+	Gdiplus::Pen topPen(Gdi(MC_TEXT, 18), 1.0f);
+	g.DrawLine(&topPen, Gdiplus::REAL(m_bin_panel_rect.left), Gdiplus::REAL(m_bin_panel_rect.top),
+		Gdiplus::REAL(m_bin_panel_rect.right), Gdiplus::REAL(m_bin_panel_rect.top));
+
+	const int P = g_data.DPI(10);
+	CRect headRc(m_bin_panel_rect.left + P, m_bin_panel_rect.top + P, m_bin_panel_rect.right - P, m_bin_panel_rect.top + P + g_data.DPI(20));
+	m_bin_close_rect = CRect(headRc.right - g_data.DPI(18), headRc.top, headRc.right, headRc.bottom);
+
+	// 标题：档位名 + 总数（分页取时总数只有服务端给得准，取回前只显示"加载中"）
+	// 全部到手按"已加载条数 ≥ 服务端总数"判定：分页接口在最后一页返回空数组才算完，
+	// 恰好整页取完时缓存里的 finished 还没置上，靠总数判定可以立刻显示成完成态
+	const bool allLoaded = m_bin_finished || (m_bin_total > 0 && static_cast<int>(m_bin_rows.size()) >= m_bin_total);
+	std::wstring title = m_bin_panel_title;
+	if (m_bin_total > 0)
+		title += L" · 共" + std::to_wstring(m_bin_total) + L"只";
+	if (!allLoaded && !m_bin_failed)
+		title += L" · 加载中";
+	DrawStr(g, title, f12b.get(), CRect(headRc.left, headRc.top, m_bin_close_rect.left - g_data.DPI(4), headRc.bottom), MC_TEXT);
+	DrawStrMid(g, L"\x2715", f11.get(), m_bin_close_rect, m_hover_bin_close ? MC_TEXT : MC_TEXT_DIM);
+
+	// 表头
+	CRect headRow(headRc.left, headRc.bottom + g_data.DPI(4), headRc.right, headRc.bottom + g_data.DPI(4) + g_data.DPI(18));
+	const int colW[4] = { 38, 22, 20, 20 };
+	int colWidths[4];
+	int totalW = headRow.Width();
+	for (int i = 0; i < 3; i++)
+		colWidths[i] = totalW * colW[i] / 100;
+	colWidths[3] = totalW - colWidths[0] - colWidths[1] - colWidths[2];
+
+	const wchar_t* headers[4] = { L"名称", L"代码", L"现价", L"涨跌幅" };
+	int x = headRow.left;
+	for (int i = 0; i < 4; i++)
+	{
+		CRect c(x, headRow.top, x + colWidths[i], headRow.bottom);
+		DrawStr(g, headers[i], f10.get(), c, MC_TEXT_DIM, 255, i == 0 ? Gdiplus::StringAlignmentNear : Gdiplus::StringAlignmentCenter);
+		x += colWidths[i];
+	}
+	Gdiplus::Pen sepPen(Gdi(MC_BORDER), 1.0f);
+	g.DrawLine(&sepPen, Gdiplus::REAL(headRow.left), Gdiplus::REAL(headRow.bottom), Gdiplus::REAL(headRow.right), Gdiplus::REAL(headRow.bottom));
+
+	// 数据行（虚拟滚动：只画可见行，一档上千只也不会变慢）
+	const int rowH = g_data.DPI(23);
+	m_bin_row_h = rowH;
+	// 列表底部预留一条提示带：加载进度/失败重试画在那里，不会压住最后一行
+	const int footerH = g_data.DPI(14);
+	CRect listRc(headRow.left, headRow.bottom + g_data.DPI(2), headRow.right, m_bin_panel_rect.bottom - P - footerH);
+	m_bin_list_rect = listRc;
+	CRect footRc(headRow.left, listRc.bottom, headRow.right, m_bin_panel_rect.bottom - P);
+	int maxVisible = max(1, listRc.Height() / rowH);
+	m_bin_visible_rows = maxVisible;
+	m_bin_scroll_max = max(0, static_cast<int>(m_bin_rows.size()) - maxVisible);
+	m_bin_scroll = min(m_bin_scroll, m_bin_scroll_max);
+
+	if (m_bin_rows.empty())
+	{
+		const wchar_t* msg = m_bin_failed ? L"获取失败，滚轮可重试"
+			: (allLoaded ? L"本档暂无个股" : L"正在获取名单…");
+		DrawStrMid(g, msg, f11.get(), listRc,
+			m_bin_failed ? RGB(240, 173, 107) : MC_TEXT_DIM);
+		return;
+	}
+
+	g.SetClip(Gdiplus::Rect(listRc.left, listRc.top, listRc.Width(), listRc.Height()));
+	for (int drawIdx = 0; drawIdx < maxVisible; drawIdx++)
+	{
+		int itemIdx = m_bin_scroll + drawIdx;
+		if (itemIdx >= static_cast<int>(m_bin_rows.size()))
+			break;
+
+		const MC::TrendListRow& row = m_bin_rows[static_cast<size_t>(itemIdx)];
+		CRect rRow(listRc.left, listRc.top + drawIdx * rowH, listRc.right, listRc.top + (drawIdx + 1) * rowH);
+		if (m_hover_bin_row == itemIdx)
+			FillRounded(g, rRow, MC_TEXT, 0, 14);
+
+		wchar_t priceBuf[24], pctBuf[24];
+		swprintf_s(priceBuf, L"%.2f", row.price);
+		swprintf_s(pctBuf, L"%s%.2f%%", row.pct >= 0 ? L"+" : L"", row.pct);
+
+		// 名称单行绘制：宽度不够时截断，坚决不换行（换行会把行高压不住、点和画就错位）
+		CRect nameRc(rRow.left, rRow.top, rRow.left + colWidths[0] - g_data.DPI(4), rRow.bottom);
+		DrawStrSingle(g, row.name, f11.get(), nameRc, MC_TEXT, 255, Gdiplus::StringAlignmentNear);
+		DrawStrMid(g, row.code, f10.get(), CRect(rRow.left + colWidths[0], rRow.top, rRow.left + colWidths[0] + colWidths[1], rRow.bottom), MC_TEXT_SUB);
+		DrawStrMid(g, priceBuf, f10.get(), CRect(rRow.left + colWidths[0] + colWidths[1], rRow.top, rRow.left + colWidths[0] + colWidths[1] + colWidths[2], rRow.bottom), MC_TEXT_SUB);
+		DrawStrMid(g, pctBuf, f10b.get(), CRect(rRow.left + colWidths[0] + colWidths[1] + colWidths[2], rRow.top, rRow.right, rRow.bottom), UpDownColor(row.pct));
+	}
+	g.ResetClip();
+
+	// 列表未取完时在底部提示带里给出进度
+	if (m_bin_failed)
+	{
+		DrawStrMid(g, L"获取失败，滚动可重试", f10.get(), footRc, RGB(240, 173, 107));
+	}
+	else if (!allLoaded)
+	{
+		int loaded = static_cast<int>(m_bin_rows.size());
+		std::wstring hint = L"已加载 " + std::to_wstring(loaded)
+			+ (m_bin_total > 0 ? (L" / " + std::to_wstring(m_bin_total)) : std::wstring()) + L"，滚动继续加载";
+		DrawStrMid(g, hint, f10.get(), footRc, MC_TEXT_DIM);
+	}
+}
+
+void CMarketCenterPanel::MaybePrefetchBinPage(bool allowRetry)
+{
+	if (!m_bin_panel_open || m_bin_open_bin < 0)
+		return;
+	const TrendBinDef& def = kTrendBins[m_bin_open_bin];
+	if (def.source != 0 && def.source != 3)
+		return;                     // 涨停/跌停这类池子一次给全，没有下一页
+
+	CMarketCenterData& mc = CMarketCenterData::Instance();
+	int page = 1;
+	{
+		std::lock_guard<std::mutex> lock(mc.m_mutex);
+		if (mc.m_trend_bin.token != m_bin_token || mc.m_trend_bin.inflight || mc.m_trend_bin.finished)
+			return;
+		if (mc.m_trend_bin.failed)
+		{
+			// 失败只在用户滚动时重试：否则"失败→通知重绘→再取→再失败"会自己转圈打网络
+			if (!allowRetry)
+				return;
+			page = max(1, mc.m_trend_bin.requestedPage);
+		}
+		else
+		{
+			// 已加载的还够铺满可见区就不急，等滚到接近末尾再续下一页
+			if (static_cast<int>(m_bin_rows.size()) > m_bin_scroll + m_bin_visible_rows + 10)
+				return;
+			page = mc.m_trend_bin.requestedPage + 1;
+		}
+	}
+	mc.RequestTrendBinPage(m_bin_token, def.lo, def.hi, page, m_notify_wnd, false);
 }
 
 // ============ 页面5：ETF涨跌榜 ============
@@ -2855,6 +3217,16 @@ bool CMarketCenterPanel::HandleMouseMove(CPoint point)
 				m_hover_moneyflow_idx = hovIdx;
 				changed = true;
 			}
+			// 底部领头股名称悬停（仅名字可点，hint 下划线）
+			int hovLead = -1;
+			for (int i = 0; i < 2; i++)
+				if (!m_moneyflow_leader_rects[i].IsRectEmpty() && m_moneyflow_leader_rects[i].PtInRect(point))
+					hovLead = i;
+			if (hovLead != m_hover_moneyflow_leader)
+			{
+				m_hover_moneyflow_leader = hovLead;
+				changed = true;
+			}
 			break;
 		}
 		case PAGE_MAINFLOW:
@@ -2872,13 +3244,43 @@ bool CMarketCenterPanel::HandleMouseMove(CPoint point)
 		}
 		case PAGE_TREND:
 		{
-			int hov = -1;
-			for (int i = 0; i < static_cast<int>(m_dist_bars.size()); i++)
-				if (m_dist_bars[static_cast<size_t>(i)].rect.PtInRect(point))
-					hov = i;
-			if (hov != m_hover_dist_bar)
+			int hovBar = -1, hovBinRow = -1;
+			bool hovBinClose = false;
+			if (m_bin_panel_open && m_bin_panel_rect.PtInRect(point))
 			{
-				m_hover_dist_bar = hov;
+				// 浮层开着时它盖在柱子上方：层内命中优先，避免悬停同时点亮底下的柱子
+				hovBinClose = (m_bin_close_rect.PtInRect(point) != FALSE);
+				if (!hovBinClose && m_bin_list_rect.PtInRect(point) && m_bin_row_h > 0 && !m_bin_rows.empty())
+				{
+					int relY = point.y - m_bin_list_rect.top;
+					if (relY >= 0)
+					{
+						int slot = relY / m_bin_row_h;
+						int itemIdx = m_bin_scroll + slot;
+						if (itemIdx >= 0 && itemIdx < static_cast<int>(m_bin_rows.size()))
+							hovBinRow = itemIdx;
+					}
+				}
+			}
+			else
+			{
+				for (int i = 0; i < static_cast<int>(m_dist_bars.size()); i++)
+					if (m_dist_bars[static_cast<size_t>(i)].rect.PtInRect(point))
+						hovBar = i;
+			}
+			if (hovBar != m_hover_dist_bar)
+			{
+				m_hover_dist_bar = hovBar;
+				changed = true;
+			}
+			if (hovBinRow != m_hover_bin_row)
+			{
+				m_hover_bin_row = hovBinRow;
+				changed = true;
+			}
+			if (hovBinClose != m_hover_bin_close)
+			{
+				m_hover_bin_close = hovBinClose;
 				changed = true;
 			}
 			break;
@@ -2925,7 +3327,8 @@ void CMarketCenterPanel::HandleMouseLeave()
 {
 	if (m_hover_menu != -1 || m_hover_bubble != -1 || m_hover_inflow_bar != -1 ||
 		m_hover_moneyflow_card != -1 || m_hover_moneyflow_idx != -1 || m_hover_mainflow_card != -1 || m_hover_inflow_card != -1 || m_hover_dist_bar != -1 ||
-		m_hover_rank_header != -1 || m_hover_rank_row != -1 || m_hover_theme_row != -1 || m_hover_theme_close)
+		m_hover_rank_header != -1 || m_hover_rank_row != -1 || m_hover_theme_row != -1 || m_hover_theme_close ||
+		m_hover_moneyflow_leader != -1 || m_hover_bin_row != -1 || m_hover_bin_close)
 	{
 		m_hover_menu = -1;
 		m_hover_bubble = -1;
@@ -2939,6 +3342,9 @@ void CMarketCenterPanel::HandleMouseLeave()
 		m_hover_rank_row = -1;
 		m_hover_theme_row = -1;
 		m_hover_theme_close = false;
+		m_hover_moneyflow_leader = -1;
+		m_hover_bin_row = -1;
+		m_hover_bin_close = false;
 	}
 }
 
@@ -3134,6 +3540,17 @@ void CMarketCenterPanel::HandleLButtonDown(CPoint point)
 				return;
 			}
 		}
+		// 点击底部领头股名称 → 通知悬浮窗跳转该股 K 线（与点 ETF 行同一套跳转逻辑）。
+		// 先于卡片判定之外单独检查：热区只在有数据时非空，空数据时点击自动落空。
+		for (int i = 0; i < 2; i++)
+		{
+			if (!m_moneyflow_leader_rects[i].IsRectEmpty() && m_moneyflow_leader_rects[i].PtInRect(point))
+			{
+				if (m_notify_wnd && !LeaderFullCodeAt(i).empty())
+					::PostMessage(m_notify_wnd, WM_MC_STOCK_CLICKED, static_cast<WPARAM>(i), 0);
+				return;
+			}
+		}
 		break;
 	}
 	case PAGE_MAINFLOW:
@@ -3187,6 +3604,50 @@ void CMarketCenterPanel::HandleLButtonDown(CPoint point)
 		}
 		break;
 	}
+	case PAGE_TREND:
+	{
+		if (m_bin_panel_open)
+		{
+			if (m_bin_close_rect.PtInRect(point))
+			{
+				CloseBinPanel();
+				return;
+			}
+			if (m_bin_panel_rect.PtInRect(point))
+			{
+				// 点击浮层里的具体股票 → 通知悬浮窗跳转该股日 K 线
+				if (m_bin_list_rect.PtInRect(point) && m_bin_row_h > 0 && !m_bin_rows.empty())
+				{
+					int relY = point.y - m_bin_list_rect.top;
+					if (relY >= 0)
+					{
+						int slot = relY / m_bin_row_h;
+						int itemIdx = m_bin_scroll + slot;
+						if (itemIdx >= 0 && itemIdx < static_cast<int>(m_bin_rows.size()))
+						{
+							if (m_notify_wnd && !BinRowFullCodeAt(itemIdx).empty())
+								::PostMessage(m_notify_wnd, WM_MC_BIN_ROW_CLICKED, static_cast<WPARAM>(itemIdx), 0);
+							return;
+						}
+					}
+				}
+				return;   // 拦截浮层内的其他点击（标题/表头/空白行），防止穿透到底下的柱子
+			}
+		}
+		// 点柱子 → 打开该档成分股列表
+		for (const auto& bar : m_dist_bars)
+		{
+			if (bar.rect.PtInRect(point))
+			{
+				OpenBinPanel(bar.bin);
+				return;
+			}
+		}
+		// 点击浮层外的空白区：关闭浮层
+		if (m_bin_panel_open)
+			CloseBinPanel();
+		break;
+	}
 	default:
 		break;
 	}
@@ -3201,6 +3662,15 @@ void CMarketCenterPanel::HandleMouseWheel(short zDelta, CPoint point)
 		m_theme_panel_scroll = max(0, m_theme_panel_scroll - (zDelta / 120) * 3);
 		m_theme_panel_scroll = min(m_theme_panel_scroll, m_theme_panel_scroll_max);
 		scrolled = (old != m_theme_panel_scroll);
+	}
+	else if (m_page == PAGE_TREND && m_bin_panel_open && m_bin_panel_rect.PtInRect(point))
+	{
+		int old = m_bin_scroll;
+		m_bin_scroll = max(0, m_bin_scroll - (zDelta / 120) * 3);
+		m_bin_scroll = min(m_bin_scroll, m_bin_scroll_max);
+		scrolled = (old != m_bin_scroll);
+		// 滚到接近已加载末尾就续取下一页；上一次失败也在这里重试（浮层里没有可点的按钮位）
+		MaybePrefetchBinPage(true);
 	}
 	else if (m_page == PAGE_ETF_RANK && m_rank_table_rect.PtInRect(point))
 	{
@@ -3258,11 +3728,31 @@ bool CMarketCenterPanel::IsCursorOverInteractive(CPoint point) const
 			for (const auto& c : m_mainflow_stat_rects)
 				if (c.rect.PtInRect(point)) { hand = true; break; }
 			break;
+		case PAGE_MONEY_FLOW:
+			// 卡片可点击（切换曲线显隐）
+			for (const auto& c : m_moneyflow_stat_rects)
+				if (c.rect.PtInRect(point)) { hand = true; break; }
+			// 底部领头股名称可点击（跳转 K 线）
+			if (!hand)
+				for (int i = 0; i < 2; i++)
+					if (!m_moneyflow_leader_rects[i].IsRectEmpty() && m_moneyflow_leader_rects[i].PtInRect(point))
+					{
+						hand = true;
+						break;
+					}
+			break;
 		case PAGE_ETF_RANK:
 			for (const auto& c : m_rank_cols)
 				if (c.rect.PtInRect(point)) { hand = true; break; }
 			if (!hand && !m_rank_table_rect.IsRectEmpty() && point.y >= m_rank_table_rect.top + g_data.DPI(28) && m_rank_table_rect.PtInRect(point))
 				hand = true;   // 数据行区域可点击
+			break;
+		case PAGE_TREND:
+			if (m_bin_panel_open && m_bin_panel_rect.PtInRect(point))
+				hand = m_bin_close_rect.PtInRect(point) || (m_bin_list_rect.PtInRect(point) && m_hover_bin_row >= 0);
+			else
+				for (const auto& bar : m_dist_bars)
+					if (bar.rect.PtInRect(point)) { hand = true; break; }
 			break;
 		default:
 			break;

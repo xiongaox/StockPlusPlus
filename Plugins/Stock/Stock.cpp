@@ -394,6 +394,19 @@ void Stock::ShowContextMenu(CWnd* pWnd)
 
 void Stock::ShowFloatingWnd(void* hWnd, CPoint ptScreen, std::wstring stock_id)
 {
+	// 换绑重建：视图模式不带（用户点任务栏的另一只股票，重开应停在它的首页 K 线），
+	// 但行情中心的浏览页签与「跳转来源股票」跟股票无关、属于浏览位置：
+	// 不带走的话每次从任务栏重开都退回第一页，跳转看完 K 线后右键也就回不到原来那一页
+	int carriedPage = -1, carriedSectorView = 0, carriedTreemap = 0;
+	std::wstring carriedReturnStock;
+	if (m_pFloatingWnd != NULL && ::IsWindow(m_pFloatingWnd->GetSafeHwnd()))
+	{
+		const CFloatingWnd::UiState carried = m_pFloatingWnd->CaptureUiState();
+		carriedPage = carried.mcPage;
+		carriedSectorView = carried.mcSectorViewMode;
+		carriedTreemap = carried.mcTreemapMode;
+		carriedReturnStock = carried.mcReturnStockId;
+	}
 	// 如果已有悬浮窗，先销毁（更换绑定股票的重建属于主动换窗，不暂存旧界面状态）
 	DestroyFloatingWnd(false);
 
@@ -429,6 +442,7 @@ void Stock::ShowFloatingWnd(void* hWnd, CPoint ptScreen, std::wstring stock_id)
 			st.mcPage = m_floating_mc_page;
 			st.mcSectorViewMode = m_floating_mc_sector_view;
 			st.mcTreemapMode = m_floating_mc_treemap_mode;
+			st.mcReturnStockId = m_floating_mc_return_stock;
 			// K线首页（图表）状态
 			st.viewMode = m_floating_view_mode;
 			st.showChipPeak = m_floating_show_chip_peak;
@@ -446,6 +460,8 @@ void Stock::ShowFloatingWnd(void* hWnd, CPoint ptScreen, std::wstring stock_id)
 			m_pFloatingWnd->RestoreUiState(st);
 			m_floating_ui_saved = false;
 		}
+		if (carriedPage >= 0)
+			m_pFloatingWnd->CarryOverBrowseState(carriedPage, carriedSectorView, carriedTreemap, carriedReturnStock);
 	}
 }
 
@@ -464,6 +480,7 @@ void Stock::DestroyFloatingWnd(bool saveUiState)
 			m_floating_mc_page = st.mcPage;
 			m_floating_mc_sector_view = st.mcSectorViewMode;
 			m_floating_mc_treemap_mode = st.mcTreemapMode;
+			m_floating_mc_return_stock = st.mcReturnStockId;
 			// K线首页（图表）状态
 			m_floating_view_mode = st.viewMode;
 			m_floating_show_chip_peak = st.showChipPeak;

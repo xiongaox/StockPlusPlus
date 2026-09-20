@@ -19,6 +19,12 @@ public:
 	static const UINT WM_MC_DATA_UPDATED = WM_APP + 140;
 	// 点击某只 ETF（wParam = m_etfs_snapshot 下标）：悬浮窗跳转首页 K 线临时查看
 	static const UINT WM_MC_ETF_CLICKED = WM_APP + 142;
+	// 点击资金流向页底部的领头股票名称（wParam = 0 机构领头 / 1 主力领头）：
+	// 领头股不在 m_etfs_snapshot 里、没有下标可传，故用 0/1 标识哪一个，
+	// 悬浮窗再经 LeaderFullCodeAt() 取全码——不跨线程传指针，避免悬空
+	static const UINT WM_MC_STOCK_CLICKED = WM_APP + 143;
+	// 点击涨跌趋势分档浮层里的某一行（wParam = 行下标）：悬浮窗经 BinRowFullCodeAt() 取全码
+	static const UINT WM_MC_BIN_ROW_CLICKED = WM_APP + 144;
 
 	// 绘制行情中心到指定矩形（x,y,w,h 为悬浮窗客户区坐标；顶部标题条由悬浮窗自留）
 	void Draw(CDC& memDC, int x, int y, int w, int h);
@@ -47,6 +53,10 @@ public:
 	const CRect& ContentRect() const { return m_content_rect; }
 	// 快照下标转 ETF 六位代码（越界返回空串；供悬浮窗处理 WM_MC_ETF_CLICKED）
 	std::wstring EtfCodeAt(int idx) const;
+	// 领头股全码（kind：0=机构领头 1=主力领头；为空返回空串；供悬浮窗处理 WM_MC_STOCK_CLICKED）
+	std::wstring LeaderFullCodeAt(int kind) const;
+	// 涨跌趋势分档浮层第 idx 行的股票全码（越界返回空串；供悬浮窗处理 WM_MC_BIN_ROW_CLICKED）
+	std::wstring BinRowFullCodeAt(int idx) const;
 
 	// 浏览状态快照：悬浮窗隐藏销毁前暂存，重建后恢复“当前状态”（页签/子视图）
 	struct BrowseSnapshot
@@ -237,6 +247,10 @@ private:
 	std::vector<StatCardRect> m_moneyflow_stat_rects;
 	int m_moneyflow_series_mask{ 0xF };
 	int m_hover_moneyflow_card{ -1 };
+	// 底部领头股名称热区（0=机构领头 1=主力领头）：整条标签中仅股票名可点，
+	// 矩形在绘制时算好，供 HandleLButtonDown / IsCursorOverInteractive 命中判定
+	CRect m_moneyflow_leader_rects[2];
+	int m_hover_moneyflow_leader{ -1 };
 
 	// ===== 主力资金页 =====
 	std::vector<StatCardRect> m_mainflow_stat_rects;
@@ -247,6 +261,32 @@ private:
 	std::vector<StatCardRect> m_trend_stat_rects;
 	std::vector<DistBar> m_dist_bars;
 	int m_hover_dist_bar{ -1 };
+
+	// ===== 涨跌趋势页：分档浮层（点柱子弹出的成分股列表）=====
+	// 名单不随分布接口给出，改由 CMarketCenterData 按档位区间分页取（浮层只画可见行）。
+	bool m_bin_panel_open{ false };
+	CRect m_bin_panel_rect;
+	CRect m_bin_close_rect;
+	CRect m_bin_list_rect;
+	int m_bin_row_h{ 0 };
+	int m_bin_scroll{ 0 };
+	int m_bin_scroll_max{ 0 };
+	int m_bin_open_bin{ -1 };                     // 当前打开的档位下标（与分档表一致）
+	int m_bin_token{ 0 };                         // 会话令牌：换档/关窗自增，过期请求结果按它丢弃
+	std::wstring m_bin_panel_title;
+	std::vector<MC::TrendListRow> m_bin_rows;     // 本档已加载行（绘制与点击用）
+	int m_bin_total{ 0 };
+	bool m_bin_failed{ false };
+	bool m_bin_finished{ false };
+	int m_hover_bin_row{ -1 };
+	bool m_hover_bin_close{ false };
+	int m_bin_visible_rows{ 0 };                  // 上一帧列表可见行数（判断"还要不要续页"用）
+
+	void OpenBinPanel(int bin);
+	void CloseBinPanel();
+	void DrawBinPanel(Gdiplus::Graphics& g, const CRect& areaRc);
+	// 已加载行不足以铺满可见区（或用户滚到末尾）时续取下一页；allowRetry 控制失败后是否重试
+	void MaybePrefetchBinPage(bool allowRetry);
 
 	// ===== ETF涨跌榜页 =====
 	std::vector<StatCardRect> m_rank_stat_rects;

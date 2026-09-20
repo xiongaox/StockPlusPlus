@@ -58,6 +58,17 @@ namespace MC
 		double price{ 0.0 };
 	};
 
+	// 涨跌趋势页「分档名单」的一行：点击分布柱子后弹出的成分股列表
+	struct TrendListRow
+	{
+		std::wstring code;      // 六位代码（不含市场前缀）
+		std::wstring name;
+		double price{ 0.0 };    // 现价（元）
+		double pct{ 0.0 };      // 涨跌幅（%）
+		int market{ -1 };       // 0=深 1=沪 2=北；-1 表示接口没给，由调用方按代码前缀兜底
+		int extra{ 0 };         // 附注：涨停池填连板数，其余为 0
+	};
+
 	// 涨跌分布快照（涨跌趋势页）
 	struct UpDownDist
 	{
@@ -65,6 +76,9 @@ namespace MC
 		long long zt{ 0 };        // 涨停家数（涨停池）
 		long long dt{ 0 };        // 跌停家数（跌停池）
 		std::map<int, long long> buckets;   // floor(涨跌幅) -> 家数，正涨负跌
+		// 涨停/跌停池的完整名单：与分布同一次请求拿到，弹窗因此零额外请求
+		std::vector<TrendListRow> ztList;
+		std::vector<TrendListRow> dtList;
 		long long UpCount() const;          // Σ buckets>=1
 		long long DownCount() const;        // Σ buckets<=-1
 		long long FlatCount() const;        // bucket 0
@@ -197,12 +211,34 @@ public:
 	enum class RequestPriority { Foreground, Warmup };
 	bool RequestIfStale(DataSet ds, int staleSec, HWND notifyWnd, RequestPriority priority = RequestPriority::Foreground);
 
+	// ===== 涨跌趋势「分档名单」按需分页 =====
+	// 点击分布柱子后弹出的成分股列表。涨跌分布接口只给每档家数、不给名单，
+	// 故名单另取东财条件选股接口（支持按涨跌幅区间在服务端过滤；单次上限 100 条，按页取）。
+	// 浮层只画可见行、滚到底再取下一页，全市场 5000+ 只也不会被一次性拉下来。
+	struct TrendBinCache
+	{
+		int token{ 0 };                        // 会话令牌：UI 每次开档/换档自增，过期结果按它丢弃
+		std::vector<MC::TrendListRow> rows;    // 已加载行（按涨跌幅降序）
+		int total{ 0 };                        // 服务端口径的该档总数
+		int requestedPage{ 0 };                // 最近一次请求的页码（1 起）
+		bool inflight{ false };
+		bool finished{ false };                // 已取到该档末尾
+		bool failed{ false };
+	};
+	TrendBinCache m_trend_bin;                 // 受 m_mutex 保护
+
+	// 请求某档名单的第 page 页；restart=true 表示换档重开（先清空已加载行）。
+	// 后台排队执行，完成后 PostMessage(WM_APP+140) 通知悬浮窗重绘。
+	void RequestTrendBinPage(int token, double lo, double hi, int page, HWND notifyWnd, bool restart);
+
 	// 取数入口（在取数线程调用；每项成功后写入仓库并返回 true）
 	bool FetchSectors();        // 行业板块主力净流入（双向 Top60）
 	bool FetchEtfs();           // ETF 全量分页抓取（pz=100 × N）
 	bool FetchMainFlow();       // 沪深 fflow 分时 + 上证指数 trends2 + ETF曲线采样
 	bool FetchSectorTimelines(); // 15个代表板块分时走向
 	bool FetchTrendDist();      // 涨跌分布 + 涨停/跌停池 + 沪深成交额
+	// 涨跌趋势分档名单的一页（条件选股接口，服务端按 [lo,hi) 过滤；out/total 为出参）
+	bool FetchTrendBinPage(double lo, double hi, int page, std::vector<MC::TrendListRow>& out, int& total);
 
 	// 按开市时间推进自积累曲线（在 FetchTrendDist/FetchEtfs 成功后调用）
 	void AppendTrendSample();

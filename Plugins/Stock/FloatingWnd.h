@@ -64,6 +64,9 @@ public:
 		int mcPage{ 0 };                  // 行情中心侧栏页（McPage）
 		int mcSectorViewMode{ 0 };        // 板块视图：0=资金树图 1=时间走向
 		int mcTreemapMode{ 0 };           // 树图模式：0=红绿 1=仅流入 2=仅流出
+		// 正在临时查看行情中心跳转来的股票：值为跳转前的股票，非空即表示该临时视图尚未退出。
+		// 必须随窗口重建一起带走——否则关掉重开后右键只能回到行情中心、还原不了跳转前的股票
+		std::wstring mcReturnStockId;
 		// K线首页（图表）状态
 		int viewMode{ 3 };                // UIViewMode（0=总览 1=竞价 2=分时 3=日K 4=周K 5=月K）
 		bool showChipPeak{ false };       // 右侧面板四选（互斥）：筹码峰
@@ -84,6 +87,11 @@ public:
 	void RestoreUiState(const UiState& st);
 	// 按快照恢复首页图表视图状态（RestoreUiState 内部步骤）
 	void ApplyChartViewState(const UiState& st);
+	// 换绑重建（点任务栏另一只股票）时只带走「行情中心浏览位置 + 跳转来源股票」：
+	// 这两项与当前股票无关、属于浏览位置，不带走的话用户每次重开都会退回第一页，
+	// 跳转看完 K 线后右键也就回不到原来那一页。视图模式刻意不带走——
+	// 重开应停在用户刚点的那只股票的首页 K 线，而不是把行情中心视图一起拉回来
+	void CarryOverBrowseState(int page, int sectorViewMode, int treemapMode, const std::wstring& returnStockId);
 
 	// 鼠标移出图表区超过2秒时自动清除悬停信息卡，避免长期遮挡图表
 	void CheckHoverCardAutoHide();
@@ -107,6 +115,10 @@ protected:
 	LRESULT OnUpdateStatus(WPARAM wParam, LPARAM lParam);
 	LRESULT OnMarketCenterDataUpdated(WPARAM wParam, LPARAM lParam);   // 行情中心数据到达，重绘
 	LRESULT OnMcEtfClicked(WPARAM wParam, LPARAM lParam);              // 行情中心点击 ETF，跳转首页 K 线临时查看
+	LRESULT OnMcStockClicked(WPARAM wParam, LPARAM lParam);            // 点击领头股票名称，跳转首页 K 线临时查看
+	LRESULT OnMcBinRowClicked(WPARAM wParam, LPARAM lParam);           // 点击涨跌趋势分档浮层中的股票行，跳转首页 K 线
+	// 行情中心 → 首页日K 临时查看的共用跳转（空码直接返回；同一只股票不重复进入）
+	void JumpToStockFromMarketCenter(const std::wstring& fullCode);
 	LRESULT OnCloseWindow(WPARAM wParam, LPARAM lParam);
 	LRESULT OnShowEditDialog(WPARAM wParam, LPARAM lParam);
 	LRESULT OnShowAddDialog(WPARAM wParam, LPARAM lParam);
