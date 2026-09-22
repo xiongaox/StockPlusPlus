@@ -47,7 +47,8 @@ int CBsTradePanel::HitTest(CPoint pt, int left, int right, int height, int scrol
 }
 
 void CBsTradePanel::Draw(CDC& memDC, int left, int right, int height,
-	const std::vector<StockTradeRecord>& trades, int scrollOffset, int selectedRow)
+	const std::vector<StockTradeRecord>& trades, int scrollOffset, int selectedRow,
+	double filledHoldCount)
 {
 	const int headerHeight = g_data.RDPI(26);
 	const int obTitleH = g_data.RDPI(16);
@@ -184,11 +185,11 @@ void CBsTradePanel::Draw(CDC& memDC, int left, int right, int height,
 
 	memDC.SelectClipRgn(nullptr);
 
-	// 4. 底部汇总行（固定，不随滚动）：买入/卖出总股数与重放净持仓
+	// 4. 底部汇总行（固定，不随滚动）：买入/卖出总笔数与股数 + 台账重放净持仓
 	int summaryY = listTop + listH;
 	memDC.FillSolidRect(left, summaryY, panelW, 1, COLOR_DARK_GRAY_BORDER);
 
-	double buyAmt = 0.0, sellAmt = 0.0, fee = 0.0;
+	double buyAmt = 0.0, sellAmt = 0.0, fee = 0.0, hold = 0.0;
 	int buyCount = 0, sellCount = 0;
 	for (const auto& record : trades)
 	{
@@ -196,20 +197,29 @@ void CBsTradePanel::Draw(CDC& memDC, int left, int right, int height,
 		{
 			++sellCount;
 			sellAmt += record.amount;
+			hold -= record.amount;
 		}
 		else
 		{
 			++buyCount;
 			buyAmt += record.amount;
+			hold += record.amount;
 		}
+		if (hold < 0.0)
+			hold = 0.0;   // 与 GetTradeKindLabel 重放口径一致：下限截 0
 		fee += record.fee;
 	}
 
+	// 重放净持与填写的持股数不一致时整行橙色提醒（filledHoldCount<0 表示未知，不比对）
+	const bool holdMismatch = filledHoldCount >= 0.0 &&
+		(hold > filledHoldCount + 0.5 || hold < filledHoldCount - 0.5);
+
 	memDC.SelectObject(&headerFont);
 	CString sumStr;
-	sumStr.Format(_T("买%d笔%.0f 卖%d笔%.0f"), buyCount, buyAmt, sellCount, sellAmt);
-	CRect rcSummary(left + g_data.RDPI(4), summaryY, right - g_data.RDPI(4), summaryY + summaryH);
-	memDC.SetTextColor(COLOR_TEXT_MUTED);
+	sumStr.Format(_T("买%d笔%.0f 卖%d笔%.0f 净持%.0f"), buyCount, buyAmt, sellCount, sellAmt, hold);
+	// 右侧给手续费留出展示位，避免加长后的文案压到「费x.xx」上
+	CRect rcSummary(left + g_data.RDPI(4), summaryY, right - g_data.RDPI(fee > 0.005 ? 64 : 4), summaryY + summaryH);
+	memDC.SetTextColor(holdMismatch ? COLOR_DARK_ORANGE : COLOR_TEXT_MUTED);
 	memDC.DrawText(sumStr, rcSummary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
 	CString feeStr;

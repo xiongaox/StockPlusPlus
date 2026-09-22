@@ -31,8 +31,10 @@ public:
 	// trades: 该股票全部流水（时间升序），类型标签由 CDataManager::GetTradeKindLabel 推导
 	// scrollOffset: 列表垂直滚动偏移量
 	// selectedRow: 当前选中行（高亮显示，-1 表示无选中）
+	// filledHoldCount: 当前填写的持股数（>=0 时与台账重放净持比对，不一致整行橙色提醒；<0 表示未知不比对）
 	static void Draw(CDC& memDC, int left, int right, int height,
-		const std::vector<StockTradeRecord>& trades, int scrollOffset = 0, int selectedRow = -1);
+		const std::vector<StockTradeRecord>& trades, int scrollOffset = 0, int selectedRow = -1,
+		double filledHoldCount = -1.0);
 };
 
 // 暗色主题成交录入/编辑弹窗（新增与编辑共用，编辑模式带删除按钮）

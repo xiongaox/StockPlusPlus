@@ -1304,7 +1304,8 @@ void CFloatingWnd::OnPaint()
 				if (m_showBsTrades)
 				{
 					m_bsTradePanel.Draw(memDC, chartWidth, w, h - headerHeight - indexBarHeight - relatedBarHeight,
-						g_data.GetStockTrades(m_stock_id), m_bsScrollOffset, m_bsSelectedRow);
+						g_data.GetStockTrades(m_stock_id), m_bsScrollOffset, m_bsSelectedRow,
+						g_data.GetHoldingCount(m_stock_id));
 				}
 				else if (IsInfoPanelVisible(isIndexKLine))
 				{
@@ -1937,7 +1938,8 @@ void CFloatingWnd::OnPaint()
 			else if (m_showBsTrades)
 			{
 				m_bsTradePanel.Draw(memDC, chartWidth, w, h - headerHeight - indexBarHeight - relatedBarHeight,
-					g_data.GetStockTrades(m_stock_id), m_bsScrollOffset, m_bsSelectedRow);
+					g_data.GetStockTrades(m_stock_id), m_bsScrollOffset, m_bsSelectedRow,
+					g_data.GetHoldingCount(m_stock_id));
 			}
 			else if (IsInfoPanelVisible(isIndexKLine))
 			{

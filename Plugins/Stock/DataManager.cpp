@@ -430,7 +430,16 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 
 bool CDataManager::SaveTradeRecord(const std::wstring& stockCode, const std::wstring& stockName, int tradeType, const std::wstring& time, double price, double amount, double totalAmount, double fee, double total)
 {
-	return m_db_mgr.SaveTradeRecord(stockCode, stockName, tradeType, time, price, amount, totalAmount, fee, total);
+	const bool ok = m_db_mgr.SaveTradeRecord(stockCode, stockName, tradeType, time, price, amount, totalAmount, fee, total);
+	if (ok)
+	{
+		// 与 Add/Update/DeleteStockTrade 同约定：写库后失效台账缓存（此前缺失，
+		// 旧版「交易记录」弹窗保存后 BS 面板会继续显示缓存的旧流水）
+		m_trade_cache.erase(stockCode);
+		// 台账变动后按重放净持仓自动回填持股数（含安全阀，见 SyncHoldingFromLedger）
+		SyncHoldingFromLedger(stockCode);
+	}
+	return ok;
 }
 
 bool CDataManager::SaveInnerOuterSnapshot(const std::wstring& stockCode, time_t timestamp, STOCK::Volume innerVolume, STOCK::Volume outerVolume)
@@ -1768,7 +1777,11 @@ long long CDataManager::AddStockTrade(const std::wstring& code, bool is_sell, co
 
 	const long long id = m_db_mgr.InsertTradeRecord(code, name, is_sell ? 1 : 0, time, price, amount, fee);
 	if (id > 0)
+	{
 		m_trade_cache.erase(code);
+		// 台账变动后按重放净持仓自动回填持股数（含安全阀，见 SyncHoldingFromLedger）
+		SyncHoldingFromLedger(code);
+	}
 	return id;
 }
 
@@ -1777,7 +1790,10 @@ bool CDataManager::UpdateStockTrade(const std::wstring& code, const StockTradeRe
 	const bool ok = m_db_mgr.UpdateTradeRecord(record.id, record.isSell ? 1 : 0, record.time,
 		record.price, record.amount, record.fee);
 	if (ok)
+	{
 		m_trade_cache.erase(code);
+		SyncHoldingFromLedger(code);
+	}
 	return ok;
 }
 
@@ -1785,7 +1801,10 @@ bool CDataManager::DeleteStockTrade(const std::wstring& code, long long id)
 {
 	const bool ok = m_db_mgr.DeleteTradeRecord(id);
 	if (ok)
+	{
 		m_trade_cache.erase(code);
+		SyncHoldingFromLedger(code);
+	}
 	return ok;
 }
 
@@ -1853,6 +1872,52 @@ double CDataManager::GetYesterdayHoldCount(const std::wstring& code)
 			hold -= record.amount;
 	}
 	return hold;
+}
+
+double CDataManager::GetLedgerHoldCount(const std::wstring& code)
+{
+	// 按台账全量流水重放净持仓：Σ买入−Σ卖出，逐笔下限截 0
+	//（与 GetTradeKindLabel 同口径，台账缺历史时以流水自身为准）
+	double hold = 0.0;
+	for (const auto& record : GetStockTrades(code))
+	{
+		if (record.isSell)
+			hold -= record.amount;
+		else
+			hold += record.amount;
+		if (hold < 0.0)
+			hold = 0.0;
+	}
+	return hold;
+}
+
+bool CDataManager::SyncHoldingFromLedger(const std::wstring& code)
+{
+	// 台账增删改后按重放净持仓自动回填「持股数」。
+	// 安全阀（避免把正确的手填值悄悄改错）：
+	// 1) 台账里一笔买入都没有（空台账/只录了卖出）说明底仓未录入台账，重放结果不可信，不改写；
+	// 2) 重放净持为 0（清仓）不自动清零，防止误清真实持仓。
+	// 两种情况都交给 BS 汇总行的橙色提醒与编辑持仓弹窗的「按台账重算」手动处理。
+	bool hasBuy = false;
+	for (const auto& record : GetStockTrades(code))
+	{
+		if (!record.isSell)
+		{
+			hasBuy = true;
+			break;
+		}
+	}
+	if (!hasBuy)
+		return false;
+	const double hold = GetLedgerHoldCount(code);
+	if (hold <= 0.0)
+		return false;
+	const double filled = GetHoldingCount(code);
+	if (hold > filled - 0.5 && hold < filled + 0.5)	// 整股口径，±0.5 股内视为一致
+		return false;
+	SetPosition(code, GetCostPrice(code), hold, L"");
+	SaveConfig();
+	return true;
 }
 
 bool CDataManager::GetShowInStatusBar(const std::wstring& code)

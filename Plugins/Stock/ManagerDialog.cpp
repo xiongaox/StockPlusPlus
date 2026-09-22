@@ -1118,6 +1118,9 @@ public:
 	CEdit m_count_edit;
 	CButton m_btn_ok;
 	CButton m_btn_cancel;
+	CButton m_btn_recalc;            // 「按台账重算」：把台账重放净持仓回填到持股数输入框
+	double m_ledger_hold{ 0.0 };     // 台账重放净持仓快照（OnInitDialog 时读取）
+	bool m_ledger_has_buy{ false };  // 台账是否含买入（无买入时无法推算）
 
 	CFont m_font;
 	CFont m_font_bold;
@@ -1203,9 +1206,10 @@ public:
 		}
 		m_cost_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"输入成本价(元)");
 
-		// 持股数输入框
+		// 持股数输入框（行右侧让出「按台账重算」按钮位）
+		int recalcReserve = g_data.DPI(92);
 		m_count_edit.Create(WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-			CRect(editInnerLeft, countY + editOffset, editInnerRight, countY + editOffset + editBoxH), this, 1002);
+			CRect(editInnerLeft, countY + editOffset, editInnerRight - recalcReserve, countY + editOffset + editBoxH), this, 1002);
 		m_count_edit.ModifyStyleEx(WS_EX_CLIENTEDGE, 0);
 		::SetWindowTheme(m_count_edit.GetSafeHwnd(), L"", L"");
 		m_count_edit.SetFont(&m_font);
@@ -1216,6 +1220,25 @@ public:
 			m_count_edit.SetWindowText(s);
 		}
 		m_count_edit.SendMessage(EM_SETCUEBANNER, TRUE, (LPARAM)L"输入持股数量");
+
+		// 「按台账重算」小按钮：把台账重放净持仓一键回填到持股数输入框
+		// 高度与持股数边框盒同高（countY..countY+DPI(26)），右缘与上方成本价输入框右缘齐平
+		m_btn_recalc.Create(_T("按台账重算"), WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON | BS_OWNERDRAW,
+			CRect(editInnerRight - recalcReserve + g_data.DPI(12), countY,
+				editInnerRight + g_data.DPI(6), countY + g_data.DPI(26)), this, 1003);
+		m_btn_recalc.SetFont(&m_font);
+
+		// 台账重放净持仓快照：供提示行绘制与一键回填
+		m_ledger_hold = g_data.GetLedgerHoldCount(m_full_code);
+		m_ledger_has_buy = false;
+		for (const auto& rec : g_data.GetStockTrades(m_full_code))
+		{
+			if (!rec.isSell)
+			{
+				m_ledger_has_buy = true;
+				break;
+			}
+		}
 
 		// 底部按钮
 		int btnW = g_data.DPI(70);
@@ -1256,6 +1279,31 @@ public:
 			{
 				InvalidateRect(nullptr, FALSE);
 			}
+			else if (wNotifyCode == EN_CHANGE && LOWORD(wParam) == 1002)
+			{
+				// 持股数输入实时回读，供台账净持提示行判断一致性
+				CString strCount;
+				m_count_edit.GetWindowText(strCount);
+				strCount.Trim();
+				m_holding_count = _ttof(strCount);
+				InvalidateRect(nullptr, FALSE);
+			}
+			else if (wNotifyCode == BN_CLICKED && LOWORD(wParam) == 1003)
+			{
+				// 按台账重算：把台账重放净持仓回填到持股数输入框（确定后随 OnOK 统一保存）
+				if (m_ledger_has_buy && m_ledger_hold > 0.0)
+				{
+					CString s;
+					s.Format(_T("%d"), static_cast<int>(m_ledger_hold + 0.5));
+					m_count_edit.SetWindowText(s);
+					m_holding_count = m_ledger_hold;
+				}
+				else
+				{
+					MessageBox(L"台账中没有买入记录（或重放净持为 0），无法推算持股数。", L"按台账重算", MB_ICONINFORMATION);
+				}
+				InvalidateRect(nullptr, FALSE);
+			}
 		}
 		else if (message == WM_CTLCOLORSTATIC)
 		{
@@ -1275,13 +1323,14 @@ public:
 				UINT state = pDI->itemState;
 				CString text;
 				if (pDI->CtlID == IDOK) text = _T("确定");
+				else if (pDI->CtlID == 1003) text = _T("按台账重算");
 				else text = _T("取消");
 
 				COLORREF bgColor = (pDI->CtlID == IDOK) ? RGB(37, 99, 235) : RGB(30, 35, 46);
 				if (state & ODS_SELECTED) bgColor = (pDI->CtlID == IDOK) ? RGB(29, 78, 216) : RGB(20, 25, 35);
-				
+
 				dc.FillSolidRect(rect, bgColor);
-				
+
 				dc.SetBkMode(TRANSPARENT);
 				dc.SetTextColor(RGB(255, 255, 255));
 				CFont* pFont = (pDI->CtlID == IDOK) ? &m_font_bold : &m_font;
@@ -1380,6 +1429,51 @@ public:
 			};
 			drawEdit(m_cost_edit, costY);
 			drawEdit(m_count_edit, countY);
+
+			// 持股数输入框行右侧让位给「按台账重算」按钮：盖掉让出区的旧边框，
+			// 再补画右缘内缩的短边框（输入控件本体已在 OnInitDialog 缩窄）
+			{
+				const int reserve = g_data.DPI(92);
+				const int borderLeft = marginX + g_data.DPI(80);
+				const int borderRightFull = rc.right - marginX;
+				const int boxRight = borderRightFull - reserve;
+				Gdiplus::SolidBrush dlgBg(Gdiplus::Color(255, 18, 20, 26));
+				g.FillRectangle(&dlgBg, boxRight, countY, borderRightFull - boxRight, g_data.DPI(26));
+				CWnd* pFocusWnd = GetFocus();
+				const bool countFocused = (pFocusWnd && pFocusWnd->GetSafeHwnd() == m_count_edit.GetSafeHwnd());
+				Gdiplus::Pen boxPen(countFocused ? Gdiplus::Color(255, 37, 99, 235) : Gdiplus::Color(255, 52, 58, 72), 1.0f);
+				g.DrawRectangle(&boxPen, static_cast<Gdiplus::REAL>(borderLeft), static_cast<Gdiplus::REAL>(countY),
+					static_cast<Gdiplus::REAL>(boxRight - borderLeft - 1), static_cast<Gdiplus::REAL>(g_data.DPI(26) - 1));
+			}
+
+			// 台账净持提示（两行短句，避免长句超出弹窗右缘被截断）：
+			// 第一行：台账净持股数，不一致时橙色；第二行仅在不一致时出现，引导点右侧按钮回填
+			{
+				bool mismatch = (m_ledger_hold > 0.0) &&
+					(m_ledger_hold > m_holding_count + 0.5 || m_ledger_hold < m_holding_count - 0.5);
+				Gdiplus::Font hintFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+				Gdiplus::SolidBrush dimBrush(Gdiplus::Color(255, 148, 163, 184));
+				Gdiplus::SolidBrush warnBrush(Gdiplus::Color(255, 217, 119, 6));
+				const Gdiplus::REAL hintX = static_cast<Gdiplus::REAL>(marginX + g_data.DPI(80));
+				if (m_ledger_has_buy && m_ledger_hold > 0.0)
+				{
+					CString hintStr;
+					hintStr.Format(L"台账净持 %.0f 股", m_ledger_hold);
+					g.DrawString(hintStr.GetString(), -1, &hintFont,
+						Gdiplus::PointF(hintX, static_cast<Gdiplus::REAL>(countY + g_data.DPI(34))),
+						mismatch ? &warnBrush : &dimBrush);
+					if (mismatch)
+					{
+						g.DrawString(L"与填写不一致，点右侧按钮回填", -1, &hintFont,
+							Gdiplus::PointF(hintX, static_cast<Gdiplus::REAL>(countY + g_data.DPI(52))), &warnBrush);
+					}
+				}
+				else
+				{
+					g.DrawString(L"台账无买入记录，无法推算", -1, &hintFont,
+						Gdiplus::PointF(hintX, static_cast<Gdiplus::REAL>(countY + g_data.DPI(34))), &dimBrush);
+				}
+			}
 
 			dc.BitBlt(0, 0, rc.Width(), rc.Height(), &memDC, 0, 0, SRCCOPY);
 			memDC.SelectObject(pOldBmp);
@@ -5267,6 +5361,11 @@ namespace
 		int count;
 	};
 
+	const wchar_t* kItems_0921[] = {
+		L"•  【新增】 台账联动持股数：BS 台账新增/修改/删除成交后，按流水重放净持仓自动回填「持股数」并落盘；台账里没有买入记录（底仓未录入台账）或重放净持为 0（清仓）时不自动改写，避免悄悄把正确的手填值改错，这两种情况由 BS 汇总行橙色提醒、编辑持仓弹窗「按台账重算」手动处理",
+		L"•  【新增】 BS 台账汇总行新增「净持 N」：与填写的持股数不一致时整行橙色提醒；编辑持仓弹窗持股数输入框右侧新增「按台账重算」按钮一键回填，输入框下方显示台账净持提示",
+		L"•  【修复】 旧版「交易记录」弹窗保存成交后台账缓存未失效，BS 面板继续显示旧流水；现与台账增删改同口径：写库后即失效缓存",
+	};
 	const wchar_t* kItems_0919b[] = {
 		L"•  【修复】 下架 arm64ec 预编译包：此前发布的 arm64ec 包实际是 2025-03-08 的 Stock v1.13 旧版本（与上游 Stock_V1.13_arm64ec.zip 字节完全一致），发包脚本只对它改名、从未重新编译，却被贴上此后每一个新版本号，下载该包会缺失全部新功能；现不再发布该架构预编译包，发包脚本改为只打 x64/x86 并在打包前校验产物版本与去除残留包；ARM 设备请用 x64 版（ARM64EC 版 TrafficMonitor 可正常加载 x64 插件），确需原生版可按 README「编译 ARM64EC」一节自行编译",
 		L"•  【新增】 资金流向页底部的「机构领头」「主力领头」股票名称现可点击，直接跳转该股日K线临时查看（右键返回行情中心）；悬停时股名带下划线并变手型光标",
@@ -5360,6 +5459,7 @@ namespace
 	};
 
 	const AboutLogGroup kAboutLogGroups[] = {
+		{ L"2026-09-21 (v2.0.11)", kItems_0921, _countof(kItems_0921) },
 		{ L"2026-09-19 (v2.0.10)", kItems_0919b, _countof(kItems_0919b) },
 		{ L"2026-09-19 (v2.0.9)", kItems_0919, _countof(kItems_0919) },
 		{ L"2026-09-18 (v2.0.9)", kItems_0918, _countof(kItems_0918) },
