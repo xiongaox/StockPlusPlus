@@ -1,4 +1,4 @@
-﻿# tools/release.ps1
+# tools/release.ps1
 param (
     [string]$Version = ""
 )
@@ -193,7 +193,8 @@ if (Test-Path $mgrPath) {
             $arrName = [regex]::Escape($row.Groups['array'].Value)
             $bodyMatch = [regex]::Match($mgrContent, 'const wchar_t\*\s+' + $arrName + '\[\]\s*=\s*\{(?<items>[\s\S]*?)\};')
             if ($bodyMatch.Success) {
-                $bullets += [regex]::Matches($bodyMatch.Groups['items'].Value, 'L"([^"]+)"') | ForEach-Object { "- " + $_.Groups[1].Value.Trim() }
+                # 条目文本自带「• 」圆点（关于页自绘用），转 markdown 列表时去掉，避免「- •」双点
+                $bullets += [regex]::Matches($bodyMatch.Groups['items'].Value, 'L"([^"]+)"') | ForEach-Object { "- " + ($_.Groups[1].Value.Trim() -replace '^[•·]\s*', '') }
             }
         }
     }
