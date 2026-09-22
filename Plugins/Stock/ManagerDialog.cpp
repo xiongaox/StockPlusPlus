@@ -5039,6 +5039,12 @@ void CManagerDialog::DrawApiHealthPage(Gdiplus::Graphics& g, const CRect& conten
 	sfLog.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
 	sfLog.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
 
+	Gdiplus::StringFormat sfLogFar;
+	sfLogFar.SetAlignment(Gdiplus::StringAlignmentFar);
+	sfLogFar.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+	sfLogFar.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+	sfLogFar.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+
 	int curY = contentRect.top;
 
 	for (int sIdx = 0; sIdx < srcCount; ++sIdx)
@@ -5167,22 +5173,39 @@ void CManagerDialog::DrawApiHealthPage(Gdiplus::Graphics& g, const CRect& conten
 			}
 		}
 
-		// 4. 第三行：职责说明与最近采样状态（字号提升至 11px，清晰易读）
-		std::wstring logText = L"【" + src.role + L"】 最近采样: ";
+		// 4. 第三行：职责说明居左 + 最近采样状态右对齐（与心跳条/可用率统计共用右缘，左段超长时互不侵入）
+		std::wstring logText = L"【" + src.role + L"】";
+		std::wstring sampleText = L"最近采样: ";
 		if (src.lastActiveTime > 0)
 		{
 			tm ltm;
 			localtime_s(&ltm, &src.lastActiveTime);
 			wchar_t timeBuf[32];
 			swprintf_s(timeBuf, L"%02d:%02d:%02d · ", ltm.tm_hour, ltm.tm_min, ltm.tm_sec);
-			logText += timeBuf;
+			sampleText += timeBuf;
 		}
-		logText += src.lastStatusMsg.empty() ? L"正常" : src.lastStatusMsg;
+		sampleText += src.lastStatusMsg.empty() ? L"正常" : src.lastStatusMsg;
 
 		Gdiplus::SolidBrush logBrush(src.isWarning ? Gdiplus::Color(255, 248, 113, 113) : Gdiplus::Color(255, 203, 213, 225));
+
+		// 右段（最近采样）先排：右缘贴卡片内容区右缘，向左自然伸展
 		Gdiplus::RectF logRf(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(row3Y),
 			static_cast<Gdiplus::REAL>(cardW - padX * 2), static_cast<Gdiplus::REAL>(row3H));
-		g.DrawString(logText.c_str(), -1, &logFont, logRf, &sfLog, &logBrush);
+		{
+			Gdiplus::RectF bbS, bbL;
+			g.MeasureString(sampleText.c_str(), -1, &logFont, Gdiplus::PointF(0, 0), &sfLogFar, &bbS);
+			g.MeasureString(logText.c_str(), -1, &logFont, Gdiplus::PointF(0, 0), &sfLog, &bbL);
+			const Gdiplus::REAL availW = logRf.Width;
+			const Gdiplus::REAL gapW = static_cast<Gdiplus::REAL>(g_data.DPI(8));
+			// 右段先取所需宽度（上限：整行减去左段最小保留宽度），右缘贴内容区右缘
+			const Gdiplus::REAL sampleW = min(bbS.Width + 2.0f, availW - static_cast<Gdiplus::REAL>(g_data.DPI(40)));
+			// 左段宽度 = 实测宽度，上限为右段左缘剩余空间；任一侧超长先在自己半区内省略号截断，避免重叠
+			const Gdiplus::REAL roleW = max(static_cast<Gdiplus::REAL>(g_data.DPI(40)), min(bbL.Width + 2.0f, availW - sampleW - gapW));
+			Gdiplus::RectF sampleRf(logRf.X + (availW - sampleW), logRf.Y, sampleW, logRf.Height);
+			Gdiplus::RectF roleRf(logRf.X, logRf.Y, roleW, logRf.Height);
+			g.DrawString(sampleText.c_str(), -1, &logFont, sampleRf, &sfLogFar, &logBrush);
+			g.DrawString(logText.c_str(), -1, &logFont, roleRf, &sfLog, &logBrush);
+		}
 
 		curY += cardH + gap;
 	}
