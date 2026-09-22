@@ -43,6 +43,7 @@ __pycache__/
 !Plugins/Stock/Icons/gen_icons.py
 
 # ---------- 本地 AI 助手 / 工具状态 ----------
+.opencode/
 .workbuddy/
 .workbuddy-ai/
 .zcode/

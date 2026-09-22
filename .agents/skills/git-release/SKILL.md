@@ -1,5 +1,6 @@
----
+---
 name: git-release
+slash: true
 description: >-
   控制 StockPlusPlus 项目的代码提炼、更新日志同步、免构建推送以及一键版本打包发布。
   当用户输入“git描述”、“git描述并上传”、“打包上传git”时精准触发对应流程。

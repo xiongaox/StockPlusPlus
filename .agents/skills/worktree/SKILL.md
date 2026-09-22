@@ -1,5 +1,6 @@
 ---
 name: worktree
+slash: true
 description: >-
   仅在用户在对话框中显式输入 `/worktree` 斜杠命令时触发。
   日常对话中仅泛泛提及 "worktree" 单词时不要自动激活本技能。
