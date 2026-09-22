@@ -11,8 +11,8 @@ ARM 设备（骁龙 / Surface Pro X 等）请使用 x64 版；本项目不提供
 
 | 架构版本 | 适用系统 / 环境 | 下载链接 | 文件说明 |
 | :--- | :--- | :---: | :--- |
-| **x64 Release**（推荐） | 64 位 Windows 系统及 64 位 TrafficMonitor | [**Stock_V2.0.11_x64.zip**](./Stock_V2.0.11_x64.zip) | 推荐绝大多数用户使用，性能最优 |
-| **x86 Release** | 32 位 Windows 系统或 32 位 TrafficMonitor | [**Stock_V2.0.11_x86.zip**](./Stock_V2.0.11_x86.zip) | 适用于 32 位兼容环境 |
+| **x64 Release**（推荐） | 64 位 Windows 系统及 64 位 TrafficMonitor | [**Stock_V2.0.12_x64.zip**](./Stock_V2.0.12_x64.zip) | 推荐绝大多数用户使用，性能最优 |
+| **x86 Release** | 32 位 Windows 系统或 32 位 TrafficMonitor | [**Stock_V2.0.12_x86.zip**](./Stock_V2.0.12_x86.zip) | 适用于 32 位兼容环境 |
 
 ---
 
@@ -63,6 +63,7 @@ ARM 设备（骁龙 / Surface Pro X 等）请使用 x64 版；本项目不提供
    若在 TrafficMonitor 的“插件管理”中未看到股票插件，请检查下载的 DLL 架构是否与运行中的 TrafficMonitor 完全一致（如 64 位程序必须使用 x64 版本的 `Stock.dll`）。
 3. **行情刷新机制**：
    平时插件在盘中自动高频轮询；若遇休眠唤醒或网络波动，可随时在任务栏右键菜单中点击 **“刷新股票信息”** 立即强制发起最新行情请求。
+
 
 
 

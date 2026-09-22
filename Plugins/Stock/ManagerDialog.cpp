@@ -5517,7 +5517,7 @@ namespace
 	};
 
 	const AboutLogGroup kAboutLogGroups[] = {
-		{ L"2026-09-22", kItems_0922, _countof(kItems_0922) },
+		{ L"2026-09-22 (v2.0.12)", kItems_0922, _countof(kItems_0922) },
 		{ L"2026-09-21 (v2.0.11)", kItems_0921, _countof(kItems_0921) },
 		{ L"2026-09-19 (v2.0.10)", kItems_0919b, _countof(kItems_0919b) },
 		{ L"2026-09-19 (v2.0.9)", kItems_0919, _countof(kItems_0919) },
