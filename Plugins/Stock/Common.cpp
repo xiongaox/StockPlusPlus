@@ -528,6 +528,50 @@ bool CCommon::IsValidTimelineTime(const std::string& timeStr, bool isHK, bool is
 	}
 }
 
+int CCommon::GetTimelineFullSlots(const std::wstring& code)
+{
+	// 港股：09:30-12:00（150分钟）+ 13:00-16:10（190分钟，含收盘竞价）= 340
+	if (code.rfind(L"rt_hk", 0) == 0 || code.rfind(L"r_hk", 0) == 0 || code.rfind(L"hk", 0) == 0)
+		return 340;
+	// 美股：09:30-16:00 常规交易时段 = 390
+	if (IsUSStockCode(code))
+		return 390;
+	// A股/基金/ETF 及其他品种兜底：09:30-11:30 + 13:00-15:00 = 240
+	return 240;
+}
+
+CString CCommon::FormatTimelineSlotTime(int slot, int totalSlots, const std::wstring& code)
+{
+	// 与 GetTimelineFullSlots 一致的交易时段：把全天槽位序号换算为 "HH:MM" 刻度文本
+	// A股/基金：09:30-11:30(120) + 13:00-15:00(120)；港股：09:30-12:00(150) + 13:00-16:10(190)；美股：09:30-16:00(390)
+	auto minutesToStr = [](int minutes) -> CString {
+		minutes = max(0, minutes);
+		CString s;
+		s.Format(_T("%02d:%02d"), minutes / 60, minutes % 60);
+		return s;
+		};
+
+	const bool isHK = (code.rfind(L"rt_hk", 0) == 0 || code.rfind(L"r_hk", 0) == 0 || code.rfind(L"hk", 0) == 0);
+	const bool isUS = IsUSStockCode(code);
+
+	if (isUS)
+	{
+		// 09:30 起 390 分钟连续交易
+		return minutesToStr(9 * 60 + 30 + slot);
+	}
+	if (isHK)
+	{
+		// 上午 09:30-12:00（150槽），下午 13:00-16:10（190槽）
+		if (slot < 150)
+			return minutesToStr(9 * 60 + 30 + slot);
+		return minutesToStr(13 * 60 + slot - 150);
+	}
+	// A股/基金/ETF 及其他品种兜底：上午 09:30-11:30（120槽），下午 13:00-15:00（120槽）
+	if (slot < 120)
+		return minutesToStr(9 * 60 + 30 + slot);
+	return minutesToStr(13 * 60 + slot - 120);
+}
+
 std::wstring CCommon::GetExchangeName(const std::wstring& fullCode)
 {
 	if (fullCode.rfind(L"sh", 0) == 0) return L"上交所";

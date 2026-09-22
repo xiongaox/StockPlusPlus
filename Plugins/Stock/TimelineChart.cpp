@@ -334,11 +334,18 @@ void CTimelineChart::DrawTimelineGridLines(CDC& memDC, const TimelineDrawContext
 	{
 		const int totalPts = static_cast<int>(ctx.timelinePoint->size());
 		const int numVLines = 6;
+		// 数据未铺满X轴槽位时（早盘现况窗口），竖向网格按全天槽位比例对齐曲线落点，
+		// 右侧空白区不画网格线，避免与曲线右端错位（此前按可见点数等分导致网格越过曲线尾端）；
+		// 完整时间线全天轴模式例外：网格铺满整个X轴，右半空白区保留网格（对应尚未走到的时刻）
+		const int xSlots = ctx.xAxisPoints > 0 ? ctx.xAxisPoints : totalPts;
+		const bool partialFill = !ctx.fullAxisSlots && (xSlots > totalPts);
 		for (int i = 0; i <= numVLines; i++)
 		{
 			int idx = totalPts * i / numVLines;
 			if (idx >= totalPts) idx = totalPts - 1;
-			int xPos = ctx.chartWidth * i / numVLines;
+			int xPos = partialFill
+				? ctx.chartWidth * (ctx.startIndex + idx) / xSlots
+				: ctx.chartWidth * i / numVLines;
 			memDC.MoveTo(xPos, ctx.priceChartTop);
 			memDC.LineTo(xPos, ctx.priceChartTop + ctx.priceChartHeight);
 		}

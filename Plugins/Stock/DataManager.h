@@ -56,6 +56,8 @@ struct SettingData
 	bool m_boll_upper_visible{ true };  // 布林上轨（红虚线）显示
 	bool m_boll_mid_visible{ true };    // 布林中轨（蓝虚线）显示
 	bool m_boll_lower_visible{ true };  // 布林下轨（绿虚线）显示
+	// 分时图时间轴偏好（键名 timeline_full_axis；旧配置无键回退默认）
+	bool m_timeline_full_axis{ false };  // 分时X轴铺满全天时间线（9:30-15:00）而非跟随最新的现况窗口
 	std::vector<std::wstring> m_position_codes; // 持仓分组代码列表（独立于自选股）
 	std::vector<std::wstring> m_custom_group_codes; // 自定义分组代码列表(向后兼容)
 	std::vector<CustomGroup> m_custom_groups; // 多自定义分组列表

@@ -222,6 +222,9 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 	m_setting_data.m_boll_mid_visible = ini.GetBool(L"config", L"boll_mid_visible", true);
 	m_setting_data.m_boll_lower_visible = ini.GetBool(L"config", L"boll_lower_visible", true);
 
+	// 分时图时间轴偏好（旧配置无键时回退默认：现况跟随窗口）
+	m_setting_data.m_timeline_full_axis = ini.GetBool(L"config", L"timeline_full_axis", false);
+
 	// 顶部指标栏指标列表（最多4个）
 	ini.GetStringList(L"config", L"header_metrics", m_setting_data.m_header_metrics, std::vector<std::wstring>{
 		L"总市值", L"成交额", L"成交量", L"量比"
@@ -778,6 +781,7 @@ void CDataManager::SaveConfig()
 		ini.WriteBool(L"config", L"boll_upper_visible", m_setting_data.m_boll_upper_visible);
 		ini.WriteBool(L"config", L"boll_mid_visible", m_setting_data.m_boll_mid_visible);
 		ini.WriteBool(L"config", L"boll_lower_visible", m_setting_data.m_boll_lower_visible);
+		ini.WriteBool(L"config", L"timeline_full_axis", m_setting_data.m_timeline_full_axis);
 		ini.WriteInt(L"config", L"custom_group_count", static_cast<int>(m_setting_data.m_custom_groups.size()));
 		for (size_t i = 0; i < m_setting_data.m_custom_groups.size(); ++i)
 		{

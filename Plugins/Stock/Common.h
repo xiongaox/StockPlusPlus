@@ -145,6 +145,12 @@ public:
 	// 校验分时数据点时间是否在交易时段内（A股：09:30-11:30, 13:00-15:00；港股：09:30-12:00, 13:00-16:10；全时段/贵金属/期货：00:00-23:59）
 	static bool IsValidTimelineTime(const std::string& timeStr, bool isHK = false, bool isFullSession = false);
 
+	// 分时图「完整时间线」模式的当日槽位数：A股/基金240（09:30-11:30,13:00-15:00）、
+	// 港股340（09:30-12:00,13:00-16:10 含收盘竞价）、美股390（09:30-16:00），其余按240兜底
+	static int GetTimelineFullSlots(const std::wstring& code);
+
+	// 分时「完整时间线」全天槽位序号 → "HH:MM" 时刻文本（按品种交易时段：A股/港股/美股各自午休跳变）
+	static CString FormatTimelineSlotTime(int slot, int totalSlots, const std::wstring& code);
 	// 获取股票所属交易所名称（上交所/深交所/北交所/港交所/美股等）
 	static std::wstring GetExchangeName(const std::wstring& fullCode);
 

@@ -18,6 +18,10 @@ struct TimelineDrawContext {
 	int volumeChartHeight;
 	int macdChartTop;
 	double niceStep{ 0 };  // Y轴刻度步长（OnPaint计算一次，绘制函数直接用）
+	// 分时「完整时间线」全天轴模式：X轴铺满当日全部槽位（9:30-15:00等），
+	// 竖向网格与时间标签按全天槽位时刻均匀分布（数据未到右侧时右半轴保持空白网格）
+	bool fullAxisSlots{ false };
+	std::wstring axisCode;      // 当前股票代码（全天轴模式下用于按品种交易时段换算槽位时刻标签）
 	int macdChartHeight;
 	int positionY;
 	CFont* baseFont{ nullptr };             // 盘口报价使用的基础字体（与盘口绘制共享同一对象）

@@ -328,9 +328,16 @@ void CIndicatorChart::DrawVolumeChartArea(CDC& memDC, const TimelineDrawContext&
 	{
 		const int totalPts = static_cast<int>(ctx.timelinePoint->size());
 		const int numVLines = 6;
+		// 与主图网格同口径：数据未铺满槽位时竖线按槽位比例对齐曲线，空白区不画网格；
+		// 完整时间线全天轴模式例外：网格铺满全轴
+		const int xSlots = ctx.xAxisPoints > 0 ? ctx.xAxisPoints : totalPts;
+		const bool partialFill = !ctx.fullAxisSlots && (xSlots > totalPts);
 		for (int i = 0; i <= numVLines; i++)
 		{
-			int xPos2 = ctx.chartWidth * i / numVLines;
+			int idx = min(totalPts * i / numVLines, totalPts - 1);
+			int xPos2 = partialFill
+				? ctx.chartWidth * (ctx.startIndex + idx) / xSlots
+				: ctx.chartWidth * i / numVLines;
 			memDC.MoveTo(xPos2, volumeY);
 			memDC.LineTo(xPos2, volumeY + tmpCtx.volumeChartHeight);
 		}
@@ -408,15 +415,33 @@ void CIndicatorChart::DrawVolumeChartArea(CDC& memDC, const TimelineDrawContext&
 		const int totalPts = static_cast<int>(timelinePoint.size());
 		const int numVLines = 6;
 		memDC.SetTextColor(COLOR_GRAY_TEXT);
+		// 数据未铺满X轴槽位时（早盘现况窗口），标签按全天槽位比例对齐曲线落点，
+		// 右侧空白区不贴时间标签，避免标签漂到无数据的空白轴段上；
+		// 完整时间线全天轴模式例外：标签铺满全轴，用全天槽位时刻文本（数据未到右侧也显示未来时刻）
+		const int xSlots = ctx.xAxisPoints > 0 ? ctx.xAxisPoints : totalPts;
+		const bool partialFill = !ctx.fullAxisSlots && (xSlots > totalPts);
 		for (int i = 0; i <= numVLines; i++)
 		{
-			int idx = totalPts * i / numVLines;
-			if (idx >= totalPts) idx = totalPts - 1;
-			int xPos2 = ctx.chartWidth * i / numVLines;
-			CString timeLabel(timelinePoint[idx].time.c_str());
+			CString timeLabel;
+			int xPos;
+			if (ctx.fullAxisSlots && xSlots > 0)
+			{
+				// 全天轴：等分时刻按槽位换算（A股 9:30/9:50/…/15:00，午休自动跳变）
+				xPos = ctx.chartWidth * i / numVLines;
+				timeLabel = CCommon::FormatTimelineSlotTime(xSlots * i / numVLines, xSlots, ctx.axisCode);
+			}
+			else
+			{
+				int idx = totalPts * i / numVLines;
+				if (idx >= totalPts) idx = totalPts - 1;
+				xPos = partialFill
+					? ctx.chartWidth * (ctx.startIndex + idx) / xSlots
+					: ctx.chartWidth * i / numVLines;
+				timeLabel = timelinePoint[idx].time.c_str();
+			}
 			if (timeLabel.GetLength() >= 5) timeLabel = timeLabel.Left(5);
 			CSize labelSize = memDC.GetTextExtent(timeLabel);
-			int labelX = max(0, min(xPos2 - labelSize.cx / 2, ctx.chartWidth - labelSize.cx));
+			int labelX = max(0, min(xPos - labelSize.cx / 2, ctx.chartWidth - labelSize.cx));
 			memDC.TextOut(labelX, tmpCtx.volumeChartTop + tmpCtx.volumeChartHeight + g_data.RDPI(2), timeLabel);
 		}
 	}
@@ -464,9 +489,16 @@ void CIndicatorChart::DrawMacdChartArea(CDC& memDC, const TimelineDrawContext& c
 	const int numVLines = 6;
 	if (totalPts > 0)
 	{
+		// 与主图网格同口径：数据未铺满槽位时竖线按槽位比例对齐曲线，空白区不画网格；
+		// 完整时间线全天轴模式例外：网格铺满全轴
+		const int xSlots = ctx.xAxisPoints > 0 ? ctx.xAxisPoints : totalPts;
+		const bool partialFill = !ctx.fullAxisSlots && (xSlots > totalPts);
 		for (int i = 0; i <= numVLines; i++)
 		{
-			int xPos = ctx.chartWidth * i / numVLines;
+			int idx = min(totalPts * i / numVLines, totalPts - 1);
+			int xPos = partialFill
+				? ctx.chartWidth * (ctx.startIndex + idx) / xSlots
+				: ctx.chartWidth * i / numVLines;
 			memDC.MoveTo(xPos, macdY);
 			memDC.LineTo(xPos, macdY + tmpCtx.macdChartHeight);
 		}
@@ -559,9 +591,16 @@ void CIndicatorChart::DrawIndicatorChartArea(CDC& memDC, const TimelineDrawConte
 		{
 			const int totalPts = static_cast<int>(ctx.timelinePoint->size());
 			const int numVLines = 6;
+			// 与主图网格同口径：数据未铺满槽位时竖线按槽位比例对齐曲线，空白区不画网格；
+			// 完整时间线全天轴模式例外：网格铺满全轴
+			const int xSlots = ctx.xAxisPoints > 0 ? ctx.xAxisPoints : totalPts;
+			const bool partialFill = !ctx.fullAxisSlots && (xSlots > totalPts);
 			for (int i = 0; i <= numVLines; i++)
 			{
-				int xPos = ctx.chartWidth * i / numVLines;
+				int idx = min(totalPts * i / numVLines, totalPts - 1);
+				int xPos = partialFill
+					? ctx.chartWidth * (ctx.startIndex + idx) / xSlots
+					: ctx.chartWidth * i / numVLines;
 				memDC.MoveTo(xPos, volumeY);
 				memDC.LineTo(xPos, volumeY + tmpCtx.volumeChartHeight);
 			}
@@ -642,12 +681,28 @@ void CIndicatorChart::DrawIndicatorChartArea(CDC& memDC, const TimelineDrawConte
 		memDC.SetBkMode(TRANSPARENT);
 		memDC.SetTextColor(COLOR_GRAY_TEXT);
 		int chartBottom = areaTop + areaHeight;
+		// 数据未铺满X轴槽位时（早盘现况窗口），标签按全天槽位比例对齐曲线落点，
+		// 右侧空白区不贴时间标签；完整时间线全天轴模式例外：铺满全轴用槽位时刻文本
+		const int xSlots = ctx.xAxisPoints > 0 ? ctx.xAxisPoints : totalPts;
+		const bool partialFill = !ctx.fullAxisSlots && (xSlots > totalPts);
 		for (int i = 0; i <= numVLines; i++)
 		{
-			int idx = totalPts * i / numVLines;
-			if (idx >= totalPts) idx = totalPts - 1;
-			int xPos = ctx.chartWidth * i / numVLines;
-			CString timeLabel(timelinePoint[idx].time.c_str());
+			CString timeLabel;
+			int xPos;
+			if (ctx.fullAxisSlots && xSlots > 0)
+			{
+				xPos = ctx.chartWidth * i / numVLines;
+				timeLabel = CCommon::FormatTimelineSlotTime(xSlots * i / numVLines, xSlots, ctx.axisCode);
+			}
+			else
+			{
+				int idx = totalPts * i / numVLines;
+				if (idx >= totalPts) idx = totalPts - 1;
+				xPos = partialFill
+					? ctx.chartWidth * (ctx.startIndex + idx) / xSlots
+					: ctx.chartWidth * i / numVLines;
+				timeLabel = timelinePoint[idx].time.c_str();
+			}
 			if (timeLabel.GetLength() >= 5) timeLabel = timeLabel.Left(5);
 			CSize labelSize = memDC.GetTextExtent(timeLabel);
 			int labelX = max(0, min(xPos - labelSize.cx / 2, ctx.chartWidth - labelSize.cx));
@@ -865,9 +920,16 @@ void CIndicatorChart::DrawSectionGrid(CDC& memDC, const TimelineDrawContext& ctx
 	const int numVLines = 6;
 	if (totalPts > 0)
 	{
+		// 与主图网格同口径：数据未铺满槽位时竖线按槽位比例对齐曲线，空白区不画网格；
+		// 完整时间线全天轴模式例外：网格铺满全轴
+		const int xSlots = ctx.xAxisPoints > 0 ? ctx.xAxisPoints : totalPts;
+		const bool partialFill = !ctx.fullAxisSlots && (xSlots > totalPts);
 		for (int i = 0; i <= numVLines; i++)
 		{
-			int xPos = ctx.chartWidth * i / numVLines;
+			int idx = min(totalPts * i / numVLines, totalPts - 1);
+			int xPos = partialFill
+				? ctx.chartWidth * (ctx.startIndex + idx) / xSlots
+				: ctx.chartWidth * i / numVLines;
 			memDC.MoveTo(xPos, chartTop);
 			memDC.LineTo(xPos, chartTop + chartHeight);
 		}
@@ -886,12 +948,28 @@ void CIndicatorChart::DrawSectionTimeLabels(CDC& memDC, const TimelineDrawContex
 	{
 		int oldBkMode = memDC.SetBkMode(TRANSPARENT);
 		memDC.SetTextColor(COLOR_GRAY_TEXT);
+		// 与主图网格同口径：数据未铺满槽位时标签按槽位比例对齐曲线，空白区不贴标签；
+		// 完整时间线全天轴模式例外：铺满全轴用槽位时刻文本
+		const int xSlots = ctx.xAxisPoints > 0 ? ctx.xAxisPoints : totalPts;
+		const bool partialFill = !ctx.fullAxisSlots && (xSlots > totalPts);
 		for (int i = 0; i <= numVLines; i++)
 		{
-			int idx = totalPts * i / numVLines;
-			if (idx >= totalPts) idx = totalPts - 1;
-			int xPos = ctx.chartWidth * i / numVLines;
-			CString timeLabel(timelinePoint[idx].time.c_str());
+			CString timeLabel;
+			int xPos;
+			if (ctx.fullAxisSlots && xSlots > 0)
+			{
+				xPos = ctx.chartWidth * i / numVLines;
+				timeLabel = CCommon::FormatTimelineSlotTime(xSlots * i / numVLines, xSlots, ctx.axisCode);
+			}
+			else
+			{
+				int idx = totalPts * i / numVLines;
+				if (idx >= totalPts) idx = totalPts - 1;
+				xPos = partialFill
+					? ctx.chartWidth * (ctx.startIndex + idx) / xSlots
+					: ctx.chartWidth * i / numVLines;
+				timeLabel = timelinePoint[idx].time.c_str();
+			}
 			if (timeLabel.GetLength() >= 5) timeLabel = timeLabel.Left(5);
 			CSize labelSize = memDC.GetTextExtent(timeLabel);
 			int labelX = max(0, min(xPos - labelSize.cx / 2, ctx.chartWidth - labelSize.cx));
