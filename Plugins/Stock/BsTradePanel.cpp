@@ -21,7 +21,8 @@ int CBsTradePanel::GetTableHeaderHeight()
 
 int CBsTradePanel::GetSummaryHeight()
 {
-	return g_data.RDPI(22);
+	// 四行紧凑布局（首 3 + 4×16 + 底 3）：① 买入 ② 卖出 ③ 净持+摊薄 ④ 手续费
+	return g_data.RDPI(70);
 }
 
 int CBsTradePanel::HitTest(CPoint pt, int left, int right, int height, int scrollOffset, int itemCount)
@@ -48,7 +49,7 @@ int CBsTradePanel::HitTest(CPoint pt, int left, int right, int height, int scrol
 
 void CBsTradePanel::Draw(CDC& memDC, int left, int right, int height,
 	const std::vector<StockTradeRecord>& trades, int scrollOffset, int selectedRow,
-	double filledHoldCount)
+	double filledHoldCount, double filledCostPrice)
 {
 	const int headerHeight = g_data.RDPI(26);
 	const int obTitleH = g_data.RDPI(16);
@@ -189,7 +190,7 @@ void CBsTradePanel::Draw(CDC& memDC, int left, int right, int height,
 	int summaryY = listTop + listH;
 	memDC.FillSolidRect(left, summaryY, panelW, 1, COLOR_DARK_GRAY_BORDER);
 
-	double buyAmt = 0.0, sellAmt = 0.0, fee = 0.0, hold = 0.0;
+	double buyAmt = 0.0, sellAmt = 0.0, fee = 0.0, hold = 0.0, netCost = 0.0;
 	int buyCount = 0, sellCount = 0;
 	for (const auto& record : trades)
 	{
@@ -198,37 +199,77 @@ void CBsTradePanel::Draw(CDC& memDC, int left, int right, int height,
 			++sellCount;
 			sellAmt += record.amount;
 			hold -= record.amount;
+			netCost -= record.price * record.amount;
 		}
 		else
 		{
 			++buyCount;
 			buyAmt += record.amount;
 			hold += record.amount;
+			netCost += record.price * record.amount;
 		}
 		if (hold < 0.0)
-			hold = 0.0;   // 与 GetTradeKindLabel 重放口径一致：下限截 0
+		{
+			hold = 0.0;       // 与 GetTradeKindLabel 重放口径一致：下限截 0
+			netCost = 0.0;    // 净持截 0 时成本余额同步清零，避免残值拉高后续摊薄均价
+		}
 		fee += record.fee;
 	}
+	const double ledgerAvgCost = hold > 0.0 ? netCost / hold : 0.0;
 
-	// 重放净持与填写的持股数不一致时整行橙色提醒（filledHoldCount<0 表示未知，不比对）
+	// 重放净持/摊薄成本与填写值任一不一致时整行橙色提醒
+	//（filledHoldCount<0 表示持股数未知不比对；filledCostPrice<=0 表示成本价未知不比对）
 	const bool holdMismatch = filledHoldCount >= 0.0 &&
 		(hold > filledHoldCount + 0.5 || hold < filledHoldCount - 0.5);
+	const bool costMismatch = filledCostPrice > 0.0 && ledgerAvgCost > 0.0 &&
+		(ledgerAvgCost > filledCostPrice + 0.00005 || ledgerAvgCost < filledCostPrice - 0.00005);
+	const bool rowMismatch = holdMismatch || costMismatch;
 
 	memDC.SelectObject(&headerFont);
-	CString sumStr;
-	sumStr.Format(_T("买%d笔%.0f 卖%d笔%.0f 净持%.0f"), buyCount, buyAmt, sellCount, sellAmt, hold);
-	// 右侧给手续费留出展示位，避免加长后的文案压到「费x.xx」上
-	CRect rcSummary(left + g_data.RDPI(4), summaryY, right - g_data.RDPI(fee > 0.005 ? 64 : 4), summaryY + summaryH);
-	memDC.SetTextColor(holdMismatch ? COLOR_DARK_ORANGE : COLOR_TEXT_MUTED);
-	memDC.DrawText(sumStr, rcSummary, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+	// 四行紧凑布局：总高 RDPI(70) = 首行上 3 + 4×行高 16 + 底部余 3。
+	// ① 买入 ② 卖出 ③ 净持+摊薄（两段同行，实测窄侧栏放得下） ④ 手续费
+	const int padX = g_data.RDPI(10);
+	const int lineH = g_data.RDPI(16);
+	const int line1Y = summaryY + g_data.RDPI(3);
+	const int line2Y = line1Y + lineH;
+	const int line3Y = line2Y + lineH;
+	const int line4Y = line3Y + lineH;
 
-	CString feeStr;
+	auto drawLine = [&](const CString& text, int y, COLORREF color) {
+		if (text.IsEmpty())
+			return;
+		CRect rc(left + padX, y, right - padX, y + lineH);
+		memDC.SetTextColor(color);
+		memDC.DrawText(text, rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+	};
+
+	// 第三行拆两段：净持左对齐，摊薄右对齐（两端分布，数字列上下齐整）
+	auto drawLineRight = [&](const CString& text, int y, COLORREF color) {
+		if (text.IsEmpty())
+			return;
+		CRect rc(left + padX, y, right - padX, y + lineH);
+		memDC.SetTextColor(color);
+		memDC.DrawText(text, rc, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+	};
+
+	// 行色规则：与填写值相关的行不一致时橙色提醒，其余常规灰阶
+	const COLORREF cLedger = rowMismatch ? COLOR_DARK_ORANGE : COLOR_TEXT_MUTED;
+	CString sBuy, sSell, sHold, sAvg, sFee;
+	sBuy.Format(_T("买入 %d 笔 · %.0f 股"), buyCount, buyAmt);
+	sSell.Format(_T("卖出 %d 笔 · %.0f 股"), sellCount, sellAmt);
+	sHold.Format(_T("净持 %.0f 股"), hold);
+	drawLine(sBuy, line1Y, cLedger);
+	drawLine(sSell, line2Y, cLedger);
+	drawLine(sHold, line3Y, cLedger);
+	if (ledgerAvgCost > 0.0)
+	{
+		sAvg.Format(_T("摊薄 %.4f"), ledgerAvgCost);
+		drawLineRight(sAvg, line3Y, cLedger);
+	}
 	if (fee > 0.005)
 	{
-		feeStr.Format(_T("费%.2f"), fee);
-		CRect rcFee(right - g_data.RDPI(60), summaryY, right - g_data.RDPI(3), summaryY + summaryH);
-		memDC.SetTextColor(COLOR_TEXT_DIM);
-		memDC.DrawText(feeStr, rcFee, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+		sFee.Format(_T("手续费 %.2f 元"), fee);
+		drawLine(sFee, line4Y, COLOR_TEXT_DIM);
 	}
 
 	memDC.SelectObject(pOldFont);
@@ -303,13 +344,14 @@ BOOL CDarkTradeEditDlg::OnInitDialog()
 	const int btnW = g_data.DPI(64);
 	const int contentW = g_data.DPI(200);     // 输入区固定宽度，日期/时间同排也够用
 
-	// 行序：方向 / 日期+时间 / 数量 / 价格
+	// 行序：方向 / 日期+时间 / 数量 / 价格 / 手续费
 	const int topPad = g_data.DPI(16);
 	const int dirY = topPad;
 	const int dateTimeY = dirY + rowPitch;
 	const int amountY = dateTimeY + rowPitch;
 	const int priceY = amountY + rowPitch;
-	const int btnY = priceY + rowPitch + g_data.DPI(4);
+	const int feeY = priceY + rowPitch;
+	const int btnY = feeY + rowPitch + g_data.DPI(4);
 
 	// 先把窗口调到内容所需尺寸（模板按两行设计，这里收紧/补齐），再据此计算控件坐标，
 	// 否则先取的客户区尺寸会在调整后过期，导致右侧控件错位。
@@ -355,6 +397,7 @@ BOOL CDarkTradeEditDlg::OnInitDialog()
 	createEdit(m_time_edit, dateTimeY, contentLeft + dateW + dateGap, contentRight, 1102, L"HH:mm");
 	createEdit(m_amount_edit, amountY, contentLeft, contentRight, 1103, L"输入数量");
 	createEdit(m_price_edit, priceY, contentLeft, contentRight, 1104, L"输入成交价");
+	createEdit(m_fee_edit, feeY, contentLeft, contentRight, 1105, L"手续费，可留空");
 
 	// 底部按钮：确定/取消靠右成组（右边界与输入框对齐）；
 	// 删除按钮单独放到最左边（与标签列左边界对齐，远离确定/取消，避免误按）
@@ -397,6 +440,13 @@ BOOL CDarkTradeEditDlg::OnInitDialog()
 		CString s;
 		s.Format(_T("%.3f"), m_price);
 		m_price_edit.SetWindowText(s);
+	}
+	if (m_fee > 0)
+	{
+		// 编辑模式：回显台账已存的手续费（含手动修正过的 0.35 这类特例）
+		CString s;
+		s.Format(_T("%.2f"), m_fee);
+		m_fee_edit.SetWindowText(s);
 	}
 
 	m_date_edit.SetFocus();
@@ -447,6 +497,8 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 			EndDialog(RES_DELETE);
 			return TRUE;
 		}
+		// 数量/价格/手续费均为纯手填，无自动计算逻辑
+		(void)notify; (void)wParam;
 		// 输入框焦点变化时重绘，让蓝色焦点描边跟随光标所在框
 		if (notify == EN_SETFOCUS || notify == EN_KILLFOCUS)
 			InvalidateRect(nullptr, FALSE);
@@ -549,6 +601,7 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 		drawRowLabel(L"日期/时间", frameRectForEdit(editRectInClient(m_date_edit)));
 		drawRowLabel(L"数量 (股)", frameRectForEdit(editRectInClient(m_amount_edit)));
 		drawRowLabel(L"价格 (元)", frameRectForEdit(editRectInClient(m_price_edit)));
+		drawRowLabel(L"手续费 (元)", frameRectForEdit(editRectInClient(m_fee_edit)));
 
 		// 3. 输入框：按行高绘制方角底与描边，控件本体居中嵌在其中（控件矮一圈、窄一圈，
 		//    文字才垂直居中且左右留出内边距，描边也不会被控件盖住）
@@ -567,6 +620,7 @@ LRESULT CDarkTradeEditDlg::WindowProc(UINT message, WPARAM wParam, LPARAM lParam
 		drawEdit(m_time_edit);
 		drawEdit(m_amount_edit);
 		drawEdit(m_price_edit);
+		drawEdit(m_fee_edit);
 
 		DrawDirectionButtons(g);
 
@@ -698,10 +752,26 @@ bool CDarkTradeEditDlg::ValidateAndFill()
 		return false;
 	}
 
+	// 手续费：可留空（记 0），填了必须是不小于 0 的数字
+	CString strFee;
+	m_fee_edit.GetWindowText(strFee);
+	strFee.Trim();
+	double fee = 0.0;
+	if (!strFee.IsEmpty())
+	{
+		fee = wcstod(strFee.GetString(), &pEnd);
+		if (*pEnd != L'\0' || fee < 0)
+		{
+			AfxMessageBox(_T("手续费要为不小于 0 的数字（单位：元），留空表示不计费"));
+			return false;
+		}
+	}
+
 	m_date_text = strDate.GetString();
 	m_time_text = strTime.GetString();
 	m_amount = amt;
 	m_price = price;
+	m_fee = fee;
 	return true;
 }
 

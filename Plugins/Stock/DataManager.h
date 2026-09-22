@@ -213,9 +213,12 @@ public:
 	double GetYesterdayHoldCount(const std::wstring& code);
 	// 按台账全量流水重放净持仓：Σ买入−Σ卖出，逐笔下限截 0（与类型标签推导同口径）
 	double GetLedgerHoldCount(const std::wstring& code);
-	// 台账增删改后自动回填持股数：仅当台账含买入且重放净持>0 时写回
+	// 台账摊薄成本价：(Σ买入额 − Σ卖出额 + Σ手续费) ÷ 台账净持仓（含费口径，
+	// 与券商摊薄成本一致）；净持为 0 时返回 0。仅当台账有买入时才有意义
+	double GetLedgerAvgCost(const std::wstring& code);
+	// 台账增删改后自动回填持股数与摊薄成本价：仅当台账含买入且重放净持>0、摊薄成本>0 时写回
 	//（安全阀：底仓未录入台账/清仓两种情况不改写，交给 BS 提醒与手动重算；返回是否写回）
-	bool SyncHoldingFromLedger(const std::wstring& code);
+	bool SyncPositionFromLedger(const std::wstring& code);
 
 	// 状态栏展示设置
 	bool GetShowInStatusBar(const std::wstring& code);

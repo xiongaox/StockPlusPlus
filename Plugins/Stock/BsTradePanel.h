@@ -32,9 +32,10 @@ public:
 	// scrollOffset: 列表垂直滚动偏移量
 	// selectedRow: 当前选中行（高亮显示，-1 表示无选中）
 	// filledHoldCount: 当前填写的持股数（>=0 时与台账重放净持比对，不一致整行橙色提醒；<0 表示未知不比对）
+	// filledCostPrice: 当前填写的成本价（>0 时与台账摊薄成本比对，不一致同样橙色提醒；<=0 表示未知不比对）
 	static void Draw(CDC& memDC, int left, int right, int height,
 		const std::vector<StockTradeRecord>& trades, int scrollOffset = 0, int selectedRow = -1,
-		double filledHoldCount = -1.0);
+		double filledHoldCount = -1.0, double filledCostPrice = 0.0);
 };
 
 // 暗色主题成交录入/编辑弹窗（新增与编辑共用，编辑模式带删除按钮）
@@ -57,6 +58,7 @@ public:
 	std::wstring m_time_text;     // 时间 HH:mm（确定后回填）
 	double m_price{ 0.0 };        // 成交价（确定后回填）
 	double m_amount{ 0.0 };       // 数量·股（确定后回填）
+	double m_fee{ 0.0 };          // 手续费·元（确定后回填；0=未填，摊薄成本含费口径的费）
 	bool m_is_new{ true };        // true=新增模式（无删除按钮）
 
 	EditResult GetResult() const { return m_result; }
@@ -99,13 +101,14 @@ private:
 	void DrawDirectionButtons(Gdiplus::Graphics& g);
 	// 方向按钮点击命中（返回 true 表示点中了方向按钮并已切换）
 	bool HitTestDirectionButtons(CPoint pt);
-	// 校验并回填 m_date_text/m_time_text/m_amount/m_price，非法输入返回 false 并提示
+	// 校验并回填 m_date_text/m_time_text/m_amount/m_price/m_fee，非法输入返回 false 并提示
 	bool ValidateAndFill();
 
 	CEdit m_date_edit;
 	CEdit m_time_edit;
 	CEdit m_amount_edit;
 	CEdit m_price_edit;
+	CEdit m_fee_edit;
 	CButton m_btn_ok;
 	CButton m_btn_delete;
 	CButton m_btn_cancel;
