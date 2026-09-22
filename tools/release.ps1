@@ -1,4 +1,4 @@
-﻿# tools/release.ps1
+# tools/release.ps1
 param (
     [string]$Version = ""
 )
@@ -212,9 +212,7 @@ $bulletText
 - **x64 推荐版**：适用于绝大多数 64 位 Windows 系统及 64 位 TrafficMonitor
 - **x86 兼容版**：适用于 32 位系统环境
 
-> **ARM64 设备（骁龙 / Surface Pro X 等）**：请直接使用上面的 **x64 版**——ARM64EC 版 TrafficMonitor
-> 可以正常加载 x64 插件（走系统模拟执行，功能完全一致，仅速度非原生）。
-> 本项目不再提供 ARM64EC 预编译包；确需原生版本请参照 README 的「编译 ARM64EC」一节自行编译。
+> **ARM64 设备（骁龙 / Surface Pro X 等）**：请直接使用上面的 **x64 版**——本项目不提供 ARM64EC 预编译包，确需原生版本请参照 README 的「编译 ARM64EC」一节自行编译。
 "@
 
 $releaseNotesPath = "$root\RELEASE_NOTES.md"
