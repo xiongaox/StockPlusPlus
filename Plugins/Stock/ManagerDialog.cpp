@@ -1118,8 +1118,9 @@ public:
 	CEdit m_count_edit;
 	CButton m_btn_ok;
 	CButton m_btn_cancel;
-	CButton m_btn_recalc;            // 「按台账重算」：把台账重放净持仓回填到持股数输入框
+	CButton m_btn_recalc;            // 「按台账重算」：把台账重放净持仓/摊薄成本回填到输入框
 	double m_ledger_hold{ 0.0 };     // 台账重放净持仓快照（OnInitDialog 时读取）
+	double m_ledger_avg_cost{ 0.0 }; // 台账摊薄成本快照（OnInitDialog 时读取，净持为 0 时为 0）
 	bool m_ledger_has_buy{ false };  // 台账是否含买入（无买入时无法推算）
 
 	CFont m_font;
@@ -1228,8 +1229,9 @@ public:
 				editInnerRight + g_data.DPI(6), countY + g_data.DPI(26)), this, 1003);
 		m_btn_recalc.SetFont(&m_font);
 
-		// 台账重放净持仓快照：供提示行绘制与一键回填
+		// 台账重放快照：供提示行绘制与一键回填（净持 + 摊薄成本）
 		m_ledger_hold = g_data.GetLedgerHoldCount(m_full_code);
+		m_ledger_avg_cost = g_data.GetLedgerAvgCost(m_full_code);
 		m_ledger_has_buy = false;
 		for (const auto& rec : g_data.GetStockTrades(m_full_code))
 		{
@@ -1279,20 +1281,37 @@ public:
 			{
 				InvalidateRect(nullptr, FALSE);
 			}
-			else if (wNotifyCode == EN_CHANGE && LOWORD(wParam) == 1002)
+			else if (wNotifyCode == EN_CHANGE && (LOWORD(wParam) == 1001 || LOWORD(wParam) == 1002))
 			{
-				// 持股数输入实时回读，供台账净持提示行判断一致性
-				CString strCount;
-				m_count_edit.GetWindowText(strCount);
-				strCount.Trim();
-				m_holding_count = _ttof(strCount);
+				// 成本价/持股数输入实时回读，供台账净持与摊薄成本提示行判断一致性
+				if (LOWORD(wParam) == 1001)
+				{
+					CString strCost;
+					m_cost_edit.GetWindowText(strCost);
+					strCost.Trim();
+					m_cost_price = _ttof(strCost);
+				}
+				else
+				{
+					CString strCount;
+					m_count_edit.GetWindowText(strCount);
+					strCount.Trim();
+					m_holding_count = _ttof(strCount);
+				}
 				InvalidateRect(nullptr, FALSE);
 			}
 			else if (wNotifyCode == BN_CLICKED && LOWORD(wParam) == 1003)
 			{
-				// 按台账重算：把台账重放净持仓回填到持股数输入框（确定后随 OnOK 统一保存）
+				// 按台账重算：把台账重放净持仓与摊薄成本一并回填到输入框（确定后随 OnOK 统一保存）
 				if (m_ledger_has_buy && m_ledger_hold > 0.0)
 				{
+					if (m_ledger_avg_cost > 0.0)
+					{
+						CString sCost;
+						sCost.Format(_T("%.3f"), m_ledger_avg_cost);
+						m_cost_edit.SetWindowText(sCost);
+						m_cost_price = m_ledger_avg_cost;
+					}
 					CString s;
 					s.Format(_T("%d"), static_cast<int>(m_ledger_hold + 0.5));
 					m_count_edit.SetWindowText(s);
@@ -1300,7 +1319,7 @@ public:
 				}
 				else
 				{
-					MessageBox(L"台账中没有买入记录（或重放净持为 0），无法推算持股数。", L"按台账重算", MB_ICONINFORMATION);
+					MessageBox(L"台账中没有买入记录（或重放净持为 0），无法推算持股数与成本价。", L"按台账重算", MB_ICONINFORMATION);
 				}
 				InvalidateRect(nullptr, FALSE);
 			}
@@ -1446,11 +1465,15 @@ public:
 					static_cast<Gdiplus::REAL>(boxRight - borderLeft - 1), static_cast<Gdiplus::REAL>(g_data.DPI(26) - 1));
 			}
 
-			// 台账净持提示（两行短句，避免长句超出弹窗右缘被截断）：
-			// 第一行：台账净持股数，不一致时橙色；第二行仅在不一致时出现，引导点右侧按钮回填
+			// 台账重算提示（两行短句，避免长句超出弹窗右缘被截断）：
+			// 第一行：台账净持与摊薄成本；任一与填写不一致时橙色；
+			// 第二行仅在不一致时出现，引导点右侧按钮回填
 			{
-				bool mismatch = (m_ledger_hold > 0.0) &&
+				const bool holdMismatch = (m_ledger_hold > 0.0) &&
 					(m_ledger_hold > m_holding_count + 0.5 || m_ledger_hold < m_holding_count - 0.5);
+				const bool costMismatch = (m_ledger_avg_cost > 0.0) && (m_cost_price > 0.0) &&
+					(m_ledger_avg_cost > m_cost_price + 0.0005 || m_ledger_avg_cost < m_cost_price - 0.0005);
+				const bool mismatch = holdMismatch || costMismatch;
 				Gdiplus::Font hintFont(L"微软雅黑", static_cast<Gdiplus::REAL>(g_data.DPI(11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 				Gdiplus::SolidBrush dimBrush(Gdiplus::Color(255, 148, 163, 184));
 				Gdiplus::SolidBrush warnBrush(Gdiplus::Color(255, 217, 119, 6));
@@ -1458,7 +1481,10 @@ public:
 				if (m_ledger_has_buy && m_ledger_hold > 0.0)
 				{
 					CString hintStr;
-					hintStr.Format(L"台账净持 %.0f 股", m_ledger_hold);
+					if (m_ledger_avg_cost > 0.0)
+						hintStr.Format(L"台账净持 %.0f 股 · 摊薄 %.3f", m_ledger_hold, m_ledger_avg_cost);
+					else
+						hintStr.Format(L"台账净持 %.0f 股", m_ledger_hold);
 					g.DrawString(hintStr.GetString(), -1, &hintFont,
 						Gdiplus::PointF(hintX, static_cast<Gdiplus::REAL>(countY + g_data.DPI(34))),
 						mismatch ? &warnBrush : &dimBrush);
@@ -1502,6 +1528,7 @@ public:
 		CDialog::OnOK();
 	}
 };
+
 
 // 暗色主题股票关注价格编辑弹窗
 class CDarkStockAlertInputDlg : public CDialog
@@ -2383,7 +2410,7 @@ BOOL CManagerDialog::OnInitDialog()
 		IDC_MGR_ADD_BTN, IDC_MGR_EDIT_BTN, IDC_MGR_DEL_BTN, IDC_MGR_MOVE_UP_BTN, IDC_MGR_MOVE_DOWN_BTN,
 		IDC_MA_ADD_BTN,
 		IDC_WEBDAV_TEST_BTN, IDC_WEBDAV_UPLOAD_BTN, IDC_WEBDAV_DOWNLOAD_BTN,
-		1197, 1198, 1199, IDC_ABOUT_UPDATE_BTN
+		1196, 1197, 1198, 1199, IDC_ABOUT_UPDATE_BTN
 	};
 	for (int id : ownerDrawBtnIds)
 	{
@@ -3287,13 +3314,14 @@ void CManagerDialog::UpdateControlsLayout()
 	int listTop = rightTop + g_data.DPI(42);
 	int listHeight = rightBottom - listTop - g_data.DPI(44);
 
-	// 「分组排序」按钮：分组管理页头部右上角（红框位置），其他页面隐藏
+	// 「分组排序」+「手续费设置」按钮：分组管理页头部右上角（手续费在分组排序左侧），其他页面隐藏
 	// 内嵌子窗口模式下父窗口顶栏按钮（关闭/设置）浮在 y2..22，页头按钮下移避开
 	if (m_group_sort_btn.GetSafeHwnd())
 	{
 		int sortW = g_data.DPI(78);
 		int sortTop = m_as_child ? g_data.DPI(26) : g_data.DPI(14);
-		m_group_sort_btn.MoveWindow(rightLeft + rightWidth - sortW, sortTop, sortW, g_data.DPI(28));
+		int sortLeft = rightLeft + rightWidth - sortW;
+		m_group_sort_btn.MoveWindow(sortLeft, sortTop, sortW, g_data.DPI(28));
 		m_group_sort_btn.ShowWindow(isGroup ? SW_SHOW : SW_HIDE);
 	}
 
@@ -5361,6 +5389,11 @@ namespace
 		int count;
 	};
 
+	const wchar_t* kItems_0922[] = {
+		L"•  【修复】 台账联动补齐摊薄成本价：此前只回填「持股数」，卖出部分成交后成本价仍停在旧值，浮动盈亏与券商对不上（如 1.278 vs 1.423，差额全落在浮盈上）；现增删改成交后按流水重放净持与摊薄成本（Σ买−Σ卖÷净持，与券商同口径）一并回填，安全阀不变（台账无买入/清仓不改写）",
+		L"•  【新增】 台账成交弹窗新增「手续费 (元)」输入框：按券商交割单照实填写（含事后附加费等特例，如 0.35），台账摊薄成本改为含费口径 =（Σ买入额−Σ卖出额+Σ手续费）÷ 净持，与券商摊薄成本一致，消除浮动盈亏最后几毛钱的残差",
+		L"•  【新增】 BS 台账汇总行改为三行：买/卖笔数股数、净持与含费摊薄成本（与填写值不一致整行橙色提醒）、费合计；编辑持仓弹窗「按台账重算」现同时回填成本价与持股数，提示行显示台账摊薄成本",
+	};
 	const wchar_t* kItems_0921[] = {
 		L"•  【新增】 台账联动持股数：BS 台账新增/修改/删除成交后，按流水重放净持仓自动回填「持股数」并落盘；台账里没有买入记录（底仓未录入台账）或重放净持为 0（清仓）时不自动改写，避免悄悄把正确的手填值改错，这两种情况由 BS 汇总行橙色提醒、编辑持仓弹窗「按台账重算」手动处理",
 		L"•  【新增】 BS 台账汇总行新增「净持 N」：与填写的持股数不一致时整行橙色提醒；编辑持仓弹窗持股数输入框右侧新增「按台账重算」按钮一键回填，输入框下方显示台账净持提示",
@@ -5459,6 +5492,7 @@ namespace
 	};
 
 	const AboutLogGroup kAboutLogGroups[] = {
+		{ L"2026-09-22 (v2.0.13)", kItems_0922, _countof(kItems_0922) },
 		{ L"2026-09-21 (v2.0.11)", kItems_0921, _countof(kItems_0921) },
 		{ L"2026-09-19 (v2.0.10)", kItems_0919b, _countof(kItems_0919b) },
 		{ L"2026-09-19 (v2.0.9)", kItems_0919, _countof(kItems_0919) },

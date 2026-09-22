@@ -439,8 +439,8 @@ bool CDataManager::SaveTradeRecord(const std::wstring& stockCode, const std::wst
 		// 与 Add/Update/DeleteStockTrade 同约定：写库后失效台账缓存（此前缺失，
 		// 旧版「交易记录」弹窗保存后 BS 面板会继续显示缓存的旧流水）
 		m_trade_cache.erase(stockCode);
-		// 台账变动后按重放净持仓自动回填持股数（含安全阀，见 SyncHoldingFromLedger）
-		SyncHoldingFromLedger(stockCode);
+		// 台账变动后按重放净持仓自动回填持股数（含安全阀，见 SyncPositionFromLedger）
+		SyncPositionFromLedger(stockCode);
 	}
 	return ok;
 }
@@ -1783,8 +1783,8 @@ long long CDataManager::AddStockTrade(const std::wstring& code, bool is_sell, co
 	if (id > 0)
 	{
 		m_trade_cache.erase(code);
-		// 台账变动后按重放净持仓自动回填持股数（含安全阀，见 SyncHoldingFromLedger）
-		SyncHoldingFromLedger(code);
+		// 台账变动后按重放净持仓自动回填持股数（含安全阀，见 SyncPositionFromLedger）
+		SyncPositionFromLedger(code);
 	}
 	return id;
 }
@@ -1796,7 +1796,7 @@ bool CDataManager::UpdateStockTrade(const std::wstring& code, const StockTradeRe
 	if (ok)
 	{
 		m_trade_cache.erase(code);
-		SyncHoldingFromLedger(code);
+		SyncPositionFromLedger(code);
 	}
 	return ok;
 }
@@ -1807,7 +1807,7 @@ bool CDataManager::DeleteStockTrade(const std::wstring& code, long long id)
 	if (ok)
 	{
 		m_trade_cache.erase(code);
-		SyncHoldingFromLedger(code);
+		SyncPositionFromLedger(code);
 	}
 	return ok;
 }
@@ -1895,13 +1895,45 @@ double CDataManager::GetLedgerHoldCount(const std::wstring& code)
 	return hold;
 }
 
-bool CDataManager::SyncHoldingFromLedger(const std::wstring& code)
+double CDataManager::GetLedgerAvgCost(const std::wstring& code)
 {
-	// 台账增删改后按重放净持仓自动回填「持股数」。
+	// 台账摊薄成本（含费）：Σ(买入额) − Σ(卖出额) + Σ(手续费)，逐笔下限截 0 的重放余额口径
+	//（防止台账缺历史时卖出倒挂出负成本），除以净持仓；与券商摊薄成本（含费）一致。
+	// 卖出费也计入：卖出回款减少的同时费用同样抬升剩余持仓的摊薄成本。
+	double hold = 0.0;
+	double netCost = 0.0;
+	double totalFee = 0.0;
+	for (const auto& record : GetStockTrades(code))
+	{
+		if (record.isSell)
+		{
+			hold -= record.amount;
+			netCost -= record.price * record.amount;
+		}
+		else
+		{
+			hold += record.amount;
+			netCost += record.price * record.amount;
+		}
+		if (hold < 0.0)
+		{
+			hold = 0.0;
+			netCost = 0.0;	// 重放净持截 0 时成本余额同步清零，避免残值拉高后续均价
+		}
+		totalFee += record.fee;
+	}
+	if (hold <= 0.0)
+		return 0.0;
+	return (netCost + totalFee) / hold;
+}
+
+bool CDataManager::SyncPositionFromLedger(const std::wstring& code)
+{
+	// 台账增删改后按重放结果回填「持股数 + 摊薄成本价」。
 	// 安全阀（避免把正确的手填值悄悄改错）：
 	// 1) 台账里一笔买入都没有（空台账/只录了卖出）说明底仓未录入台账，重放结果不可信，不改写；
 	// 2) 重放净持为 0（清仓）不自动清零，防止误清真实持仓。
-	// 两种情况都交给 BS 汇总行的橙色提醒与编辑持仓弹窗的「按台账重算」手动处理。
+	// 持股数与成本价分别比较，任一超出容差才写回（写回时两者一起落盘）。
 	bool hasBuy = false;
 	for (const auto& record : GetStockTrades(code))
 	{
@@ -1916,10 +1948,18 @@ bool CDataManager::SyncHoldingFromLedger(const std::wstring& code)
 	const double hold = GetLedgerHoldCount(code);
 	if (hold <= 0.0)
 		return false;
-	const double filled = GetHoldingCount(code);
-	if (hold > filled - 0.5 && hold < filled + 0.5)	// 整股口径，±0.5 股内视为一致
+	const double avgCost = GetLedgerAvgCost(code);
+	if (avgCost <= 0.0)
 		return false;
-	SetPosition(code, GetCostPrice(code), hold, L"");
+	const double filled = GetHoldingCount(code);
+	const double filledCost = GetCostPrice(code);
+	const bool holdSame = (hold > filled - 0.5 && hold < filled + 0.5);			// 整股口径，±0.5 股内视为一致
+	// 成本容差 0.00005（低于费用带来的合法变化 ~0.0001-0.0008/股，高于浮点噪声）：
+	// 补录手续费后摊薄成本变化必须能穿透容差写回，否则浮动盈亏永远差几毛
+	const bool costSame = (avgCost > filledCost - 0.00005 && avgCost < filledCost + 0.00005);
+	if (holdSame && costSame)
+		return false;
+	SetPosition(code, avgCost, hold, L"");
 	SaveConfig();
 	return true;
 }

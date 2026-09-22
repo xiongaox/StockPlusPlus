@@ -1334,7 +1334,7 @@ void CFloatingWnd::OnPaint()
 				{
 					m_bsTradePanel.Draw(memDC, chartWidth, w, h - headerHeight - indexBarHeight - relatedBarHeight,
 						g_data.GetStockTrades(m_stock_id), m_bsScrollOffset, m_bsSelectedRow,
-						g_data.GetHoldingCount(m_stock_id));
+						g_data.GetHoldingCount(m_stock_id), g_data.GetCostPrice(m_stock_id));
 				}
 				else if (IsInfoPanelVisible(isIndexKLine))
 				{
@@ -1979,7 +1979,7 @@ void CFloatingWnd::OnPaint()
 			{
 				m_bsTradePanel.Draw(memDC, chartWidth, w, h - headerHeight - indexBarHeight - relatedBarHeight,
 					g_data.GetStockTrades(m_stock_id), m_bsScrollOffset, m_bsSelectedRow,
-					g_data.GetHoldingCount(m_stock_id));
+					g_data.GetHoldingCount(m_stock_id), g_data.GetCostPrice(m_stock_id));
 			}
 			else if (IsInfoPanelVisible(isIndexKLine))
 			{
@@ -2715,6 +2715,7 @@ void CFloatingWnd::OnLButtonUp(UINT nFlags, CPoint point)
 					dlg.m_is_sell = rec.isSell;
 					dlg.m_amount = rec.amount;
 					dlg.m_price = rec.price;
+					dlg.m_fee = rec.fee;
 					if (rec.time.size() >= 16)
 					{
 						dlg.m_date_text = rec.time.substr(0, 10);
@@ -2738,12 +2739,13 @@ void CFloatingWnd::OnLButtonUp(UINT nFlags, CPoint point)
 						rec.time = fullTime;
 						rec.price = dlg.m_price;
 						rec.amount = dlg.m_amount;
+						rec.fee = dlg.m_fee;
 						g_data.UpdateStockTrade(m_stock_id, rec);
 						m_bsSelectedRow = hitIdx;
 					}
 					else
 					{
-						g_data.AddStockTrade(m_stock_id, dlg.m_is_sell, fullTime, dlg.m_price, dlg.m_amount);
+						g_data.AddStockTrade(m_stock_id, dlg.m_is_sell, fullTime, dlg.m_price, dlg.m_amount, dlg.m_fee);
 						// 新记录按时间插入，定位到其所在行
 						std::vector<StockTradeRecord> updated = g_data.GetStockTrades(m_stock_id);
 						m_bsSelectedRow = -1;
