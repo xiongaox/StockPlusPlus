@@ -417,6 +417,10 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 	LoadKLineCache(STOCK::Period::MIN30);
 	LoadFundNavCache();
 
+	// 启动时按台账重算全部持仓（净持+摊薄成本），修正台账与持仓脱节的存量数据。
+	// 安全阀与台账增删改路径一致：无买入/清仓不改写，数据一致时不写盘
+	SyncAllPositionsFromLedger();
+
 	// 从数据库加载关联股票的均幅统计（只加载今天的记录）
 	for (const auto& item : m_stock_related)
 	{
@@ -1962,6 +1966,25 @@ bool CDataManager::SyncPositionFromLedger(const std::wstring& code)
 	SetPosition(code, avgCost, hold, L"");
 	SaveConfig();
 	return true;
+}
+
+int CDataManager::SyncAllPositionsFromLedger()
+{
+	// 启动/云端恢复后对全部持仓执行台账重算回填，一次性消化存量旧数据
+	//（此前回填只挂在台账增删改上，台账与持仓脱节的旧配置会一直错下去）。
+	// 安全阀与单股逻辑相同：台账无买入/重放净持为 0 时不改写。
+	int changed = 0;
+	for (const auto& code : m_setting_data.m_position_codes)
+	{
+		if (SyncPositionFromLedger(code))
+			++changed;
+	}
+	if (changed > 0)
+	{
+		std::string log = "[Ledger] startup resync corrected positions of " + std::to_string(changed) + " stock(s)";
+		CCommon::WriteLog(log.c_str(), m_log_path.c_str());
+	}
+	return changed;
 }
 
 bool CDataManager::GetShowInStatusBar(const std::wstring& code)

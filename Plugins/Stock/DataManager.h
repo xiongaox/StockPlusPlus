@@ -221,6 +221,8 @@ public:
 	// 台账增删改后自动回填持股数与摊薄成本价：仅当台账含买入且重放净持>0、摊薄成本>0 时写回
 	//（安全阀：底仓未录入台账/清仓两种情况不改写，交给 BS 提醒与手动重算；返回是否写回）
 	bool SyncPositionFromLedger(const std::wstring& code);
+	// 对全部持仓逐一执行台账重算回填（启动/云端恢复后修正存量数据），返回有改动的股票数
+	int SyncAllPositionsFromLedger();
 
 	// 状态栏展示设置
 	bool GetShowInStatusBar(const std::wstring& code);

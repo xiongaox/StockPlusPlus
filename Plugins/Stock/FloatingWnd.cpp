@@ -128,7 +128,6 @@ enum {
 	IDC_MC_REFRESH_BTN = 1028,
 	IDC_REGION_STATS_BTN = 1029,
 	IDC_TIMELINE_AXIS_BTN = 1031,	// 分时全天时间轴切换（完整9:30-15:00 / 实时跟随窗口）
-	IDC_SIM_TIME_BTN = 1033,		// 左上角模拟时间徽标（分时回测辅助，点击开关模拟时刻）
 	IDC_KLINE_PROGRESS_TIMER = 1026
 };
 
@@ -181,7 +180,6 @@ BEGIN_MESSAGE_MAP(CFloatingWnd, CWnd)
 	ON_BN_CLICKED(IDC_MC_REFRESH_BTN, &CFloatingWnd::OnBnClickedMcRefreshBtn)
 	ON_BN_CLICKED(IDC_REGION_STATS_BTN, &CFloatingWnd::OnBnClickedRegionStatsBtn)
 	ON_BN_CLICKED(IDC_TIMELINE_AXIS_BTN, &CFloatingWnd::OnBnClickedTimelineAxisBtn)
-	ON_BN_CLICKED(IDC_SIM_TIME_BTN, &CFloatingWnd::OnBnClickedSimTimeBtn)
 END_MESSAGE_MAP()
 
 int CFloatingWnd::OnCreate(LPCREATESTRUCT lpCreateStruct)
@@ -207,10 +205,9 @@ int CFloatingWnd::OnCreate(LPCREATESTRUCT lpCreateStruct)
 	m_btnMonthKLine.Create(_T("月K"), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_MONTH_KLINE_BTN);
 	m_btnRegionStats.Create(_T("区域"), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_REGION_STATS_BTN);
 	m_btnKLineSource.Create(_T(""), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_KLINE_SOURCE_BTN);
-	// 分时全天时间轴按钮（竞价胶囊左侧）：仅分时视图显示，点击在完整时间线与实时跟随窗口间切换
-	m_btnTimelineAxis.Create(_T("实时"), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_TIMELINE_AXIS_BTN);
-	// 左上角模拟时间徽标（分时回测辅助）：默认开启模拟 10:40，点击开关
-	m_btnSimTime.Create(_T("模拟:10:40"), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_SIM_TIME_BTN);
+	// 分时全天时间轴按钮（竞价胶囊左侧）：仅分时视图显示，固定文案「全天」，点亮=全天轴开启，
+	// 点击在完整时间线与实时跟随窗口间切换
+	m_btnTimelineAxis.Create(_T("全天"), WS_CHILD | BS_OWNERDRAW, CRect(0, 0, 0, 0), this, IDC_TIMELINE_AXIS_BTN);
 	m_btnCallAuction.ShowWindow(SW_HIDE);
 	m_btnTimeLine.ShowWindow(SW_HIDE);
 	m_btnKLine.ShowWindow(SW_HIDE);
@@ -219,7 +216,6 @@ int CFloatingWnd::OnCreate(LPCREATESTRUCT lpCreateStruct)
 	m_btnRegionStats.ShowWindow(SW_HIDE);
 	m_btnKLineSource.ShowWindow(SW_HIDE);
 	m_btnTimelineAxis.ShowWindow(SW_HIDE);
-	m_btnSimTime.ShowWindow(SW_HIDE);
 
 	// 右侧按钮：关闭、放大、自选折叠、筹码峰（全自绘）
 	const int closeBtnWidth = g_data.RDPI(22);
@@ -682,9 +678,7 @@ void CFloatingWnd::OnPaint()
 				auto timelineData = stockData->getTimelineData();
 				if (timelineData)
 				{
-					// 分时模拟时刻截断（回测辅助）：开启时只保留模拟时刻之前的分时点，
-					// 便于观察「全天/实时」两种X轴的盘中切换效果；仅分时数据走此分支，日K族不受影响
-					timelinePoint = ApplySimTimeCutoff(timelineData->data);
+					timelinePoint = timelineData->data;
 				}
 
 				auto klineObj = stockData->getKLineData();
@@ -724,19 +718,6 @@ void CFloatingWnd::OnPaint()
 			m_groupTabs = CStockListPanel::LayoutGroupTabs(memDC, w, headerHeight, activeGroupTab);
 			CStockListPanel::DrawGroupTabs(memDC, m_groupTabs, m_hoverGroupTab);
 			m_stockListPanel.Draw(memDC, 0, headerHeight + relatedBarHeight, stockListWidth, h - headerHeight - indexBarHeight - relatedBarHeight, m_stock_id, m_stockListScrollOffset, activeGroupTab, m_groupListSort, m_hoverSortArrow);
-		}
-
-		// 左上角模拟时间徽标（分时回测辅助）：跟在分组标签条尾部，点击开关模拟时刻；
-		// 徽标开启时显示当前模拟时刻，关闭时显示「模拟:关」
-		{
-			const int simTabH = g_data.RDPI(18);
-			const int simTop = max(1, (headerHeight - simTabH) / 2);
-			int simLeft = g_data.RDPI(5);
-			if (m_showStockList && !m_groupTabs.empty())
-				simLeft = m_groupTabs.back().rect.right + g_data.RDPI(4);
-			SafeSetWindowPos(m_btnSimTime, simLeft, simTop, g_data.RDPI(66), simTabH);
-			SafeShowWindow(m_btnSimTime, true);
-			m_btnSimTime.Invalidate();
 		}
 
 		// 顶部汇总/指标信息行：位于主图标题栏上方，仅占图表区域，不覆盖左侧列表和右侧盘口。
@@ -2528,8 +2509,7 @@ void CFloatingWnd::OnLButtonDown(UINT nFlags, CPoint point)
 						auto timelineData = stockData->getTimelineData();
 						if (timelineData)
 						{
-							// 与 OnPaint 同口径：模拟时刻截断，保证点击落点索引与绘制一致
-							timelinePoint = ApplySimTimeCutoff(timelineData->data);
+							timelinePoint = timelineData->data;
 						}
 					}
 				}
@@ -3012,7 +2992,6 @@ void CFloatingWnd::HideChartButtons(bool hide)
 	CButton* btns[] = {
 		&m_btnTimeLine, &m_btnKLine, &m_btnWeekKLine, &m_btnMonthKLine, &m_btnCallAuction, &m_btnRegionStats,
 		&m_btnTimelineAxis,	// 分时全天时间轴按钮，行情中心/设置视图一并隐藏
-		&m_btnSimTime,	// 模拟时间徽标同口径隐藏，避免串进行情中心/设置界面
 		&m_btnMA, &m_btnBoll, &m_btnIndicatorCJL, &m_btnIndicatorMACD,
 		&m_btnIndicatorKDJ, &m_btnIndicatorWR, &m_btnIndicatorRSI,
 		&m_btnChipPeak, &m_btnOrderBook, &m_btnEtfHoldings, &m_btnBsTrades,
@@ -3363,7 +3342,7 @@ void CFloatingWnd::OnMouseMove(UINT nFlags, CPoint point)
 					{
 						auto timelineData = stockData->getTimelineData();
 						if (timelineData)
-							timelinePoint = ApplySimTimeCutoff(timelineData->data);  // 与 OnPaint 同口径截断
+							timelinePoint = timelineData->data;  // 与 OnPaint 同口径
 					}
 				}
 			}
@@ -3603,8 +3582,7 @@ void CFloatingWnd::OnMouseMove(UINT nFlags, CPoint point)
 					auto timelineData = stockData->getTimelineData();
 					if (timelineData)
 					{
-						// 与 OnPaint 同口径：模拟时刻截断，保证悬停索引与绘制一致
-						timelinePoint = ApplySimTimeCutoff(timelineData->data);
+						timelinePoint = timelineData->data;
 					}
 				}
 			}
@@ -3873,38 +3851,6 @@ void CFloatingWnd::ApplyTimelineAxisPrefs()
 	Invalidate();
 }
 
-void CFloatingWnd::OnBnClickedSimTimeBtn()
-{
-	// 开关分时模拟时刻（会话内生效，不写 ini）：切换后分时序列长度变化，
-	// 重置跟随偏移与悬停状态，立即按新时刻整窗重绘
-	m_simTimeEnabled = !m_simTimeEnabled;
-	m_timelineScrollOffset = -1;
-	m_timelineLastTotalPoints = 0;
-	ResetHoverState();
-	if (m_btnSimTime.GetSafeHwnd())
-		m_btnSimTime.Invalidate();
-	Invalidate();
-}
-
-std::vector<STOCK::TimelinePoint> CFloatingWnd::ApplySimTimeCutoff(const std::vector<STOCK::TimelinePoint>& data) const
-{
-	if (!m_simTimeEnabled || data.empty())
-		return data;
-	// TimelinePoint::time 为 std::string（"HH:MM"或"HH:MM:SS"），用窄字符时刻串做前5位字典序比较
-	CStringA cutoffA;
-	cutoffA.Format("%02d:%02d", m_simTimeMinutes / 60, m_simTimeMinutes % 60);
-	std::vector<STOCK::TimelinePoint> out;
-	out.reserve(data.size());
-	for (const auto& tp : data)
-	{
-		// 分时数据按时间升序，超出模拟时刻即停止（调用方仅在分时数据分支使用，日K族日期串不经过此处）
-		if (tp.time.size() >= 5 && tp.time.compare(0, 5, cutoffA.GetString()) > 0)
-			break;
-		out.push_back(tp);
-	}
-	return out;
-}
-
 void CFloatingWnd::ClearRegionSelection(bool exitMode)
 {
 	if (exitMode)
@@ -4065,10 +4011,6 @@ void CFloatingWnd::UpdateModeButtons()
 		bool showTimelineAxisBtns = (m_viewMode == UI_VIEW_TIMELINE && !m_expandedMode);
 		SafeShowWindow(m_btnTimelineAxis, showTimelineAxisBtns);
 		if (m_btnTimelineAxis.GetSafeHwnd()) m_btnTimelineAxis.Invalidate();
-
-		// 左上角模拟时间徽标：图表视图显示（OnPaint 负责定位），总览模式隐藏（行情中心/设置由 HideChartButtons 处理）
-		SafeShowWindow(m_btnSimTime, m_viewMode != UI_VIEW_OVERVIEW);
-		if (m_btnSimTime.GetSafeHwnd()) m_btnSimTime.Invalidate();
 
 		// 副图指标按钮在所有模式下显示（除总览模式、放大模式和竞价模式外）
 		bool showIndicatorBtns = m_viewMode != UI_VIEW_OVERVIEW && !m_expandedMode && m_viewMode != UI_VIEW_AUCTION;
@@ -4860,16 +4802,7 @@ void CFloatingWnd::OnDrawItem(int nIDCtl, LPDRAWITEMSTRUCT lpDrawItemStruct)
 	else if (nID == IDC_WEEK_KLINE_BTN) text = _T("周K");
 	else if (nID == IDC_MONTH_KLINE_BTN) text = _T("月K");
 	else if (nID == IDC_REGION_STATS_BTN) text = _T("区域");
-	else if (nID == IDC_TIMELINE_AXIS_BTN) text = m_timelineFullAxis ? _T("全天") : _T("实时");
-	else if (nID == IDC_SIM_TIME_BTN)
-	{
-		// 左上角模拟时间徽标：开启时亮显当前模拟时刻，关闭时灰色显示「模拟:关」
-		isActive = m_simTimeEnabled;
-		if (m_simTimeEnabled)
-			text.Format(_T("模拟:%02d:%02d"), m_simTimeMinutes / 60, m_simTimeMinutes % 60);
-		else
-			text = _T("模拟:关");
-	}
+	else if (nID == IDC_TIMELINE_AXIS_BTN) text = _T("全天");	// 固定文案，点亮=全天轴开启
 	else if (nID == IDC_CHIP_PEAK_BTN) text = _T("CM");
 	else if (nID == IDC_ORDER_BOOK_BTN) text = _T("PK");
 	else if (nID == IDC_ETF_HOLDINGS_BTN) text = _T("CC");

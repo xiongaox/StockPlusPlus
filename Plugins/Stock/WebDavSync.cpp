@@ -607,6 +607,9 @@ bool CWebDavSync::ApplyBackupPayload(const std::string& payload, std::wstring& e
 	outFile.close();
 
 	g_data.LoadConfig(L"");
+	// LoadConfig 内已含启动台账重算；此处显式补一次作为恢复路径兜底
+	//（幂等：数据一致时不会重复写盘），确保恢复后台账与持仓必然一致
+	g_data.SyncAllPositionsFromLedger();
 	if (ledgerRestored != nullptr)
 		*ledgerRestored = hasLedger;
 	return true;

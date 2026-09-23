@@ -149,7 +149,6 @@ protected:
 	afx_msg void OnBnClickedCallAuctionBtn();
 	afx_msg void OnBnClickedKLineSourceBtn();
 	afx_msg void OnBnClickedTimelineAxisBtn();   // 分时全天时间轴切换（完整9:30-15:00 / 实时跟随窗口）
-	afx_msg void OnBnClickedSimTimeBtn();        // 左上角模拟时间徽标点击（开关分时模拟时刻）
 
 private:
 	void EnsureChipPeakData();
@@ -159,9 +158,6 @@ private:
 	int GetTimelineAxisSlots() const;
 	// 分时轴偏好（时间轴/价格轴开关）变化后统一收口：同步可见点数、持久化设置并重绘
 	void ApplyTimelineAxisPrefs();
-	// 分时模拟时刻截断：开启模拟时返回 time<=模拟时刻 的序列副本（模拟时刻之后的数据不参与绘制与交互）；
-	// 关闭时原样返回。日K族数据（"MM-DD"日期串）恒小于 "HH:MM" 时刻串，天然不受影响
-	std::vector<STOCK::TimelinePoint> ApplySimTimeCutoff(const std::vector<STOCK::TimelinePoint>& data) const;
 	void ResetHoverState();           // 重置所有悬停状态
 	void SetTimelineModeDefaults();   // 设置分时模式默认参数
 	void SetDayKLineModeDefaults();   // 设置日K模式默认参数
@@ -232,7 +228,6 @@ private:
 	CButton m_btnMcRefresh;       // 行情中心手动刷新按钮（设置左侧，仅行情中心视图可见；无视新鲜度强制重拉当前页数据）
 	CButton m_btnCallAuction;     // 集合竞价按钮
 	CButton m_btnTimelineAxis;    // 分时全天时间轴切换（全天/实时，仅分时视图，贴竞价胶囊左侧）
-	CButton m_btnSimTime;         // 左上角模拟时间徽标（分时回测辅助：显示并开关模拟时刻，仅会话内生效）
 	CButton m_btnIndicatorCJL;  // CJL指标按钮
 	CButton m_btnIndicatorMACD;  // MACD信号按钮
 	CButton m_btnIndicatorKDJ;   // KDJ指标按钮
@@ -248,10 +243,6 @@ private:
 	UIViewMode m_viewMode{ UI_VIEW_DAY_KLINE };  // 当前界面视图模式
 	// 分时轴偏好（与 g_data.m_setting_data 持久化键保持双向同步）
 	bool m_timelineFullAxis{ false };   // 分时X轴完整时间线（9:30-15:00 铺满，随时间同步推进）
-	// 分时模拟时刻（回测辅助）：开启后分时序列按模拟时刻截断，便于观察「全天/实时」两种X轴的盘中切换效果；
-	// 仅会话内生效，不写入 ini。左上角徽标显示当前模拟时刻，点击开关。
-	bool m_simTimeEnabled{ true };
-	int m_simTimeMinutes{ 10 * 60 + 40 };  // 模拟时刻：10:40（按分钟计）
 	bool m_klineDataLoaded{ false };
 	int m_klinePeriodDays{ 250 };
 	int m_scrollOffset{ 0 };
