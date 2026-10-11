@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <ctime>
+#include <atomic>
 #include <functional>
 #include "StockDef.h"
 
@@ -71,9 +72,18 @@ private:
 	// 上金所品种（118.* 前缀）专用：跳过腾讯/新浪，直接走东财 K 线接口（klt=101/102/103）
 	bool FetchSgeKLine(const std::wstring& code, int klt, int lmt, const wchar_t* stage, std::string& outResp);
 
-	// 东方财富接口失败缓存：WAF 拦截 WinINet 后，一段时间内不再尝试
-	// 值为失败截止时间戳（秒），0 表示未缓存
-	time_t m_eastmoney_fail_until{ 0 };
+	// 东方财富接口失败缓存：WAF 拦截 WinINet 后，一段时间内不再尝试。
+	// 值为失败截止时间戳（秒），0 表示未缓存；冷却时长指数退避（NoteEastMoneyFailure 维护），
+	// 旧值固定 5 秒等于每 5 秒撞一次 WAF，容易升级为长期封禁。
+	// atomic：取数线程与焦点股线程并发读写
+	std::atomic<time_t> m_eastmoney_fail_until{ 0 };
+	// 连续失败次数（退避计算用），仅与 fail_until 配套读写
+	std::atomic<int> m_eastmoney_fail_streak{ 0 };
+
+	// 东财请求失败：按连续失败次数指数退避（60s 起步、翻倍、封顶 10 分钟）
+	void NoteEastMoneyFailure();
+	// 东财请求成功：清零失败状态，恢复正常取数
+	void ResetEastMoneyFailure();
 	FetchStatusCallback m_status_cb;
 };
 
