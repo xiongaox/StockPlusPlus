@@ -251,26 +251,28 @@ dumpbin /headers bin\ARM64EC\Release\Stock.dll | Select-String "machine|a64xrm|h
 
 **「接口检测」页的通达信直连显示灰色「● 可优化」属正常状态**——不是故障，只是提示：部署后 A 股现价刷新可从 2 秒进一步优化到 1 秒，不部署也完全可用。
 
-### 部署方法（两种任选）
+### 部署方法
 
-**方式一：直接运行 Python 脚本**（目标机器装 Python 3.8+）：
+**方式一：下载现成的 exe（推荐，目标机零依赖）**
+
+仓库已内置打包好的 [tools/getPrice.exe](./tools/getPrice.exe)（约 43MB，Python 环境与全部依赖已内嵌）：
+
+```bash
+# 浏览器直接下载，或命令行：
+curl -L -o getPrice.exe https://github.com/xiongaox/StockPlusPlus/raw/dev/tools/getPrice.exe
+```
+
+下载后放到 **`Stock.dll` 同目录**（TrafficMonitor 的插件目录），重启 TrafficMonitor 即可。
+
+**方式二：用 Python 直接跑脚本**（开发/自打包场景）：
 
 ```bash
 pip install pytdx pywin32 requests
 python tools/getPrice.py
 ```
+想自己打成免环境 exe：`pip install pyinstaller` 后在 tools 目录执行 `pyinstaller --onefile getPrice.py`。
 
-**方式二：打包成免环境 exe**（推荐给没有 Python 的机器）：
-
-```bash
-pip install pytdx pywin32 requests pyinstaller
-cd tools
-pyinstaller --onefile getPrice.py
-# 产物 dist/getPrice.exe 拷贝到 Stock.dll 同目录
-```
-
-部署或打包后，把 `getPrice.exe`（或直接运行脚本）放在 **`Stock.dll` 同目录**，重启 TrafficMonitor 即可。
-它会读取同目录 `Stock.ini` 的自选股列表——该文件由插件自动生成与维护（TrafficMonitor 的配置目录或插件同目录，插件跑过一次就有），自选变化会自动跟随；全新环境没有 ini 时程序用内置默认自选照常运行，插件首次保存配置后下次启动自动接管。盘中每 1 秒推送、非交易时段自动降到每 10 秒。
+部署后它会读取同目录 `Stock.ini` 的自选股列表——该文件由插件自动生成与维护（TrafficMonitor 的配置目录或插件同目录，插件跑过一次就有），自选变化会自动跟随；全新环境没有 ini 时程序用内置默认自选照常运行，插件首次保存配置后下次启动自动接管。盘中每 1 秒推送、非交易时段自动降到每 10 秒。
 不想用了直接删掉 exe，插件自动回退 HTTP 轮询。
 
 ---
