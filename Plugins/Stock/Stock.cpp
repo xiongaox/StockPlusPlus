@@ -124,6 +124,10 @@ Stock::Stock() : m_pFloatingWnd(NULL)
 
 Stock::~Stock()
 {
+	// 先等 WebDAV 自动同步线程结束：它内部会重载配置、重建台账并触 UI 请求，
+	// 必须在浮动窗销毁与抓取线程停止之前完成，也必须在全局对象析构（DLL 卸载期）前结束
+	if (m_webdav_sync_thread.joinable())
+		m_webdav_sync_thread.join();
 	DestroyFloatingWnd();
 	CMarketCenterData::Instance().StopExecutor();
 	CStockFetchThread::Instance().Stop();
@@ -247,7 +251,11 @@ void Stock::OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data)
 		// 检查是否开启了启动时自动同步 WebDAV 云端备份
 		if (g_data.m_setting_data.m_webdav_auto_sync && !g_data.m_setting_data.m_webdav_url.empty())
 		{
-			std::thread([]() {
+			// 受管线程（可 join）：detach 的线程会在宿主退出、DLL 卸载后继续执行
+			// g_data/DB 相关代码，导致退出崩溃。重复进入此分支时先等上一轮结束
+			if (m_instance.m_webdav_sync_thread.joinable())
+				m_instance.m_webdav_sync_thread.join();
+			m_instance.m_webdav_sync_thread = std::thread([]() {
 				AFX_MANAGE_STATE(AfxGetStaticModuleState());
 				std::wstring errMsg;
 				if (CWebDavSync::DownloadBackup(g_data.m_setting_data, errMsg))
@@ -260,7 +268,7 @@ void Stock::OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data)
 					//（「本地较新跳过」「空台账拒绝恢复」这类防护性跳过也会出现在这里）
 					CCommon::WriteLog((L"[WebDAV] 启动自动同步未应用云端备份: " + errMsg).c_str(), g_data.m_log_path.c_str());
 				}
-			}).detach();
+			});
 		}
 		break;
 	case ITMPlugin::EI_TASKBAR_WND_VALUE_RIGHT_ALIGN:
