@@ -351,6 +351,10 @@ int StockItem::DrawSingleStock(CDC* pDC, const std::wstring& code, int x, int y,
 		double curPrice = (data->info.currentPrice > 0.0001 ? data->info.currentPrice : effPrevToday);
 		// 叠加今日成交修正：把当天卖出/买回部分相对昨收的差价算进来（做T、减仓当天口径与券商一致）
 		double todayProfit = (curPrice - effPrevToday) * holdingCount + g_data.GetTodayTradeAdjust(code, effPrevToday);
+		// 收益率分母用昨收持股市值：当天有买卖时填写的持股数已减去卖出量，
+		// 需按今日成交还原回昨收持股，与悬浮窗"当日盈亏%"口径一致（无成交即等于持股数）
+		double todayProfitBase = effPrevToday * g_data.GetYesterdayHoldCount(code);
+		double todayProfitPercent = todayProfitBase > 0 ? todayProfit / todayProfitBase * 100.0 : 0.0;
 		CString strProfit;
 		if (todayProfit > 0.0001)
 			strProfit.Format(_T("【+%s】"), CCommon::FormatAmount(todayProfit).GetString());
@@ -358,6 +362,11 @@ int StockItem::DrawSingleStock(CDC* pDC, const std::wstring& code, int x, int y,
 			strProfit.Format(_T("【-%s】"), CCommon::FormatAmount(-todayProfit).GetString());
 		else
 			strProfit = _T("【0.00】");
+
+		// 【】内是持仓收益，须按收益自身的正负着色，不能沿用上面涨跌幅的颜色：
+		// 例如盘中 2% 买入、现价回落到 1%（当日仍红），买入部分相对现价是亏的，
+		// 券商口径的当日参考盈亏为负，此处应显示绿色。分母取昨收持股市值（与悬浮窗"当日盈亏%"同口径）。
+		pDC->SetTextColor(CCommon::GetProfitLossColor(todayProfitPercent));
 
 		CRect rect_profit{ rect_value };
 		rect_profit.left = rect_diff.right;
