@@ -148,7 +148,7 @@ void CApiHealthManager::DoActiveProbes()
 		}
 		else
 		{
-			RecordPoint(API_TDX, 0, 404, LEVEL_NEUTRAL, L"HTTP 轮询模式 · 部署 getPrice 可进一步优化 (见 README)");
+			RecordPoint(API_TDX, 0, 404, LEVEL_NEUTRAL, L"HTTP 轮询模式 · 放入 getPrice.exe 可升级为 1 秒直连 (见 README)");
 		}
 	}
 
