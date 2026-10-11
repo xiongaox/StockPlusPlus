@@ -111,9 +111,6 @@
     <ClInclude Include="StockDbManager.h">
       <Filter>DataManager</Filter>
     </ClInclude>
-    <ClInclude Include="SmartSignalTestDlg.h">
-      <Filter>FloatingWnd</Filter>
-    </ClInclude>
     <ClInclude Include="StockListPanel.h">
       <Filter>FloatingWnd</Filter>
     </ClInclude>
@@ -136,9 +133,6 @@
       <Filter>FloatingWnd</Filter>
     </ClInclude>
     <ClInclude Include="StatusBarPanel.h">
-      <Filter>FloatingWnd</Filter>
-    </ClInclude>
-    <ClInclude Include="KLineChart.h">
       <Filter>FloatingWnd</Filter>
     </ClInclude>
     <ClInclude Include="TimelineChart.h">
@@ -224,9 +218,6 @@
     <ClCompile Include="StockDbManager.cpp">
       <Filter>DataManager</Filter>
     </ClCompile>
-    <ClCompile Include="SmartSignalTestDlg.cpp">
-      <Filter>FloatingWnd</Filter>
-    </ClCompile>
     <ClCompile Include="StockListPanel.cpp">
       <Filter>FloatingWnd</Filter>
     </ClCompile>
@@ -249,9 +240,6 @@
       <Filter>FloatingWnd</Filter>
     </ClCompile>
     <ClCompile Include="StatusBarPanel.cpp">
-      <Filter>FloatingWnd</Filter>
-    </ClCompile>
-    <ClCompile Include="KLineChart.cpp">
       <Filter>FloatingWnd</Filter>
     </ClCompile>
     <ClCompile Include="TimelineChart.cpp">

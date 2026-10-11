@@ -283,7 +283,6 @@
     <ClInclude Include="OrderBookPanel.h" />
     <ClInclude Include="OverviewPanel.h" />
     <ClInclude Include="StatusBarPanel.h" />
-    <ClInclude Include="KLineChart.h" />
     <ClInclude Include="TimelineChart.h" />
     <ClInclude Include="DataManager.h" />
     <ClInclude Include="MarketCenterData.h" />
@@ -291,7 +290,6 @@
     <ClInclude Include="FloatingWnd.h" />
     <ClInclude Include="SignalAnalyzer.h" />
     <ClInclude Include="StockIndicator.h" />
-    <ClInclude Include="SmartSignalTestDlg.h" />
     <ClInclude Include="StockFetchThread.h" />
     <ClInclude Include="StockHttpFetcher.h" />
     <ClInclude Include="ApiHealthManager.h" />
@@ -325,7 +323,6 @@
     <ClCompile Include="OrderBookPanel.cpp" />
     <ClCompile Include="OverviewPanel.cpp" />
     <ClCompile Include="StatusBarPanel.cpp" />
-    <ClCompile Include="KLineChart.cpp" />
     <ClCompile Include="TimelineChart.cpp" />
     <ClCompile Include="DataManager.cpp" />
     <ClCompile Include="MarketCenterData.cpp" />
@@ -334,7 +331,6 @@
     <ClCompile Include="LocalHttpProxy.cpp" />
     <ClCompile Include="SignalAnalyzer.cpp" />
     <ClCompile Include="StockIndicator.cpp" />
-    <ClCompile Include="SmartSignalTestDlg.cpp" />
     <ClCompile Include="StockFetchThread.cpp" />
     <ClCompile Include="StockHttpFetcher.cpp" />
     <ClCompile Include="ApiHealthManager.cpp" />

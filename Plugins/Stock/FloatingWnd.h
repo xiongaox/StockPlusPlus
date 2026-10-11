@@ -18,7 +18,6 @@
 #include "OverviewPanel.h"
 #include "IndicatorChart.h"
 #include "StatusBarPanel.h"
-#include "KLineChart.h"
 #include "TimelineChart.h"
 #include "MarketCenterPanel.h"
 
@@ -212,7 +211,6 @@ private:
 	COverviewPanel m_overviewPanel;
 	CIndicatorChart m_indicatorChart;
 	CStatusBarPanel m_statusBarPanel;
-	CKLineChart m_kLineChart;
 	CTimelineChart m_timelineChart;
 	CButton m_btnTimeLine;
 	CButton m_btnKLine;
@@ -317,8 +315,6 @@ private:
 	double m_pendingTradePrice{ 0.0 };
 
 	// 日K线鼠标悬停数据
-	bool m_isHoveringKLine{ false };
-	bool m_isHoveringKLineVolume{ false };
 	bool m_isHoveringKDJ{ false };
 	bool m_showTrendView{ false };
 	bool m_showChipPeak{ false };
@@ -359,10 +355,7 @@ private:
 	bool m_showBollBands{ true };
 	volatile bool m_chartDirty{ false };      // 图表数据更新标识（走势图/K线/MACD等），由PostMessage设置
 	volatile bool m_orderBookDirty{ false };  // 盘口数据更新标识（五档/成交/净比等），由共享内存回调设置
-	int m_klineHoveredBarIndex{ -1 };
-	CString m_klineHoverTip;
 	CString m_klineVolumeHoverTip;
-	CString m_klineTrendHoverTip;
 	CString m_kdjHoverTip;
 
 	// 5分钟K线图整点时间标签（X轴：centerX, "h:mm"）

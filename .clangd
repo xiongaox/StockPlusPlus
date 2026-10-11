@@ -1,0 +1,6 @@
+# clangd 项目配置（由 DSH 助手生成）
+# StockPlusPlus 使用 MSVC + MFC 构建，无法在 Linux 下直接编译；
+# 这里给出等价的 clang 命令行，仅用于跨平台的编辑/静态分析（跳转、补全、诊断）。
+# 头文件直接复用 Windows 上已安装的 MSVC 14.44 与 Windows SDK 10.0.26100（只读访问 /mnt）。
+CompileFlags:
+  CompilationDatabase: /home/xiongaox/.cache/stockpp-db
