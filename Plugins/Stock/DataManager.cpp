@@ -2699,7 +2699,8 @@ void CDataManager::RenameCustomGroup(size_t index, const std::wstring& newName)
 
 bool CDataManager::AddStockToGroup(int groupIndex, const std::wstring& code)
 {
-	if (code.empty()) return false;
+	// 代码会拼进 HTTP 头（Referer）与 URL，来源含远程搜索接口，入库前必须校验字符集
+	if (!CCommon::IsValidStockCode(code)) return false;
 	if (groupIndex == kTabWatchlist) // 自选股
 	{
 		auto& codes = m_setting_data.m_stock_codes;

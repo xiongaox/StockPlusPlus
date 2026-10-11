@@ -184,11 +184,14 @@ bool CNetFetch::FetchOnce(const std::wstring& url, std::string& result,
 		DWORD statusCode = 0;
 		pFile->QueryInfoStatusCode(statusCode);
 
-		// 读取响应体
+		// 读取响应体（64MB 上限：上游被劫持/WAF 异常页返回超大 body 时防 OOM）
+		constexpr DWORD kMaxResponseBody = 64 * 1024 * 1024;
 		char buf[8192];
 		UINT nRead;
 		while ((nRead = pFile->Read(buf, sizeof(buf))) > 0)
 		{
+			if (result.size() + nRead > kMaxResponseBody)
+				return false;
 			result.append(buf, nRead);
 		}
 

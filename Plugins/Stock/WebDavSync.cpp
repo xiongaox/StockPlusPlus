@@ -345,10 +345,20 @@ DWORD CWebDavSync::ExecuteDavRequest(const SettingData& settings, const wchar_t*
 
 		if (responseOut)
 		{
+			// 64MB 上限：服务器异常返回超大响应时防 OOM（正常备份文件远小于此）
+			constexpr DWORD kMaxDavResponse = 64 * 1024 * 1024;
 			char buf[8192];
 			UINT nRead = 0;
 			while ((nRead = pFile->Read(buf, sizeof(buf))) > 0)
+			{
+				if (responseOut->size() + nRead > kMaxDavResponse)
+				{
+					statusCode = 0;
+					errorMsg = L"WebDAV 响应体超过 64MB，已中止读取";
+					break;
+				}
 				responseOut->append(buf, nRead);
+			}
 		}
 	}
 	catch (CInternetException* e)

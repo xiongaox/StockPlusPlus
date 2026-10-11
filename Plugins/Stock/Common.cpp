@@ -441,6 +441,22 @@ bool CCommon::IsEmSecidCode(const std::wstring& code)
 	return true;
 }
 
+bool CCommon::IsValidStockCode(const std::wstring& code)
+{
+	// 只允许字母/数字/点/下划线（覆盖 sh600519、gb_nvda.oq、118.AUTD 等全部形态），
+	// 长度上限 32；拒绝 \r\n、空格、引号等可注入 HTTP 头/URL 的字符
+	if (code.empty() || code.size() > 32)
+		return false;
+	for (wchar_t c : code)
+	{
+		bool ok = (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z')
+			|| c == L'.' || c == L'_';
+		if (!ok)
+			return false;
+	}
+	return true;
+}
+
 bool CCommon::IsEmSecidCode(const std::string& code)
 {
 	size_t dot = code.find('.');
