@@ -16,6 +16,15 @@ struct WebDavBackupEntry
 class CWebDavSync
 {
 public:
+	// WebDAV 密码的本机加密存取（DPAPI，CryptProtectData，CurrentUser 范围）。
+	// 落盘形态为 "enc:" 前缀 + Base64(密文)；明文（无前缀）视为旧版本数据，读入后兼容。
+	// 注意：DPAPI 密文换机器/换用户不可解密——因此备份载荷中的密码保持 ini 原文不做转换，
+	// 跨机器恢复后密码失效时用户在设置页重填一次即可（提示语见设置页）
+	// 加密：明文 -> "enc:..."；失败时原样返回（降级为明文，不阻断）
+	static std::wstring ProtectPassword(const std::wstring& plain);
+	// 解密："enc:..." -> 明文；无前缀原样返回（旧版明文兼容）；解密失败返回空串
+	static std::wstring UnprotectPassword(const std::wstring& stored);
+
 	// 测试与 WebDAV 服务器的连接和认证状态
 	static bool TestConnection(const SettingData& settings, std::wstring& errorMsg);
 

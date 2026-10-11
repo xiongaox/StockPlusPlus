@@ -4,6 +4,7 @@
 #include "Common.h"
 #include "Stock.h"
 #include "utilities/yyjson/yyjson.h"
+#include "../utilities/bass64/base64.h"
 #include <afxinet.h>
 #include <wincrypt.h>
 #include <sstream>
@@ -119,6 +120,71 @@ static bool IsValidRemoteFileName(const std::wstring& name)
 // 备份载荷的台账段标记：ini 全文之后另起一行，中间是单行 JSON，恢复时按标记切分。
 // 标记写成 ini 注释形态，旧版本插件读到含台账段的备份也只当普通注释，不会误解析
 const char* CWebDavSync::kTradeLedgerBeginMarker = "; --- StockPlusPlus trade ledger (do not edit) ---";
+
+// WebDAV 密码 DPAPI 加密存储 =================================================
+
+namespace
+{
+	const wchar_t kPasswordEncPrefix[] = L"enc:";
+
+	std::string WideToUtf8(const std::wstring& w)
+	{
+		return CCommon::UnicodeToStr(w, true);
+	}
+
+	std::wstring Utf8ToWide(const std::string& s)
+	{
+		return CCommon::StrToUnicode(s.c_str(), true);
+	}
+}
+
+std::wstring CWebDavSync::ProtectPassword(const std::wstring& plain)
+{
+	if (plain.empty())
+		return plain;
+	// 已是密文形态则原样返回（重复加密会丢失可解密性）
+	if (plain.compare(0, 4, kPasswordEncPrefix) == 0)
+		return plain;
+
+	std::string utf8 = WideToUtf8(plain);
+	std::vector<BYTE> plainBytes(utf8.begin(), utf8.end());
+	DATA_BLOB in{}, out{};
+	in.pbData = plainBytes.data();
+	in.cbData = static_cast<DWORD>(plainBytes.size());
+	// CRYPTPROTECT_UI_FORBIDDEN：后台线程/服务场景不允许弹 UI
+	if (!CryptProtectData(&in, L"StockPlusPlus.WebDavPwd", nullptr, nullptr, nullptr,
+		CRYPTPROTECT_UI_FORBIDDEN, &out))
+	{
+		return plain;	// 加密失败降级为明文（不阻断登录流程），下次保存时重试
+	}
+	std::string cipher(reinterpret_cast<const char*>(out.pbData), out.cbData);
+	LocalFree(out.pbData);
+	return std::wstring(kPasswordEncPrefix) + CCommon::StrToUnicode(CWebDavSync::Base64Encode(cipher).c_str(), true);
+}
+
+std::wstring CWebDavSync::UnprotectPassword(const std::wstring& stored)
+{
+	if (stored.empty())
+		return stored;
+	if (stored.compare(0, 4, kPasswordEncPrefix) != 0)
+		return stored;	// 旧版本明文，直接使用
+
+	std::string cipherStr = utilities::Base64Decode(WideToUtf8(stored.substr(4)));
+	if (cipherStr.empty())
+		return L"";
+	std::vector<BYTE> cipher(cipherStr.begin(), cipherStr.end());
+	DATA_BLOB in{}, out{};
+	in.pbData = cipher.data();
+	in.cbData = static_cast<DWORD>(cipher.size());
+	if (!CryptUnprotectData(&in, nullptr, nullptr, nullptr, nullptr,
+		CRYPTPROTECT_UI_FORBIDDEN, &out))
+	{
+		return L"";	// 换机器/换用户后密文不可解密，让用户重填
+	}
+	std::string utf8(reinterpret_cast<const char*>(out.pbData), out.cbData);
+	LocalFree(out.pbData);
+	return Utf8ToWide(utf8);
+}
 const char* CWebDavSync::kTradeLedgerEndMarker = "; --- end trade ledger ---";
 
 std::string CWebDavSync::Base64Encode(const std::string& input)

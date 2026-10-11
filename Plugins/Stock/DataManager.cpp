@@ -9,6 +9,7 @@
 
 #include <sstream>
 #include "../utilities/IniHelper.h"
+#include "WebDavSync.h"
 #include "sqlite3.h"
 #include <algorithm>
 #include <cmath>
@@ -285,7 +286,10 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 	// WebDAV 云端备份配置
 	m_setting_data.m_webdav_url = ini.GetString(L"webdav", L"url", L"https://dav.jianguoyun.com/dav/");
 	m_setting_data.m_webdav_username = ini.GetString(L"webdav", L"username", L"");
-	m_setting_data.m_webdav_password = ini.GetString(L"webdav", L"password", L"");
+	// 密码落盘形态：DPAPI 密文（"enc:" 前缀）。旧版明文无前缀，直接兼容使用，
+	// 下次 SaveConfig 时会被加密回写（无缝升级）；
+	// 备份恢复带来的他机密文解密失败时得到空串，用户在设置页重填即可
+	m_setting_data.m_webdav_password = CWebDavSync::UnprotectPassword(ini.GetString(L"webdav", L"password", L""));
 	m_setting_data.m_webdav_dir = ini.GetString(L"webdav", L"dir", L"/TrafficMonitor/Stock/");
 	m_setting_data.m_webdav_auto_sync = ini.GetBool(L"webdav", L"auto_sync", false);
 	m_setting_data.m_webdav_auto_backup = ini.GetBool(L"webdav", L"auto_backup", false);
@@ -810,10 +814,10 @@ void CDataManager::SaveConfig()
 		ini.WriteStringList(L"config", L"header_metrics", m_setting_data.m_header_metrics);
 		ini.WriteBool(L"config", L"migrated_group_v3", true);
 
-		// 保存 WebDAV 云端备份配置
+		// 保存 WebDAV 云端备份配置（密码以 DPAPI 密文落盘，不再存明文）
 		ini.WriteString(L"webdav", L"url", m_setting_data.m_webdav_url);
 		ini.WriteString(L"webdav", L"username", m_setting_data.m_webdav_username);
-		ini.WriteString(L"webdav", L"password", m_setting_data.m_webdav_password);
+		ini.WriteString(L"webdav", L"password", CWebDavSync::ProtectPassword(m_setting_data.m_webdav_password));
 		ini.WriteString(L"webdav", L"dir", m_setting_data.m_webdav_dir);
 		ini.WriteBool(L"webdav", L"auto_sync", m_setting_data.m_webdav_auto_sync);
 		ini.WriteBool(L"webdav", L"auto_backup", m_setting_data.m_webdav_auto_backup);
