@@ -623,17 +623,30 @@ bool CWebDavSync::ApplyBackupPayload(const std::string& payload, std::wstring& e
 	}
 
 	std::wstring configPath = g_data.GetConfigPath();
-	std::ofstream outFile(configPath, std::ios::binary | std::ios::trunc);
-	if (!outFile.is_open())
+	// 原子写入：先写 .tmp 再替换，写一半崩溃不会把本地配置截成半截
 	{
-		// 台账重建已完成（事务提交），此时如实说明，避免用户以为整份恢复都没生效
-		errorMsg = hasLedger
-			? (L"台账已恢复，但写入本地配置文件失败: " + configPath)
-			: (L"无法写入本地配置文件: " + configPath);
-		return false;
+		std::wstring tmpPath = configPath + L".tmp";
+		std::ofstream tmpFile(tmpPath, std::ios::binary | std::ios::trunc);
+		if (!tmpFile.is_open())
+		{
+			// 台账重建尚未开始执行到这里之前已处理；台账已重建时如实说明
+			errorMsg = hasLedger
+				? (L"台账已恢复，但写入本地配置文件失败: " + configPath)
+				: (L"无法写入本地配置文件: " + configPath);
+			return false;
+		}
+		tmpFile.write(configData.data(), static_cast<std::streamsize>(configData.size()));
+		tmpFile.close();
+		if (!MoveFileExW(tmpPath.c_str(), configPath.c_str(),
+			MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+		{
+			DeleteFileW(tmpPath.c_str());
+			errorMsg = hasLedger
+				? (L"台账已恢复，但替换本地配置文件失败: " + configPath)
+				: (L"替换本地配置文件失败: " + configPath);
+			return false;
+		}
 	}
-	outFile.write(configData.data(), static_cast<std::streamsize>(configData.size()));
-	outFile.close();
 
 	g_data.LoadConfig(L"");
 	// LoadConfig 内已含启动台账重算；此处显式补一次作为恢复路径兜底
