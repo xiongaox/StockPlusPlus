@@ -47,6 +47,8 @@ public:
 
 	// 工作线程是否正忙于执行常规任务
 	bool IsBusy() const { return m_busy.load(); }
+	// 插件是否正在停止（长任务链应尽早检查并放弃，避免 Stop() 长时间等待）
+	bool IsStopping() const { return m_stopping.load(); }
 	// 工作线程是否正忙于执行集合竞价任务
 	bool IsCallAuctionBusy() const { return m_callAuction_busy.load(); }
 
