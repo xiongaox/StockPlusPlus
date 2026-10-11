@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <atomic>
 #include <ctime>
 
 // 网络抓取模块：封装通过 WinINet（CInternetSession）发起 HTTP 请求的逻辑，
@@ -34,6 +35,7 @@ private:
 		const std::wstring& proxy, int connect_timeout);
 
 	// 直连失败后"优先代理"状态的缓存（避免每次都等直连超时）
-	static bool s_prefer_proxy;
-	static std::time_t s_prefer_proxy_until;
+	// atomic：实时线程/K线线程/行情中心线程/健康探测线程并发读写
+	static std::atomic<bool> s_prefer_proxy;
+	static std::atomic<std::time_t> s_prefer_proxy_until;
 };

@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "Common.h"
+#include <mutex>
 #include <afxinet.h>    //用于支持使用网络相关的类
 #include <sstream>
 #include <iomanip>
@@ -61,6 +62,10 @@ void CCommon::WriteLog(const WORD w, LPCTSTR file_path)
 
 void CCommon::WriteLog(const char* str_text, LPCTSTR file_path)
 {
+	// 去重缓存与文件写入加锁：图表/实时/监听/UI 多线程并发写日志，
+	// std::string 竞写会堆损坏（不只是日志串行错乱）
+	static std::mutex s_log_mutex;
+	std::lock_guard<std::mutex> lock(s_log_mutex);
 	static std::string last_text;
 	//过滤相同内容的日志
 	if (last_text != str_text)

@@ -120,7 +120,7 @@ private:
 	void FetchAllFundsIOPV();               // 获取下一个非关注基金的IOPV
 
 	// 实时行情定时获取
-	time_t m_realtime_last_fetch = 0;	// 上次获取实时行情的时间
+	std::atomic<time_t> m_realtime_last_fetch{ 0 };	// 上次获取实时行情的时间（实时线程与监听线程并发读写）
 	static const time_t REALTIME_INTERVAL_TRADING = 2;	// 盘中实时行情间隔（秒）
 	static const time_t REALTIME_INTERVAL_LUNCH = 60;	// 午休期间间隔（秒）
 

@@ -6,8 +6,8 @@
 #include <afxinet.h>
 #include <vector>
 
-bool CNetFetch::s_prefer_proxy = false;
-std::time_t CNetFetch::s_prefer_proxy_until = 0;
+std::atomic<bool> CNetFetch::s_prefer_proxy{ false };
+std::atomic<std::time_t> CNetFetch::s_prefer_proxy_until{ 0 };
 
 // 代理模式下，直连失败后"优先代理"状态的缓存时长（秒）
 static const int PROXY_CACHE_SECONDS = 120;
