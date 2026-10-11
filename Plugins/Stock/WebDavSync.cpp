@@ -838,6 +838,14 @@ bool CWebDavSync::UploadBackup(const SettingData& settings, std::wstring& errorM
 		code = ExecuteDavRequest(settings, L"PUT", targetPath, fileData, nullptr, 10, err);
 	}
 
+	// 412 Precondition Failed / 423 Locked / 5xx（限流/网关抖动）：坚果云等服务器常见，
+	// 延迟 2 秒重试一次（原先直接报失败，用户需手动重传）
+	if (code == 412 || code == 423 || code == 502 || code == 503 || code == 504)
+	{
+		Sleep(2000);
+		code = ExecuteDavRequest(settings, L"PUT", targetPath, fileData, nullptr, 10, err);
+	}
+
 	if (code == 0)
 	{
 		errorMsg = err.empty() ? L"无法连接 WebDAV 服务器" : err;

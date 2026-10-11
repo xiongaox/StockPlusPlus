@@ -183,7 +183,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	char* errMsg = nullptr;
 	rc = sqlite3_exec(m_db, sql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	const char* innerOuterSql = "CREATE TABLE IF NOT EXISTS inner_outer_snapshots ("
 		"stock_code TEXT NOT NULL,"
@@ -194,7 +194,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, innerOuterSql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	const char* chipSql = "CREATE TABLE IF NOT EXISTS chip_distributions ("
 		"stock_code TEXT NOT NULL,"
@@ -213,7 +213,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, chipSql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	const char* stockBasicSql = "CREATE TABLE IF NOT EXISTS stock_basic_data ("
 		"stock_code TEXT PRIMARY KEY,"
@@ -222,7 +222,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, stockBasicSql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	const char* timelineSql = "CREATE TABLE IF NOT EXISTS timeline_cache ("
 		"stock_code TEXT NOT NULL,"
@@ -237,7 +237,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, timelineSql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	const char* klineDaySql = "CREATE TABLE IF NOT EXISTS kline_day_cache ("
 		"stock_code TEXT NOT NULL,"
@@ -252,7 +252,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, klineDaySql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	const char* klineWeekSql = "CREATE TABLE IF NOT EXISTS kline_week_cache ("
 		"stock_code TEXT NOT NULL,"
@@ -267,7 +267,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, klineWeekSql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	const char* klineMonthSql = "CREATE TABLE IF NOT EXISTS kline_month_cache ("
 		"stock_code TEXT NOT NULL,"
@@ -282,7 +282,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, klineMonthSql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	const char* klineMin5Sql = "CREATE TABLE IF NOT EXISTS kline_min5_cache ("
 		"stock_code TEXT NOT NULL,"
@@ -297,7 +297,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, klineMin5Sql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	const char* klineMin30Sql = "CREATE TABLE IF NOT EXISTS kline_min30_cache ("
 		"stock_code TEXT NOT NULL,"
@@ -312,7 +312,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, klineMin30Sql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	// 关联股票均幅统计表
 	// 按 (stock_code, trade_date) 唯一定位当天记录，保证重启后能可靠加载“当天”的最小/最大值
@@ -354,7 +354,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		"PRIMARY KEY (stock_code, trade_date)"
 		");";
 	rc = sqlite3_exec(m_db, avgDiffStatsSql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	// 基金净值按分钟缓存表
 	const char* fundNavSql = "CREATE TABLE IF NOT EXISTS fund_nav_cache ("
@@ -367,11 +367,11 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, fundNavSql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	// 交易明细表，存放一档行情逐笔成交数据
 	// trade_date 由业务层填入，避免跨天混淆；time_key 为接口返回的 HH:MM（无秒）
-	const char* transactionSql = "CREATE TABLE IF NOT EXISTS transaction ("
+	const char* transactionSql = "CREATE TABLE IF NOT EXISTS transaction_detail ("
 		"id INTEGER PRIMARY KEY AUTOINCREMENT,"
 		"code TEXT NOT NULL,"
 		"trade_date TEXT NOT NULL,"
@@ -382,7 +382,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, transactionSql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	const char* marketCenterSql = "CREATE TABLE IF NOT EXISTS market_center_cache ("
 		"dataset INTEGER PRIMARY KEY,"
@@ -394,7 +394,7 @@ bool CStockDbManager::Init(const std::wstring& config_path)
 		");";
 	errMsg = nullptr;
 	rc = sqlite3_exec(m_db, marketCenterSql, nullptr, nullptr, &errMsg);
-	if (rc != SQLITE_OK) sqlite3_free(errMsg);
+	if (rc != SQLITE_OK) { CCommon::WriteLog((std::string("[DB] CREATE TABLE failed: ") + (errMsg ? errMsg : "?")).c_str(), g_data.m_log_path.c_str()); sqlite3_free(errMsg); }
 
 	return true;
 }
@@ -423,6 +423,13 @@ bool CStockDbManager::ResetAllData()
 		DeleteFileW(dbPath.c_str());
 		DeleteFileW((dbPath + L"-wal").c_str());
 		DeleteFileW((dbPath + L"-shm").c_str());
+		// 主库删除失败（另一实例/杀软占用句柄）：Init 会原样重开旧库，
+		// "重置所有数据"后旧记录仍在而界面提示已重置——必须让调用方知道
+		if (GetFileAttributesW(dbPath.c_str()) != INVALID_FILE_ATTRIBUTES)
+		{
+			CCommon::WriteLog(L"[DB] 重置失败：数据库文件无法删除（可能被其他程序占用），旧数据已保留", g_data.m_log_path.c_str());
+			return false;
+		}
 	}
 	return Init(cfgPath);
 }
@@ -1414,6 +1421,7 @@ bool CStockDbManager::SaveAvgDiffStats(const std::wstring& stockCode, double min
 	std::string dateStr = GetTodayDateString();
 
 	const char* sql = "INSERT OR REPLACE INTO avg_diff_stats (stock_code, trade_date, min_avg_diff, max_avg_diff, current_avg_diff, update_time) VALUES (?, ?, ?, ?, ?, ?);";
+	bool ok = false;
 	sqlite3_stmt* stmt = nullptr;
 	if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) == SQLITE_OK)
 	{
@@ -1423,10 +1431,15 @@ bool CStockDbManager::SaveAvgDiffStats(const std::wstring& stockCode, double min
 		sqlite3_bind_double(stmt, 4, maxVal);
 		sqlite3_bind_double(stmt, 5, currentVal);
 		sqlite3_bind_text(stmt, 6, dateStr.c_str(), -1, SQLITE_TRANSIENT);
-		sqlite3_step(stmt);
+		// step 失败（磁盘满/库只读）如实上报：原先无条件 true，界面显示已保存、重启后数据消失
+		ok = (sqlite3_step(stmt) == SQLITE_DONE);
+	}
+	else
+	{
+		ok = false;
 	}
 	sqlite3_finalize(stmt);
-	return true;
+	return ok;
 }
 
 AvgDiffStats CStockDbManager::LoadAvgDiffStats(const std::wstring& stockCode)
@@ -1587,7 +1600,7 @@ bool CStockDbManager::SaveTransactions(const std::wstring& stockCode,
 		return false;
 	}
 
-	const char* sql = "INSERT INTO transaction(code, trade_date, time_key, price, vol, buyorsell) VALUES(?, ?, ?, ?, ?, ?);";
+	const char* sql = "INSERT INTO transaction_detail(code, trade_date, time_key, price, vol, buyorsell) VALUES(?, ?, ?, ?, ?, ?);";
 	sqlite3_stmt* stmt = nullptr;
 	int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr);
 	if (rc != SQLITE_OK)
@@ -1630,7 +1643,7 @@ bool CStockDbManager::DeleteTransactions(const std::wstring& stockCode, const st
 	STOCKDB_LOCK();
 	if (m_db == nullptr) return false;
 
-	const char* sql = "DELETE FROM transaction WHERE code = ? AND trade_date = ?;";
+	const char* sql = "DELETE FROM transaction_detail WHERE code = ? AND trade_date = ?;";
 	sqlite3_stmt* stmt = nullptr;
 	int rc = sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr);
 	if (rc != SQLITE_OK) return false;
@@ -1649,7 +1662,7 @@ std::vector<STOCK::Transaction> CStockDbManager::LoadTransactions(const std::wst
 	std::vector<STOCK::Transaction> result;
 	if (m_db == nullptr) return result;
 
-	const char* sql = "SELECT time_key, price, vol, buyorsell FROM transaction "
+	const char* sql = "SELECT time_key, price, vol, buyorsell FROM transaction_detail "
 		"WHERE code = ? AND trade_date = ? ORDER BY id ASC;";
 	sqlite3_stmt* stmt = nullptr;
 	if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return result;

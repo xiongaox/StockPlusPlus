@@ -7393,6 +7393,11 @@ void CManagerDialog::OnBnClickedResetData()
 
 	// 1. 调用底层重置逻辑（清库、删ini、写默认配置）
 	g_data.ResetToDefault();
+	if (g_data.GetDbManager().IsOpen() == false)
+	{
+		MessageBox(_T("数据库重置失败：文件可能被其他程序占用，旧数据已保留，请关闭其他 TrafficMonitor 实例后重试。"), _T("重置失败"), MB_ICONERROR | MB_OK);
+		return;
+	}
 	Stock::Instance().SendStockInfoRequest();
 
 	// 2. 同步更新当前对话框内部数据
