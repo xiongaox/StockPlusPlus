@@ -493,6 +493,35 @@ void CWebDavSync::SplitBackupPayload(const std::string& payload, std::string& co
 	hasLedger = true;
 }
 
+bool CWebDavSync::IsLedgerPayloadEmpty(const std::string& ledgerJson)
+{
+	if (ledgerJson.empty())
+		return true;
+	yyjson_doc* doc = yyjson_read(ledgerJson.data(), ledgerJson.size(), 0);
+	if (doc == nullptr)
+		return false;	// 解析失败不当"空"处理：交给正常恢复路径去报错
+	yyjson_val* root = yyjson_doc_get_root(doc);
+	bool empty = false;
+	if (yyjson_is_arr(root))
+		empty = (yyjson_arr_size(root) == 0);
+	else if (yyjson_is_obj(root))
+	{
+		// 兼容带包裹字段的对象形态：找第一个数组字段判断
+		yyjson_val* arr = nullptr;
+		yyjson_obj_iter iter;
+		yyjson_obj_iter_init(root, &iter);
+		yyjson_val* key, * val;
+		while ((key = yyjson_obj_iter_next(&iter)) != nullptr)
+		{
+			val = yyjson_obj_iter_get_val(key);
+			if (yyjson_is_arr(val)) { arr = val; break; }
+		}
+		empty = (arr == nullptr) || (yyjson_arr_size(arr) == 0);
+	}
+	yyjson_doc_free(doc);
+	return empty;
+}
+
 bool CWebDavSync::RestoreTradeLedger(const std::string& ledgerJson, std::wstring& errorMsg)
 {
 	if (ledgerJson.empty())
@@ -1011,9 +1040,53 @@ bool CWebDavSync::DownloadBackup(const SettingData& settings, std::wstring& erro
 		return false;
 	}
 
+	// ---- 防覆盖检查 1：本地比云端新时不自动恢复 ----
+	// 备份文件名含时间戳（stock_backup_YYYYMMDD_HHMMSS.ini），与本地 ini 的最后修改时间比较。
+	// 否则：盘后在主力机加的自选股（只写本地 ini，不触发上传）会在下次启动被云端旧备份覆盖丢失。
+	const std::wstring configPath = g_data.GetConfigPath();
+	WIN32_FILE_ATTRIBUTE_DATA localAttr{};
+	if (GetFileAttributesExW(configPath.c_str(), GetFileExInfoStandard, &localAttr))
+	{
+		// 本地文件时间转 UTC 再转 YYYYMMDDHHMMSS 整数，与备份文件名 sortKey 同口径比较
+		SYSTEMTIME stUtc{};
+		FileTimeToSystemTime(&localAttr.ftLastWriteTime, &stUtc);
+		unsigned long long localKey = static_cast<unsigned long long>(stUtc.wYear) * 10000000000ULL
+			+ static_cast<unsigned long long>(stUtc.wMonth) * 100000000ULL
+			+ static_cast<unsigned long long>(stUtc.wDay) * 1000000ULL
+			+ static_cast<unsigned long long>(stUtc.wHour) * 10000ULL
+			+ static_cast<unsigned long long>(stUtc.wMinute) * 100ULL
+			+ static_cast<unsigned long long>(stUtc.wSecond);
+		unsigned long long cloudKey = entries.front().sortKey;
+		if (localKey >= cloudKey)
+		{
+			errorMsg = L"本地配置不落后于云端最新备份，跳过自动恢复";
+			return false;
+		}
+	}
+
 	std::string data;
 	if (!DownloadBackupData(settings, entries.front().fileName, data, errorMsg))
 		return false;
+
+	// ---- 防覆盖检查 2：空台账备份不得清空本地非空台账 ----
+	// 场景：新机器装完插件（本地台账为空）勾选自动备份，上传了一份 trades:[] 的备份；
+	// 主力机启动时自动同步若直接落地，会清空主力机全部交易记录，且下次上传把"已清空"
+	// 同步回云端，不可逆。此检查仅拦截自动同步路径，手动恢复仍允许覆盖。
+	{
+		std::string configData, ledgerJson;
+		bool hasLedger = false;
+		SplitBackupPayload(data, configData, ledgerJson, hasLedger);
+		if (hasLedger && IsLedgerPayloadEmpty(ledgerJson))
+		{
+			std::vector<StockTradeBackupRecord> localRecords;
+			g_data.GetDbManager().ExportAllTradeRecords(localRecords);
+			if (!localRecords.empty())
+			{
+				errorMsg = L"云端备份的交易台账为空，而本地台账有记录，已拒绝自动恢复（可在设置页手动恢复）";
+				return false;
+			}
+		}
+	}
 
 	// 写 ini + 重建台账 + 重载配置，与手动恢复共用同一入口（仅启动时后台自动同步路径使用）
 	return ApplyBackupPayload(data, errorMsg);

@@ -254,6 +254,12 @@ void Stock::OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data)
 				{
 					Stock::Instance().SendStockInfoRequest();
 				}
+				else if (!errMsg.empty())
+				{
+					// 跳过/失败原因落日志：自动同步没有界面，用户只能靠日志排障
+					//（「本地较新跳过」「空台账拒绝恢复」这类防护性跳过也会出现在这里）
+					CCommon::WriteLog((L"[WebDAV] 启动自动同步未应用云端备份: " + errMsg).c_str(), g_data.m_log_path.c_str());
+				}
 			}).detach();
 		}
 		break;

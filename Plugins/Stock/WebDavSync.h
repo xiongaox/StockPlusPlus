@@ -76,6 +76,9 @@ private:
 		std::string& ledgerJsonOut, bool& hasLedger);
 	// 解析台账 JSON 并重建 trades 表；返回是否成功（空数组为合法的「清空台账」）
 	static bool RestoreTradeLedger(const std::string& ledgerJson, std::wstring& errorMsg);
+	// 判断台账 JSON 段是否为空数组（兼容数组形态与带包裹字段的对象形态）。
+	// 供启动自动同步的防覆盖检查：空台账备份不得清空本地非空台账
+	static bool IsLedgerPayloadEmpty(const std::string& ledgerJson);
 
 	// 统一的低层 WebDAV 请求：负责建连、Basic 认证、发送与读取响应。
 	// body 为空表示无请求体；responseOut 非空时接收响应体；extraHeaders 附加原始请求头（如 Depth）。
