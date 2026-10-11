@@ -67,5 +67,4 @@ _session_data.json
 _session_export.html
 *.lnk
 
-# getPrice.exe 为本地打包产物（PyInstaller），不入库；部署方法见 README「通达信直连通道」
-tools/getPrice.exe
+# getPrice.exe 已作为分发物入库（用户直接下载，无需 PyInstaller）
