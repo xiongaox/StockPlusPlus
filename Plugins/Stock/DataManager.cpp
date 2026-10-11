@@ -57,6 +57,18 @@ static long KlineWeekIndex(const std::string& d)
 	return (KlineDateToDays(d) - 3) / 7;
 }
 
+// 宽字符转 double，不抛异常：手改 ini/损坏备份里的非数字串不会让 LoadConfig 崩掉宿主启动
+static double SafeWStod(const std::wstring& s)
+{
+	if (s.empty())
+		return 0.0;
+	wchar_t* end = nullptr;
+	double v = wcstod(s.c_str(), &end);
+	if (end == s.c_str())	// 无任何前缀可解析（如"已完成"）
+		return 0.0;
+	return v;
+}
+
 // 清理 K 线缓存中的历史脏数据，返回过滤后的数据：
 // 周/月K：同一自然周/月可能出现多行（新老版本写入的 day 键不同），只保留 day 最大（最新）的一行。
 // 日K不再按成交量过滤：贵金属等跨市场品种可有有效价格但成交量为0。
@@ -316,15 +328,15 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 		std::wstring low_str = ini.GetString(code.c_str(), L"alert_low", L"");
 		std::wstring high_str = ini.GetString(code.c_str(), L"alert_high", L"");
 		double low = 0.0, high = 0.0;
-		if (!low_str.empty()) low = std::stod(low_str);
-		if (!high_str.empty()) high = std::stod(high_str);
+		if (!low_str.empty()) low = SafeWStod(low_str);
+		if (!high_str.empty()) high = SafeWStod(high_str);
 		m_stock_alert_prices[code] = std::make_pair(low, high);
 
 		std::wstring up_pct_str = ini.GetString(code.c_str(), L"alert_up_pct", L"");
 		std::wstring down_pct_str = ini.GetString(code.c_str(), L"alert_down_pct", L"");
 		double up_pct = 0.0, down_pct = 0.0;
-		if (!up_pct_str.empty()) up_pct = std::stod(up_pct_str);
-		if (!down_pct_str.empty()) down_pct = std::stod(down_pct_str);
+		if (!up_pct_str.empty()) up_pct = SafeWStod(up_pct_str);
+		if (!down_pct_str.empty()) down_pct = SafeWStod(down_pct_str);
 		if (up_pct > 0 || down_pct > 0)
 			m_stock_alert_pcts[code] = std::make_pair(up_pct > 0 ? up_pct : 0.0, down_pct > 0 ? down_pct : 0.0);
 
@@ -332,8 +344,8 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 		std::wstring count_str = ini.GetString(code.c_str(), L"holding_count", L"");
 		std::wstring buy_date = ini.GetString(code.c_str(), L"buy_date", L"");
 		double cost = 0.0, count = 0.0;
-		if (!cost_str.empty()) cost = std::stod(cost_str);
-		if (!count_str.empty()) count = std::stod(count_str);
+		if (!cost_str.empty()) cost = SafeWStod(cost_str);
+		if (!count_str.empty()) count = SafeWStod(count_str);
 		m_stock_positions[code] = std::make_tuple(cost, count, buy_date);
 
 		m_stock_statusbar[code] = ini.GetBool(code.c_str(), L"show_in_statusbar", false);
