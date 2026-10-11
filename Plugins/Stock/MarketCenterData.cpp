@@ -373,7 +373,9 @@ bool CMarketCenterData::ApplySnapshot(DataSet ds, const std::string& payload, ti
 		if (!yyjson_is_obj(data)) { ok=false; break; }
 		{
 			dist.time=static_cast<time_t>(JsonNumber(data,"time")); dist.zt=static_cast<long long>(JsonNumber(data,"zt")); dist.dt=static_cast<long long>(JsonNumber(data,"dt"));
-			yyjson_val* buckets=yyjson_obj_get(data,"buckets"); if(!yyjson_is_obj(buckets)||yyjson_obj_size(buckets)>100) ok=false; else { size_t idx,max; yyjson_val *key,*val; yyjson_obj_foreach(buckets,idx,max,key,val){ if(!key||!JsonFinite(val)) {ok=false;break;} dist.buckets[atoi(yyjson_get_str(key))]=static_cast<long long>(JsonNumber(nullptr,"",0)); if(yyjson_is_real(val)) dist.buckets[atoi(yyjson_get_str(key))]=static_cast<long long>(yyjson_get_real(val)); else if(yyjson_is_sint(val)) dist.buckets[atoi(yyjson_get_str(key))]=static_cast<long long>(yyjson_get_uint(val)); } }
+			// yyjson 把正整数标为 UINT 子类型：旧代码只判 real/sint，所有正数桶在缓存重载后归零
+			//（负数走 sint 正常、正数两个分支都不命中）。补上 uint 分支，并加 key 类型检查
+			yyjson_val* buckets=yyjson_obj_get(data,"buckets"); if(!yyjson_is_obj(buckets)||yyjson_obj_size(buckets)>100) ok=false; else { size_t idx,max; yyjson_val *key,*val; yyjson_obj_foreach(buckets,idx,max,key,val){ if(!key||!yyjson_is_str(key)||!JsonFinite(val)) {ok=false;break;} long long bucketVal=0; if(yyjson_is_real(val)) bucketVal=static_cast<long long>(yyjson_get_real(val)); else if(yyjson_is_sint(val)) bucketVal=yyjson_get_sint(val); else if(yyjson_is_uint(val)) bucketVal=static_cast<long long>(yyjson_get_uint(val)); dist.buckets[atoi(yyjson_get_str(key))]=bucketVal; } }
 			double today=JsonNumber(data,"today",0), yesterday=JsonNumber(data,"yesterday",0);
 			yyjson_val* curve=yyjson_obj_get(data,"curve"); if(!yyjson_is_arr(curve)||yyjson_arr_size(curve)>1000) ok=false; else { size_t idx,max; yyjson_val* item; yyjson_arr_foreach(curve,idx,max,item){if(!yyjson_is_obj(item)){ok=false;break;}MC::TrendSample v;v.time=JsonString(item,"time");v.up=static_cast<long long>(JsonNumber(item,"up"));v.down=static_cast<long long>(JsonNumber(item,"down"));if(v.time.empty()){ok=false;break;}trendCurve.push_back(std::move(v));}}
 			if (ok)
