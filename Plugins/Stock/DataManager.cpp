@@ -209,7 +209,6 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 	for (const auto& s : ma_str_list)
 	{
 		int v = _wtoi(s.c_str());
-		if (v == 17) v = 20; // 自动将历史默认值 17 升级为 20
 		if (v > 0)
 			m_setting_data.m_ma_days.push_back(v);
 	}
