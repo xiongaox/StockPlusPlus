@@ -75,8 +75,14 @@ std::vector<std::wstring> CStockListPanel::GetStockListCodes(int groupTab, int s
 			src = &g_data.m_setting_data.m_custom_groups[TabToCustomIndex(groupTab)].codes;
 		for (const auto& code : *src)
 		{
-			if (GetStockPriority(code) >= 200)  // 只保留非指数股票（含A股及港股个股）
-				stockCodes.push_back(code);
+			if (GetStockPriority(code) < 200)   // 只保留非指数股票（含A股及港股个股）
+				continue;
+			// 「持仓」页签排除已清仓者：持仓列表里可能残留持股数为 0 的代码
+			//（清仓走的是冻结/台账联动等不同路径时未必同步 erase），
+			// 这些股归「已清仓」页签，两个页签互斥才不会同时出现
+			if (groupTab == kTabPositions && g_data.GetHoldingCount(code) <= 0.0001)
+				continue;
+			stockCodes.push_back(code);
 		}
 	}
 
