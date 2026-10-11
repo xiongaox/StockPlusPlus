@@ -336,6 +336,7 @@
     <ClCompile Include="ApiHealthManager.cpp" />
     <ClCompile Include="TdxTcpClient.cpp" />
     <ClCompile Include="ManagerDialog.cpp" />
+    <ClCompile Include="DarkControls.cpp" />
     <ClCompile Include="NetFetch.cpp" />
     <ClCompile Include="OptionsDlg.cpp" />
     <ClCompile Include="RelateStockDlg.cpp" />

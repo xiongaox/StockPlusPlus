@@ -194,6 +194,9 @@
     <ClCompile Include="ManagerDialog.cpp">
       <Filter>对话框</Filter>
     </ClCompile>
+    <ClCompile Include="DarkControls.cpp">
+      <Filter>FloatingWnd</Filter>
+    </ClCompile>
     <ClCompile Include="FloatingWnd.cpp">
       <Filter>FloatingWnd</Filter>
     </ClCompile>
