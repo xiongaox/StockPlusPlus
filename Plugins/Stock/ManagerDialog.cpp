@@ -4300,7 +4300,9 @@ static std::vector<GroupTabItem> BuildGroupTabItems(const std::vector<CustomGrou
 	tabs.push_back({ L"已清仓", kTabCleared, currentGroupTab == kTabCleared, false, false });
 
 	size_t customCount = customGroups.size();
-	if (customCount <= 2)
+	// 标签条固定位有限（自选股/持仓/已清仓/+新增 还要给搜索框留位）：
+	// 自定义分组只把第一个摆在外面，其余全部收进「更多分组 ▾」（与悬浮窗口径一致）
+	if (customCount <= 1)
 	{
 		for (size_t i = 0; i < customCount; ++i)
 		{
@@ -4311,10 +4313,9 @@ static std::vector<GroupTabItem> BuildGroupTabItems(const std::vector<CustomGrou
 	else
 	{
 		tabs.push_back({ customGroups[0].name, CustomIndexToTab(0), currentGroupTab == CustomIndexToTab(0), false, false });
-		tabs.push_back({ customGroups[1].name, CustomIndexToTab(1), currentGroupTab == CustomIndexToTab(1), false, false });
 
-		// 下拉承接自定义#2 之后的分组（前两个已在标签条上）
-		const int firstHiddenTab = CustomIndexToTab(2);
+		// 下拉承接自定义#1 之后的分组（第一个已在标签条上）
+		const int firstHiddenTab = CustomIndexToTab(1);
 		std::wstring dropText = L"更多分组 ▾";
 		if (currentGroupTab >= firstHiddenTab && TabToCustomIndex(currentGroupTab) < static_cast<int>(customCount))
 		{
@@ -6344,8 +6345,9 @@ void CManagerDialog::OnLButtonDown(UINT nFlags, CPoint point)
 				else if (tabs[i].isDropdown)
 				{
 					// 点击了 "更多分组 ▾"
+					// 第一个自定义分组固定在标签条上，下拉从 #1（第二个）开始
 					std::vector<CDarkPopupMenu::MenuItem> menuItems;
-					for (size_t k = 2; k < m_data.m_custom_groups.size(); ++k)
+					for (size_t k = 1; k < m_data.m_custom_groups.size(); ++k)
 					{
 						menuItems.push_back({
 							static_cast<int>(1000 + k),
@@ -6559,7 +6561,7 @@ void CManagerDialog::OnRButtonUp(UINT nFlags, CPoint point)
 				{
 					groupIdx = TabToCustomIndex(tabs[i].targetTab);
 				}
-				else if (tabs[i].isDropdown && m_current_group_tab >= CustomIndexToTab(2))
+				else if (tabs[i].isDropdown && m_current_group_tab >= CustomIndexToTab(1))
 				{
 					groupIdx = TabToCustomIndex(m_current_group_tab);
 				}
