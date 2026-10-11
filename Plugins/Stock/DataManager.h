@@ -198,6 +198,9 @@ public:
 	std::vector<StockTradeRecord> GetStockTrades(const std::wstring& code);
 	// 是否录有台账流水（供 BS 按钮/面板的显示判据使用，避免为判空而复制整份流水）
 	bool HasStockTrades(const std::wstring& code);
+	// 台账里出现过的全部股票代码（去重、升序）。
+	// 「已清仓」分组据此枚举候选股，再按当前持股数筛出已清仓者。
+	std::vector<std::wstring> GetLedgerStockCodes();
 	// 新增一笔，成功返回新记录 id（0 表示失败）
 	long long AddStockTrade(const std::wstring& code, bool is_sell, const std::wstring& time,
 		double price, double amount, double fee = 0.0);
@@ -206,7 +209,14 @@ public:
 	// 按 id 删除一笔
 	bool DeleteStockTrade(const std::wstring& code, long long id);
 	// 按股票缓存的台账失效（云端恢复等外部直接改写 trades 表后调用）
-	void InvalidateTradeCache() { m_trade_cache.clear(); }
+	void InvalidateTradeCache() { m_trade_cache.clear(); m_ledger_codes_valid = false; }
+	// 台账写入后失效单个股票的流水缓存，并一并作废全量代码缓存
+	//（新增/删除成交可能让某股票首次出现或彻底消失于台账，「已清仓」分组依赖该全集）
+	void InvalidateTradeCacheFor(const std::wstring& code)
+	{
+		m_trade_cache.erase(code);
+		m_ledger_codes_valid = false;
+	}
 	// 台账类型标签：按历史持仓推导 建仓/加仓/减仓/清仓（首笔买入=建仓，其后买入=加仓）
 	static std::wstring GetTradeKindLabel(const std::vector<StockTradeRecord>& trades, size_t index);
 	// 当日盈亏修正值：今日各笔 Σ卖出量×(卖价−昨收) + Σ买入量×(昨收−买价)。昨收<=0 时返回 0
@@ -312,6 +322,10 @@ private:
 
 	// 交易台账缓存: code -> 台账记录（惰性加载，写操作后失效重载）
 	std::map<std::wstring, std::vector<StockTradeRecord>> m_trade_cache;
+
+	// 台账出现过的全部股票代码（「已清仓」分组枚举用；与 m_trade_cache 同步失效）
+	std::vector<std::wstring> m_ledger_codes_cache;
+	bool m_ledger_codes_valid{ false };
 
 	// 状态栏展示映射表: code -> show_in_statusbar
 	std::map<std::wstring, bool> m_stock_statusbar;

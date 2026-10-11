@@ -3,6 +3,7 @@
 #include "Common.h"
 #include "Stock.h"
 #include "SignalAnalyzer.h"
+#include "StockListPanel.h"   // 分组页签索引约定（AddStockToGroup 用）
 #include "utilities/yyjson/yyjson.h"
 #include <vector>
 
@@ -442,7 +443,7 @@ bool CDataManager::SaveTradeRecord(const std::wstring& stockCode, const std::wst
 	{
 		// 与 Add/Update/DeleteStockTrade 同约定：写库后失效台账缓存（此前缺失，
 		// 旧版「交易记录」弹窗保存后 BS 面板会继续显示缓存的旧流水）
-		m_trade_cache.erase(stockCode);
+		InvalidateTradeCacheFor(stockCode);
 		// 台账变动后按重放净持仓自动回填持股数（含安全阀，见 SyncPositionFromLedger）
 		SyncPositionFromLedger(stockCode);
 	}
@@ -1783,6 +1784,19 @@ bool CDataManager::HasStockTrades(const std::wstring& code)
 	return !GetStockTrades(code).empty();
 }
 
+std::vector<std::wstring> CDataManager::GetLedgerStockCodes()
+{
+	// 台账中出现过的全部代码，缓存到下一次台账写操作；
+	// 「已清仓」分组每次绘制都要枚举，故不做逐股试探（那是 O(股票数) 次查库）
+	if (m_ledger_codes_valid)
+		return m_ledger_codes_cache;
+	std::vector<std::wstring> codes;
+	m_db_mgr.LoadDistinctTradeCodes(codes);
+	m_ledger_codes_cache = std::move(codes);
+	m_ledger_codes_valid = true;
+	return m_ledger_codes_cache;
+}
+
 long long CDataManager::AddStockTrade(const std::wstring& code, bool is_sell, const std::wstring& time,
 	double price, double amount, double fee)
 {
@@ -1795,7 +1809,7 @@ long long CDataManager::AddStockTrade(const std::wstring& code, bool is_sell, co
 	const long long id = m_db_mgr.InsertTradeRecord(code, name, is_sell ? 1 : 0, time, price, amount, fee);
 	if (id > 0)
 	{
-		m_trade_cache.erase(code);
+		InvalidateTradeCacheFor(code);
 		// 台账变动后按重放净持仓自动回填持股数（含安全阀，见 SyncPositionFromLedger）
 		SyncPositionFromLedger(code);
 	}
@@ -1808,7 +1822,7 @@ bool CDataManager::UpdateStockTrade(const std::wstring& code, const StockTradeRe
 		record.price, record.amount, record.fee);
 	if (ok)
 	{
-		m_trade_cache.erase(code);
+		InvalidateTradeCacheFor(code);
 		SyncPositionFromLedger(code);
 	}
 	return ok;
@@ -1819,7 +1833,7 @@ bool CDataManager::DeleteStockTrade(const std::wstring& code, long long id)
 	const bool ok = m_db_mgr.DeleteTradeRecord(id);
 	if (ok)
 	{
-		m_trade_cache.erase(code);
+		InvalidateTradeCacheFor(code);
 		SyncPositionFromLedger(code);
 	}
 	return ok;
@@ -2600,7 +2614,7 @@ void CDataManager::RenameCustomGroup(size_t index, const std::wstring& newName)
 bool CDataManager::AddStockToGroup(int groupIndex, const std::wstring& code)
 {
 	if (code.empty()) return false;
-	if (groupIndex == 0) // 自选股
+	if (groupIndex == kTabWatchlist) // 自选股
 	{
 		auto& codes = m_setting_data.m_stock_codes;
 		if (std::find(codes.begin(), codes.end(), code) == codes.end())
@@ -2610,7 +2624,7 @@ bool CDataManager::AddStockToGroup(int groupIndex, const std::wstring& code)
 			return true;
 		}
 	}
-	else if (groupIndex == 1) // 持仓（独立列表，不同步到自选股）
+	else if (groupIndex == kTabPositions) // 持仓（独立列表，不同步到自选股）
 	{
 		auto& codes = m_setting_data.m_position_codes;
 		if (std::find(codes.begin(), codes.end(), code) == codes.end())
@@ -2620,9 +2634,13 @@ bool CDataManager::AddStockToGroup(int groupIndex, const std::wstring& code)
 		SaveConfig();
 		return true;
 	}
-	else if (groupIndex >= 2) // 自定义分组
+	else if (groupIndex == kTabCleared) // 已清仓：派生视图，不可手动加入（无持仓自然进入）
 	{
-		size_t customIdx = static_cast<size_t>(groupIndex - 2);
+		return false;
+	}
+	else if (groupIndex >= kTabFirstCustom) // 自定义分组
+	{
+		size_t customIdx = static_cast<size_t>(TabToCustomIndex(groupIndex));
 		if (customIdx < m_setting_data.m_custom_groups.size())
 		{
 			auto& codes = m_setting_data.m_custom_groups[customIdx].codes;

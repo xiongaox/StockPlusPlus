@@ -74,6 +74,10 @@ public:
 		int tradeType, const std::wstring& time, double price, double amount, double fee);
 	// 按股票查询全部记录，时间升序（同一时刻按 id 升序）
 	std::vector<StockTradeRecord> LoadTradeRecords(const std::wstring& stockCode);
+	// 台账里出现过的全部股票代码（去重、升序）。
+	// 供「已清仓」分组枚举用：该分组需列出所有有流水的股票，
+	// 而 LoadTradeRecords 是按 code 查的，逐股试探无法枚举全集。
+	bool LoadDistinctTradeCodes(std::vector<std::wstring>& codesOut);
 	// 按 id 更新一笔（金额与合计按 tradeType/价格/数量/费用重算）
 	bool UpdateTradeRecord(long long id, int tradeType, const std::wstring& time,
 		double price, double amount, double fee);

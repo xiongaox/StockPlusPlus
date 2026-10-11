@@ -602,7 +602,7 @@ void CFloatingWnd::OnPaint()
 	const int indexBarHeight = singleBarHeight;    // 底部系统状态栏高度（单行4个）
 	// 持仓盈亏汇总仅当当前展示的品种本身在持仓中才有意义
 	const bool isCurrentStockHolding = g_data.GetHoldingCount(m_stock_id) > 0;
-	const bool showPositionSummary = (CStockListPanel::ClampGroupTab(m_activeGroupTab) == 1) && isCurrentStockHolding;
+	const bool showPositionSummary = (CStockListPanel::ClampGroupTab(m_activeGroupTab) == kTabPositions) && isCurrentStockHolding;
 	const int positionSummaryHeight = singleBarHeight;  // 所有分组统一保留单行高度，避免PK收起时的UI覆盖
 
 	// 统一现代双层布局：标题栏 + 主走势图(约62%) + 单一副图(约38%) + 时间标签 + 底部系统状态栏
@@ -748,7 +748,7 @@ void CFloatingWnd::OnPaint()
 				double currentStockProfitLoss = 0.0;
 				double currentStockProfitLossPercent = 0.0;
 				bool hasCurrentStockProfitLoss = false;
-				std::vector<std::wstring> positionCodes = CStockListPanel::GetStockListCodes(1);
+				std::vector<std::wstring> positionCodes = CStockListPanel::GetStockListCodes(kTabPositions);
 				{
 					std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
 					for (const auto& code : positionCodes)
@@ -2169,7 +2169,7 @@ void CFloatingWnd::OnLButtonDown(UINT nFlags, CPoint point)
 	m_lastClickPos = point;
 
 	// 点击持仓汇总栏，在具体金额与百分比之间切换
-	if (m_viewMode != UI_VIEW_OVERVIEW && CStockListPanel::ClampGroupTab(m_activeGroupTab) == 1)
+	if (m_viewMode != UI_VIEW_OVERVIEW && CStockListPanel::ClampGroupTab(m_activeGroupTab) == kTabPositions)
 	{
 		CRect clientRect;
 		GetClientRect(&clientRect);
@@ -5442,14 +5442,14 @@ void CFloatingWnd::ShowGroupDropdownMenu(const CRect& dropdownRect)
 	if (customGroups.size() < 2)
 		return;
 
-	// 下拉列出第一个标签位装不下的自定义分组（自选股/持仓/自定义#1 在标签条上）
+	// 下拉列出第一个标签位装不下的自定义分组（自选股/持仓/已清仓/自定义#1 在标签条上）
 	std::vector<CDarkPopupMenu::MenuItem> menuItems;
 	for (size_t k = 1; k < customGroups.size(); ++k)
 	{
 		menuItems.push_back({
 			static_cast<int>(1000 + k),
 			customGroups[k].name,
-			m_activeGroupTab == static_cast<int>(k + 2),
+			m_activeGroupTab == CustomIndexToTab(static_cast<int>(k)),
 			false,
 			false
 			});
@@ -5462,7 +5462,7 @@ void CFloatingWnd::ShowGroupDropdownMenu(const CRect& dropdownRect)
 	menu.CreatePopup(this);
 	int cmd = menu.TrackMenu(pt, menuItems, dropdownRect.Width());
 	if (cmd >= 1001 && cmd < 1000 + static_cast<int>(customGroups.size()))
-		SwitchFloatingGroup(cmd - 1000 + 2);
+		SwitchFloatingGroup(CustomIndexToTab(cmd - 1000));
 }
 
 void CFloatingWnd::UpdateGroupTabHover(const CPoint& point)

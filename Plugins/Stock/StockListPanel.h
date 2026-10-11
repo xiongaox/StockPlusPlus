@@ -4,12 +4,32 @@
 #include <string>
 #include <vector>
 
+// 分组页签索引约定（悬浮窗与设置对话框共用同一套编号）：
+//   0 = 自选股   1 = 持仓   2 = 已清仓（派生视图）   >=3 = 自定义分组 m_custom_groups[idx-3]
+// 「已清仓」不落地存储，而是按台账实时派生：有流水 且 当前持股数<=0。
+// 全部索引换算请走下面这组常量，勿再散写字面量。
+enum class GroupTab : int
+{
+	Watchlist = 0,
+	Positions = 1,
+	Cleared = 2,
+	FirstCustom = 3,   // 自定义分组起始索引
+};
+constexpr int kTabWatchlist = static_cast<int>(GroupTab::Watchlist);
+constexpr int kTabPositions = static_cast<int>(GroupTab::Positions);
+constexpr int kTabCleared = static_cast<int>(GroupTab::Cleared);
+constexpr int kTabFirstCustom = static_cast<int>(GroupTab::FirstCustom);
+// 页签索引 -> 自定义分组下标
+inline int TabToCustomIndex(int groupTab) { return groupTab - kTabFirstCustom; }
+// 自定义分组下标 -> 页签索引
+inline int CustomIndexToTab(int customIndex) { return customIndex + kTabFirstCustom; }
+
 // 浮动窗口顶部分组标签（与配置对话框分组页的标签样式一致）
-// tabIndex: 0=自选股, 1=持仓, >=2 为自定义分组（m_custom_groups[tabIndex-2]）
+// tabIndex: 见上方 GroupTab 约定
 struct FloatingGroupTab
 {
 	std::wstring name;   // 显示文本（下拉按钮为“更多分组 ▾”或激活的隐藏组名）
-	int tabIndex{ 0 };   // 对应分组索引
+	int tabIndex{ 0 };   // 对应分组索引（-1 为“更多分组”下拉按钮）
 	bool isActive{ false };
 	bool isDropdown{ false };  // “更多分组”下拉按钮
 	CRect rect;          // 客户区矩形（布局时计算，供点击命中）
@@ -21,7 +41,7 @@ struct FloatingGroupTab
 class CStockListPanel
 {
 public:
-	// 分组总数：自选股 + 持仓 + 自定义分组数
+	// 分组总数：自选股 + 持仓 + 已清仓 + 自定义分组数
 	static int GetGroupTabCount();
 	// 将分组索引收敛到有效范围（自定义分组被删除后索引可能越界）
 	static int ClampGroupTab(int groupTab);
@@ -35,7 +55,7 @@ public:
 	static std::vector<std::wstring> GetStockListCodes(int groupTab);
 	static std::vector<std::wstring> GetStockListCodes(int groupTab, int sortMode);
 
-	// 布局顶部分组标签条：自选股/持仓/自定义分组，超出三个折叠进“更多分组”下拉
+	// 布局顶部分组标签条：自选股/持仓/已清仓/自定义分组，超出固定位折叠进“更多分组”下拉
 	static std::vector<FloatingGroupTab> LayoutGroupTabs(CDC& memDC, int windowWidth, int headerHeight, int activeTab);
 	// 绘制顶部分组标签条（hoverIdx 为悬停标签下标，-1 表示无）
 	static void DrawGroupTabs(CDC& memDC, const std::vector<FloatingGroupTab>& tabs, int hoverIdx = -1);

@@ -145,8 +145,9 @@ public:
 	enum GroupSubTab
 	{
 		TAB_WATCHLIST = 0, // 自选股
-		TAB_POSITIONS = 1  // 持仓
-		// >= 2: 自定义分组索引 (对应 m_data.m_custom_groups[idx - 2])
+		TAB_POSITIONS = 1, // 持仓
+		TAB_CLEARED = 2    // 已清仓（按台账派生的只读视图）
+		// >= kTabFirstCustom(3): 自定义分组索引 (对应 m_data.m_custom_groups[TabToCustomIndex(tab)])
 	};
 
 	CManagerDialog(CWnd* pParent = nullptr);   // 标准构造函数
@@ -173,7 +174,7 @@ public:
 private:
 	CSize m_min_size;		// 窗口的最小大小
 	PageIndex m_current_page{ PAGE_BASIC };
-	int m_current_group_tab{ 0 }; // 0:自选股, 1:持仓, >=2:各自定义分组
+	int m_current_group_tab{ 0 }; // 0:自选股, 1:持仓, 2:已清仓, >=3:各自定义分组
 	int m_hover_menu{ -1 };
 	int m_hover_index_card{ -1 };
 	int m_hover_ma_tag_del{ -1 };
@@ -306,6 +307,10 @@ private:
 	void RefreshStockList();
 	void RefreshPositionList();
 	void RefreshCustomList();
+	// 「已清仓」页签：按台账派生的已清仓股列表（只读展示，复用自定义列表控件）
+	void RefreshClearedList();
+	// 自定义列表控件被「自定义分组」与「已清仓」两个页签复用，切换时改写表头文字
+	void SetCustomListHeaders(bool forClearedTab);
 	void DrawSidebar(Gdiplus::Graphics& g, const CRect& clientRect);
 	void DrawHeader(Gdiplus::Graphics& g, const CRect& contentRect);
 	void DrawBasicPage(Gdiplus::Graphics& g, const CRect& contentRect);

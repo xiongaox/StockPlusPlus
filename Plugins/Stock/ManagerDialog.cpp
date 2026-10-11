@@ -7,6 +7,7 @@
 #include "afxdialogex.h"
 #include "ManagerDialog.h"
 #include "FloatingWnd.h"
+#include "StockListPanel.h"   // 分组页签索引约定（kTabWatchlist/kTabPositions/kTabCleared/kTabFirstCustom）
 #include "Common.h"
 #include "StockFetchThread.h"
 #include "OptionsDlg.h"
@@ -2497,7 +2498,7 @@ BOOL CManagerDialog::OnInitDialog()
 				newGrp.name = inputDlg.m_value.GetString();
 				newGrp.codes.push_back(stock.fullCode);
 				m_data.m_custom_groups.push_back(newGrp);
-				SwitchGroupTab(static_cast<int>(m_data.m_custom_groups.size()) + 1);
+				SwitchGroupTab(CustomIndexToTab(static_cast<int>(m_data.m_custom_groups.size()) - 1));
 				g_data.m_setting_data.m_custom_groups = m_data.m_custom_groups;
 				g_data.SaveConfig();
 			}
@@ -2846,10 +2847,46 @@ void CManagerDialog::RefreshPositionList()
 	}
 }
 
+// 自定义列表控件被两个页签复用（自定义分组 / 已清仓），两者的列含义不同，
+// 切换页签时同步改写表头文字，避免出现「已清仓」页还挂着"关注低价"这类错列名
+void CManagerDialog::SetCustomListHeaders(bool forClearedTab)
+{
+	if (!m_custom_listctrl.GetSafeHwnd()) return;
+	CHeaderCtrl* pHeader = m_custom_listctrl.GetHeaderCtrl();
+	if (!pHeader) return;
+
+	const wchar_t* labels[7] = { L"", L"", L"", L"", L"", L"", L"" };
+	if (forClearedTab)
+	{
+		// 列：交易所 / 代码 / 名称 / 最后成交日 / 台账笔数 （其余列留空不用）
+		labels[0] = L"交易所"; labels[1] = L"代码"; labels[2] = L"名称";
+		labels[3] = L"最后成交"; labels[4] = L"台账笔数";
+	}
+	else
+	{
+		labels[0] = L"交易所"; labels[1] = L"代码"; labels[2] = L"名称";
+		labels[3] = L"阈值提醒"; labels[4] = L"关注低价"; labels[5] = L"关注高价";
+		labels[6] = L"状态栏显示";
+	}
+
+	const int colCount = pHeader->GetItemCount();
+	for (int i = 0; i < colCount && i < 7; ++i)
+	{
+		HDITEM hd = { 0 };
+		hd.mask = HDI_TEXT | HDI_FORMAT;
+		hd.pszText = const_cast<wchar_t*>(labels[i]);
+		hd.fmt = LVCFMT_CENTER;
+		pHeader->SetItem(i, &hd);
+	}
+	// 表头为自绘控件，改文字后需显式重绘
+	m_custom_listctrl.GetHeaderCtrl()->Invalidate();
+}
+
 void CManagerDialog::RefreshCustomList()
 {
 	m_custom_listctrl.DeleteAllItems();
-	size_t groupIdx = (m_current_group_tab >= 2) ? static_cast<size_t>(m_current_group_tab - 2) : 0;
+	SetCustomListHeaders(false);
+	size_t groupIdx = (m_current_group_tab >= kTabFirstCustom) ? static_cast<size_t>(TabToCustomIndex(m_current_group_tab)) : 0;
 	if (groupIdx < m_data.m_custom_groups.size())
 	{
 		const auto& codes = m_data.m_custom_groups[groupIdx].codes;
@@ -2890,6 +2927,44 @@ void CManagerDialog::RefreshCustomList()
 				m_custom_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, L"");
 			}
 		}
+	}
+}
+
+void CManagerDialog::RefreshClearedList()
+{
+	// 「已清仓」为派生视图：台账有流水、当前持股数已归零的股票。
+	// 复用自定义列表控件（只读）：本页签不提供增删改，清仓/买回由台账与持仓编辑驱动。
+	m_custom_listctrl.DeleteAllItems();
+	SetCustomListHeaders(true);
+	int nItem = 0;
+	for (const auto& code : g_data.GetLedgerStockCodes())
+	{
+		if (g_data.GetHoldingCount(code) > 0.0001)
+			continue;   // 仍持仓 -> 归「持仓」页签
+
+		const auto& trades = g_data.GetStockTrades(code);
+		if (trades.empty())
+			continue;
+
+		std::wstring exch = CCommon::GetExchangeName(code);
+		std::wstring pureCode = CCommon::GetPureCode(code);
+		std::wstring name = GetStockName(code);
+
+		nItem = m_custom_listctrl.InsertItem(nItem, exch.c_str());
+		m_custom_listctrl.SetItemText(nItem, 1, pureCode.c_str());
+		m_custom_listctrl.SetItemText(nItem, 2, name.c_str());
+
+		// 第 4 列显示最后一笔成交日期，便于识别"什么时候清的仓"
+		const std::wstring& lastTime = trades.back().time;
+		std::wstring lastDate = lastTime.size() >= 10 ? lastTime.substr(0, 10) : lastTime;
+		m_custom_listctrl.SetItemText(nItem, 3, lastDate.c_str());
+
+		// 第 5 列显示台账流水笔数（买卖合计）
+		CString countStr;
+		countStr.Format(_T("%d 笔"), static_cast<int>(trades.size()));
+		m_custom_listctrl.SetItemText(nItem, 4, countStr);
+
+		++nItem;
 	}
 }
 
@@ -2963,10 +3038,12 @@ void CManagerDialog::SwitchGroupTab(int tab)
 		m_search_dropdown.HidePopup();
 	m_current_group_tab = tab;
 	UpdateControlsLayout();
-	if (m_current_group_tab == 0)
+	if (m_current_group_tab == kTabWatchlist)
 		RefreshStockList();
-	else if (m_current_group_tab == 1)
+	else if (m_current_group_tab == kTabPositions)
 		RefreshPositionList();
+	else if (m_current_group_tab == kTabCleared)
+		RefreshClearedList();
 	else
 		RefreshCustomList();
 	Invalidate();
@@ -3343,24 +3420,24 @@ void CManagerDialog::UpdateControlsLayout()
 			m_search_dropdown.ShowWindow(SW_HIDE);
 	}
 
-	m_stock_listctrl.ShowWindow((isGroup && m_current_group_tab == 0) ? SW_SHOW : SW_HIDE);
-	m_pos_listctrl.ShowWindow((isGroup && m_current_group_tab == 1) ? SW_SHOW : SW_HIDE);
-	m_custom_listctrl.ShowWindow((isGroup && m_current_group_tab >= 2) ? SW_SHOW : SW_HIDE);
+	m_stock_listctrl.ShowWindow((isGroup && m_current_group_tab == kTabWatchlist) ? SW_SHOW : SW_HIDE);
+	m_pos_listctrl.ShowWindow((isGroup && m_current_group_tab == kTabPositions) ? SW_SHOW : SW_HIDE);
+	m_custom_listctrl.ShowWindow((isGroup && m_current_group_tab >= kTabCleared) ? SW_SHOW : SW_HIDE);
 
 	if (isGroup)
 	{
 		CRect listRect(rightLeft, listTop, rightLeft + rightWidth, listTop + listHeight);
-		if (m_current_group_tab == 0 && m_stock_listctrl.GetSafeHwnd())
+		if (m_current_group_tab == kTabWatchlist && m_stock_listctrl.GetSafeHwnd())
 		{
 			m_stock_listctrl.MoveWindow(listRect);
 			AdjustListColumns(m_stock_listctrl, 0);
 		}
-		else if (m_current_group_tab == 1 && m_pos_listctrl.GetSafeHwnd())
+		else if (m_current_group_tab == kTabPositions && m_pos_listctrl.GetSafeHwnd())
 		{
 			m_pos_listctrl.MoveWindow(listRect);
 			AdjustListColumns(m_pos_listctrl, 1);
 		}
-		else if (m_current_group_tab >= 2 && m_custom_listctrl.GetSafeHwnd())
+		else if (m_current_group_tab >= kTabCleared && m_custom_listctrl.GetSafeHwnd())
 		{
 			m_custom_listctrl.MoveWindow(listRect);
 			AdjustListColumns(m_custom_listctrl, 2);
@@ -3372,10 +3449,12 @@ void CManagerDialog::UpdateControlsLayout()
 		int btnGap = g_data.DPI(8);
 
 		// 所有分组都不显示「添加股票」；持仓保留「编辑持仓」，并同样支持上下移动。
-		bool isPositionTab = (m_current_group_tab == 1);
+		// 「已清仓」为派生只读页签：不提供任何增删改按钮（清仓/买回由台账与持仓编辑驱动）
+		const bool isClearedTab = (m_current_group_tab == kTabCleared);
+		bool isPositionTab = (m_current_group_tab == kTabPositions);
 		bool showPositionEdit = isPositionTab;
-		bool showItemEdit = !isPositionTab;
-		bool showOrderBtns = true;
+		bool showItemEdit = !isPositionTab && !isClearedTab;
+		bool showOrderBtns = !isClearedTab;
 		int nextBtnX = rightLeft;
 
 		m_mgr_add_btn.ShowWindow(showPositionEdit ? SW_SHOW : SW_HIDE);
@@ -3386,10 +3465,13 @@ void CManagerDialog::UpdateControlsLayout()
 			nextBtnX += btnW + btnGap;
 		}
 
-		m_mgr_del_btn.ShowWindow(SW_SHOW);
-		m_mgr_del_btn.MoveWindow(nextBtnX, btnTop, btnW, btnH);
-		m_mgr_del_btn.SetWindowText(isPositionTab ? L"清除持仓" : L"删除股票");
-		nextBtnX += btnW + btnGap;
+		m_mgr_del_btn.ShowWindow(isClearedTab ? SW_HIDE : SW_SHOW);
+		if (!isClearedTab)
+		{
+			m_mgr_del_btn.MoveWindow(nextBtnX, btnTop, btnW, btnH);
+			m_mgr_del_btn.SetWindowText(isPositionTab ? L"清除持仓" : L"删除股票");
+			nextBtnX += btnW + btnGap;
+		}
 
 		m_mgr_edit_btn.ShowWindow(showItemEdit ? SW_SHOW : SW_HIDE);
 		if (showItemEdit)
@@ -3407,7 +3489,7 @@ void CManagerDialog::UpdateControlsLayout()
 
 		if (m_mgr_del_group_btn.GetSafeHwnd())
 		{
-			if (m_current_group_tab >= 2)
+			if (m_current_group_tab >= kTabFirstCustom)
 			{
 				m_mgr_del_group_btn.ShowWindow(SW_SHOW);
 				m_mgr_del_group_btn.MoveWindow(nextBtnX, btnTop, btnW, btnH);
@@ -4204,7 +4286,7 @@ void CManagerDialog::DrawIndexPage(Gdiplus::Graphics& g, const CRect& contentRec
 struct GroupTabItem
 {
 	std::wstring text;
-	int targetTab; // 0=自选股, 1=持仓, 2..=custom group, -1=+新增分组, -2=dropdown
+	int targetTab; // 0=自选股, 1=持仓, 2=已清仓, 3..=custom group, -1=+新增分组, -2=dropdown
 	bool isActive;
 	bool isAddBtn;
 	bool isDropdown;
@@ -4213,29 +4295,32 @@ struct GroupTabItem
 static std::vector<GroupTabItem> BuildGroupTabItems(const std::vector<CustomGroup>& customGroups, int currentGroupTab)
 {
 	std::vector<GroupTabItem> tabs;
-	tabs.push_back({ L"自选股", 0, currentGroupTab == 0, false, false });
-	tabs.push_back({ L"持仓", 1, currentGroupTab == 1, false, false });
+	tabs.push_back({ L"自选股", kTabWatchlist, currentGroupTab == kTabWatchlist, false, false });
+	tabs.push_back({ L"持仓", kTabPositions, currentGroupTab == kTabPositions, false, false });
+	tabs.push_back({ L"已清仓", kTabCleared, currentGroupTab == kTabCleared, false, false });
 
 	size_t customCount = customGroups.size();
 	if (customCount <= 2)
 	{
 		for (size_t i = 0; i < customCount; ++i)
 		{
-			int tabIdx = static_cast<int>(i + 2);
+			int tabIdx = CustomIndexToTab(static_cast<int>(i));
 			tabs.push_back({ customGroups[i].name, tabIdx, currentGroupTab == tabIdx, false, false });
 		}
 	}
 	else
 	{
-		tabs.push_back({ customGroups[0].name, 2, currentGroupTab == 2, false, false });
-		tabs.push_back({ customGroups[1].name, 3, currentGroupTab == 3, false, false });
+		tabs.push_back({ customGroups[0].name, CustomIndexToTab(0), currentGroupTab == CustomIndexToTab(0), false, false });
+		tabs.push_back({ customGroups[1].name, CustomIndexToTab(1), currentGroupTab == CustomIndexToTab(1), false, false });
 
+		// 下拉承接自定义#2 之后的分组（前两个已在标签条上）
+		const int firstHiddenTab = CustomIndexToTab(2);
 		std::wstring dropText = L"更多分组 ▾";
-		if (currentGroupTab >= 4 && (currentGroupTab - 2) < static_cast<int>(customCount))
+		if (currentGroupTab >= firstHiddenTab && TabToCustomIndex(currentGroupTab) < static_cast<int>(customCount))
 		{
-			dropText = customGroups[currentGroupTab - 2].name + L" ▾";
+			dropText = customGroups[TabToCustomIndex(currentGroupTab)].name + L" ▾";
 		}
-		tabs.push_back({ dropText, -2, currentGroupTab >= 4, false, true });
+		tabs.push_back({ dropText, -2, currentGroupTab >= firstHiddenTab, false, true });
 	}
 
 	tabs.push_back({ L"+ 新增分组", -1, false, true, false });
@@ -6249,7 +6334,7 @@ void CManagerDialog::OnLButtonDown(UINT nFlags, CPoint point)
 						CustomGroup newGrp;
 						newGrp.name = inputDlg.m_value.GetString();
 						m_data.m_custom_groups.push_back(newGrp);
-						SwitchGroupTab(static_cast<int>(m_data.m_custom_groups.size()) + 1);
+						SwitchGroupTab(CustomIndexToTab(static_cast<int>(m_data.m_custom_groups.size()) - 1));
 						g_data.m_setting_data.m_custom_groups = m_data.m_custom_groups;
 						g_data.SaveConfig();
 						Invalidate();
@@ -6265,7 +6350,7 @@ void CManagerDialog::OnLButtonDown(UINT nFlags, CPoint point)
 						menuItems.push_back({
 							static_cast<int>(1000 + k),
 							m_data.m_custom_groups[k].name,
-							(m_current_group_tab == static_cast<int>(k + 2)),
+							(m_current_group_tab == CustomIndexToTab(static_cast<int>(k))),
 							false,
 							false
 						});
@@ -6281,7 +6366,7 @@ void CManagerDialog::OnLButtonDown(UINT nFlags, CPoint point)
 					if (cmd >= 1000 && cmd < 1000 + static_cast<int>(m_data.m_custom_groups.size()))
 					{
 						int selectedGroup = cmd - 1000;
-						SwitchGroupTab(selectedGroup + 2);
+						SwitchGroupTab(CustomIndexToTab(selectedGroup));
 						Invalidate();
 					}
 					return;
@@ -6469,13 +6554,14 @@ void CManagerDialog::OnRButtonUp(UINT nFlags, CPoint point)
 			if (m_group_tab_rects[i].PtInRect(point))
 			{
 				int groupIdx = -1;
-				if (tabs[i].targetTab >= 2)
+				// 仅自定义分组（>= kTabFirstCustom）可重命名/删除；已清仓为派生页签，不参与
+				if (tabs[i].targetTab >= kTabFirstCustom)
 				{
-					groupIdx = tabs[i].targetTab - 2;
+					groupIdx = TabToCustomIndex(tabs[i].targetTab);
 				}
-				else if (tabs[i].isDropdown && m_current_group_tab >= 4)
+				else if (tabs[i].isDropdown && m_current_group_tab >= CustomIndexToTab(2))
 				{
-					groupIdx = m_current_group_tab - 2;
+					groupIdx = TabToCustomIndex(m_current_group_tab);
 				}
 
 				if (groupIdx >= 0 && groupIdx < static_cast<int>(m_data.m_custom_groups.size()))
@@ -6763,6 +6849,13 @@ void CManagerDialog::OnListItemClick(NMHDR* pNMHDR, LRESULT* pResult)
 		int nItem = pNMItemActivate->iItem;
 		int nSubItem = pNMItemActivate->iSubItem;
 
+		// 「已清仓」页签的列表为派生只读内容，不参与勾选翻转（列号含义也与之无关）
+		if (m_current_group_tab == kTabCleared)
+		{
+			*pResult = 0;
+			return;
+		}
+
 		// 检查是否点击了 "状态栏显示" 列（7 列布局中位于最后一列，曾因阈值提醒列插入而比旧列号右移一位）
 		if (nSubItem == STATUSBAR_SHOW_COLUMN)
 		{
@@ -6777,14 +6870,14 @@ void CManagerDialog::OnListItemClick(NMHDR* pNMHDR, LRESULT* pResult)
 					g_data.m_log_path.c_str());
 				return !cur;
 			};
-			if (m_current_group_tab == 0) // 自选股
+			if (m_current_group_tab == kTabWatchlist) // 自选股
 			{
 				if (nItem < static_cast<int>(m_data.m_stock_codes.size()))
 				{
 					m_stock_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, flip(m_data.m_stock_codes[nItem]) ? L"√" : L"");
 				}
 			}
-			else if (m_current_group_tab == 1) // 持仓
+			else if (m_current_group_tab == kTabPositions) // 持仓
 			{
 				DWORD_PTR codeIdx = m_pos_listctrl.GetItemData(nItem);
 				if (codeIdx < m_data.m_position_codes.size())
@@ -6792,9 +6885,9 @@ void CManagerDialog::OnListItemClick(NMHDR* pNMHDR, LRESULT* pResult)
 					m_pos_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, flip(m_data.m_position_codes[codeIdx]) ? L"√" : L"");
 				}
 			}
-			else if (m_current_group_tab >= 2) // 自定义分组
+			else if (m_current_group_tab >= kTabFirstCustom) // 自定义分组
 			{
-				size_t groupIdx = static_cast<size_t>(m_current_group_tab - 2);
+				size_t groupIdx = static_cast<size_t>(TabToCustomIndex(m_current_group_tab));
 				if (groupIdx < m_data.m_custom_groups.size())
 				{
 					auto& codes = m_data.m_custom_groups[groupIdx].codes;
@@ -6903,13 +6996,20 @@ void CManagerDialog::OnLbnDblclkPosList(NMHDR* pNMHDR, LRESULT* pResult)
 void CManagerDialog::OnLbnDblclkCustomList(NMHDR* pNMHDR, LRESULT* pResult)
 {
 	LPNMITEMACTIVATE pNMItem = reinterpret_cast<LPNMITEMACTIVATE>(pNMHDR);
+	// 「已清仓」页签复用本控件但内容是派生只读列表，行号与 m_custom_groups[0] 无关：
+	// 若按自定义分组口径取 code 会改到别的股票，故直接忽略双击
+	if (m_current_group_tab == kTabCleared)
+	{
+		*pResult = 0;
+		return;
+	}
 	// 双击「状态栏显示」列直接忽略：双击的前半程单击已翻转过一次，再弹关注价格编辑会被误读成勾选丢失
 	if (pNMItem->iSubItem == STATUSBAR_SHOW_COLUMN)
 	{
 		*pResult = 0;
 		return;
 	}
-	size_t groupIdx = (m_current_group_tab >= 2) ? static_cast<size_t>(m_current_group_tab - 2) : 0;
+	size_t groupIdx = (m_current_group_tab >= kTabFirstCustom) ? static_cast<size_t>(TabToCustomIndex(m_current_group_tab)) : 0;
 	// 双击「阈值提醒」列：设置每日涨跌幅阈值；其余列沿用关注价格设置
 	if (pNMItem->iSubItem == ALERT_PERCENT_COLUMN)
 	{
@@ -6953,7 +7053,7 @@ void CManagerDialog::OnLbnDblclkCustomList(NMHDR* pNMHDR, LRESULT* pResult)
 
 void CManagerDialog::OnAddBtnClick()
 {
-	if (m_current_group_tab == 1)
+	if (m_current_group_tab == kTabPositions)
 	{
 		// 编辑持仓：优先编辑选中行；否则依次取持仓列表、自选列表中的第一个代码作为候选
 		int curSel = m_pos_listctrl.GetNextItem(-1, LVNI_SELECTED);
@@ -6999,7 +7099,7 @@ void CManagerDialog::OnAddBtnClick()
 
 void CManagerDialog::OnEditBtnClick()
 {
-	if (m_current_group_tab == 0)
+	if (m_current_group_tab == kTabWatchlist)
 	{
 		int curSel = m_stock_listctrl.GetNextItem(-1, LVNI_SELECTED);
 		if (curSel >= 0 && curSel < static_cast<int>(m_data.m_stock_codes.size()))
@@ -7014,9 +7114,9 @@ void CManagerDialog::OnEditBtnClick()
 			}
 		}
 	}
-	else if (m_current_group_tab >= 2)
+	else if (m_current_group_tab >= kTabFirstCustom)
 	{
-		size_t groupIdx = static_cast<size_t>(m_current_group_tab - 2);
+		size_t groupIdx = static_cast<size_t>(TabToCustomIndex(m_current_group_tab));
 		if (groupIdx < m_data.m_custom_groups.size())
 		{
 			auto& codes = m_data.m_custom_groups[groupIdx].codes;
@@ -7038,7 +7138,7 @@ void CManagerDialog::OnEditBtnClick()
 
 void CManagerDialog::OnDelBtnClick()
 {
-	if (m_current_group_tab == 0)
+	if (m_current_group_tab == kTabWatchlist)
 	{
 		int curSel = m_stock_listctrl.GetNextItem(-1, LVNI_SELECTED);
 		if (curSel >= 0 && curSel < static_cast<int>(m_data.m_stock_codes.size()))
@@ -7048,7 +7148,7 @@ void CManagerDialog::OnDelBtnClick()
 			RefreshPositionList();
 		}
 	}
-	else if (m_current_group_tab == 1)
+	else if (m_current_group_tab == kTabPositions)
 	{
 		// 清除持仓：清零持仓数据并从独立持仓列表移除（不影响自选股）
 		int curSel = m_pos_listctrl.GetNextItem(-1, LVNI_SELECTED);
@@ -7066,9 +7166,9 @@ void CManagerDialog::OnDelBtnClick()
 			}
 		}
 	}
-	else if (m_current_group_tab >= 2)
+	else if (m_current_group_tab >= kTabFirstCustom)
 	{
-		size_t groupIdx = static_cast<size_t>(m_current_group_tab - 2);
+		size_t groupIdx = static_cast<size_t>(TabToCustomIndex(m_current_group_tab));
 		if (groupIdx < m_data.m_custom_groups.size())
 		{
 			auto& codes = m_data.m_custom_groups[groupIdx].codes;
@@ -7084,9 +7184,9 @@ void CManagerDialog::OnDelBtnClick()
 
 void CManagerDialog::OnDelGroupBtnClick()
 {
-	if (m_current_group_tab >= 2 && (m_current_group_tab - 2) < static_cast<int>(m_data.m_custom_groups.size()))
+	if (m_current_group_tab >= kTabFirstCustom && TabToCustomIndex(m_current_group_tab) < static_cast<int>(m_data.m_custom_groups.size()))
 	{
-		size_t groupIdx = static_cast<size_t>(m_current_group_tab - 2);
+		size_t groupIdx = static_cast<size_t>(TabToCustomIndex(m_current_group_tab));
 		CString prompt;
 		prompt.Format(L"确定要删除分组 [%s] 吗？", m_data.m_custom_groups[groupIdx].name.c_str());
 		CDarkConfirmDialog confirmDlg(L"确认删除", prompt, this, true);
@@ -7103,7 +7203,7 @@ void CManagerDialog::OnDelGroupBtnClick()
 
 void CManagerDialog::OnMoveUpBtnClick()
 {
-	if (m_current_group_tab == 0)
+	if (m_current_group_tab == kTabWatchlist)
 	{
 		int curSel = m_stock_listctrl.GetNextItem(-1, LVNI_SELECTED);
 		if (curSel > 0 && curSel < static_cast<int>(m_data.m_stock_codes.size()))
@@ -7113,9 +7213,9 @@ void CManagerDialog::OnMoveUpBtnClick()
 			m_stock_listctrl.SetItemState(curSel - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 		}
 	}
-	else if (m_current_group_tab >= 2)
+	else if (m_current_group_tab >= kTabFirstCustom)
 	{
-		size_t groupIdx = static_cast<size_t>(m_current_group_tab - 2);
+		size_t groupIdx = static_cast<size_t>(TabToCustomIndex(m_current_group_tab));
 		if (groupIdx < m_data.m_custom_groups.size())
 		{
 			auto& codes = m_data.m_custom_groups[groupIdx].codes;
@@ -7132,7 +7232,7 @@ void CManagerDialog::OnMoveUpBtnClick()
 
 void CManagerDialog::OnMoveDownBtnClick()
 {
-	if (m_current_group_tab == 0)
+	if (m_current_group_tab == kTabWatchlist)
 	{
 		int curSel = m_stock_listctrl.GetNextItem(-1, LVNI_SELECTED);
 		if (curSel >= 0 && curSel < static_cast<int>(m_data.m_stock_codes.size()) - 1)
@@ -7142,9 +7242,9 @@ void CManagerDialog::OnMoveDownBtnClick()
 			m_stock_listctrl.SetItemState(curSel + 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 		}
 	}
-	else if (m_current_group_tab >= 2)
+	else if (m_current_group_tab >= kTabFirstCustom)
 	{
-		size_t groupIdx = static_cast<size_t>(m_current_group_tab - 2);
+		size_t groupIdx = static_cast<size_t>(TabToCustomIndex(m_current_group_tab));
 		if (groupIdx < m_data.m_custom_groups.size())
 		{
 			auto& codes = m_data.m_custom_groups[groupIdx].codes;
@@ -7169,8 +7269,8 @@ void CManagerDialog::OnGroupSortBtnClick()
 
 	// 记录当前选中的分组名，排序后让标签跟随它的新位置
 	std::wstring currentName;
-	if (m_current_group_tab >= 2 && (m_current_group_tab - 2) < static_cast<int>(m_data.m_custom_groups.size()))
-		currentName = m_data.m_custom_groups[m_current_group_tab - 2].name;
+	if (m_current_group_tab >= kTabFirstCustom && TabToCustomIndex(m_current_group_tab) < static_cast<int>(m_data.m_custom_groups.size()))
+		currentName = m_data.m_custom_groups[TabToCustomIndex(m_current_group_tab)].name;
 
 	CGroupSortDlg dlg(m_data.m_custom_groups, this);
 	if (dlg.DoModal() != IDOK)
@@ -7186,7 +7286,7 @@ void CManagerDialog::OnGroupSortBtnClick()
 		{
 			if (m_data.m_custom_groups[i].name == currentName)
 			{
-				m_current_group_tab = static_cast<int>(i) + 2;
+				m_current_group_tab = CustomIndexToTab(static_cast<int>(i));
 				break;
 			}
 		}

@@ -669,6 +669,30 @@ std::vector<StockTradeRecord> CStockDbManager::LoadTradeRecords(const std::wstri
 	return result;
 }
 
+bool CStockDbManager::LoadDistinctTradeCodes(std::vector<std::wstring>& codesOut)
+{
+	STOCKDB_LOCK();
+	codesOut.clear();
+	if (m_db == nullptr) return false;
+
+	const char* sql = "SELECT DISTINCT stock_code FROM trades ORDER BY stock_code ASC;";
+	sqlite3_stmt* stmt = nullptr;
+	if (sqlite3_prepare_v2(m_db, sql, -1, &stmt, nullptr) != SQLITE_OK) return false;
+
+	while (sqlite3_step(stmt) == SQLITE_ROW)
+	{
+		const void* codeText = sqlite3_column_text16(stmt, 0);
+		if (codeText)
+		{
+			std::wstring code(static_cast<const wchar_t*>(codeText));
+			if (!code.empty())
+				codesOut.push_back(std::move(code));
+		}
+	}
+	sqlite3_finalize(stmt);
+	return true;
+}
+
 bool CStockDbManager::UpdateTradeRecord(long long id, int tradeType, const std::wstring& time,
 	double price, double amount, double fee)
 {

@@ -12,7 +12,8 @@
 
 int CStockListPanel::GetGroupTabCount()
 {
-	return 2 + static_cast<int>(g_data.m_setting_data.m_custom_groups.size());
+	// 三个内置页签（自选股/持仓/已清仓）+ 自定义分组
+	return kTabFirstCustom + static_cast<int>(g_data.m_setting_data.m_custom_groups.size());
 }
 
 int CStockListPanel::ClampGroupTab(int groupTab)
@@ -26,11 +27,13 @@ int CStockListPanel::ClampGroupTab(int groupTab)
 std::wstring CStockListPanel::GetGroupTabName(int groupTab)
 {
 	groupTab = ClampGroupTab(groupTab);
-	if (groupTab == 0)
+	if (groupTab == kTabWatchlist)
 		return L"自选股";
-	if (groupTab == 1)
+	if (groupTab == kTabPositions)
 		return L"持仓";
-	return g_data.m_setting_data.m_custom_groups[groupTab - 2].name;
+	if (groupTab == kTabCleared)
+		return L"已清仓";
+	return g_data.m_setting_data.m_custom_groups[TabToCustomIndex(groupTab)].name;
 }
 
 std::vector<std::wstring> CStockListPanel::GetStockListCodes()
@@ -48,17 +51,33 @@ std::vector<std::wstring> CStockListPanel::GetStockListCodes(int groupTab, int s
 	groupTab = ClampGroupTab(groupTab);
 	std::vector<std::wstring> stockCodes;
 	std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
-	const std::vector<std::wstring>* src = nullptr;
-	if (groupTab == 0)
-		src = &g_data.m_setting_data.m_stock_codes;
-	else if (groupTab == 1)
-		src = &g_data.m_setting_data.m_position_codes;
-	else
-		src = &g_data.m_setting_data.m_custom_groups[groupTab - 2].codes;
-	for (const auto& code : *src)
+
+	if (groupTab == kTabCleared)
 	{
-		if (GetStockPriority(code) >= 200)  // 只保留非指数股票（含A股及港股个股）
-			stockCodes.push_back(code);
+		// 「已清仓」为派生视图：台账里有流水、但当前持股数已归零的股票。
+		// 不落地存储，故买回后持股>0 即自动离开本页签、回到「持仓」，无需任何同步。
+		for (const auto& code : g_data.GetLedgerStockCodes())
+		{
+			if (g_data.GetHoldingCount(code) > 0.0001)
+				continue;                        // 仍持仓 -> 属于「持仓」页签
+			if (GetStockPriority(code) >= 200)   // 与其它分组同口径：只保留非指数股票
+				stockCodes.push_back(code);
+		}
+	}
+	else
+	{
+		const std::vector<std::wstring>* src = nullptr;
+		if (groupTab == kTabWatchlist)
+			src = &g_data.m_setting_data.m_stock_codes;
+		else if (groupTab == kTabPositions)
+			src = &g_data.m_setting_data.m_position_codes;
+		else
+			src = &g_data.m_setting_data.m_custom_groups[TabToCustomIndex(groupTab)].codes;
+		for (const auto& code : *src)
+		{
+			if (GetStockPriority(code) >= 200)  // 只保留非指数股票（含A股及港股个股）
+				stockCodes.push_back(code);
+		}
 	}
 
 	// 按涨跌幅排序（仅调整显示顺序，不修改分组内保存的代码顺序）
@@ -89,17 +108,20 @@ std::vector<FloatingGroupTab> CStockListPanel::LayoutGroupTabs(CDC& memDC, int w
 	const auto& customGroups = g_data.m_setting_data.m_custom_groups;
 	int tabCount = ClampGroupTab(activeTab);
 
-	// 三个固定标签位：自选股 / 持仓 / 第一个自定义分组；其余自定义分组折叠进“更多分组”
-	tabs.push_back({ L"自选股", 0, tabCount == 0, false, CRect(0, 0, 0, 0) });
-	tabs.push_back({ L"持仓", 1, tabCount == 1, false, CRect(0, 0, 0, 0) });
+	// 固定标签位：自选股 / 持仓 / 已清仓 / 第一个自定义分组；其余自定义分组折叠进“更多分组”。
+	// 「已清仓」常驻显示（无内容时列表自会提示“暂无股票”），避免它随内容忽隐忽现导致页签跳位。
+	tabs.push_back({ L"自选股", kTabWatchlist, tabCount == kTabWatchlist, false, CRect(0, 0, 0, 0) });
+	tabs.push_back({ L"持仓", kTabPositions, tabCount == kTabPositions, false, CRect(0, 0, 0, 0) });
+	tabs.push_back({ L"已清仓", kTabCleared, tabCount == kTabCleared, false, CRect(0, 0, 0, 0) });
 	if (!customGroups.empty())
-		tabs.push_back({ customGroups[0].name, 2, tabCount == 2, false, CRect(0, 0, 0, 0) });
+		tabs.push_back({ customGroups[0].name, kTabFirstCustom, tabCount == kTabFirstCustom, false, CRect(0, 0, 0, 0) });
 	if (customGroups.size() >= 2)
 	{
+		// 下拉承接第一个之后的自定义分组；仅在激活页签落在隐藏组上时显示其组名
 		std::wstring dropText = L"更多分组 ▾";
-		if (tabCount >= 3 && (tabCount - 2) < static_cast<int>(customGroups.size()))
-			dropText = customGroups[tabCount - 2].name + L" ▾";
-		tabs.push_back({ dropText, -1, tabCount >= 3, true, CRect(0, 0, 0, 0) });
+		if (tabCount >= kTabFirstCustom + 1 && TabToCustomIndex(tabCount) < static_cast<int>(customGroups.size()))
+			dropText = customGroups[TabToCustomIndex(tabCount)].name + L" ▾";
+		tabs.push_back({ dropText, -1, tabCount >= kTabFirstCustom + 1, true, CRect(0, 0, 0, 0) });
 	}
 
 	// 布局：在标题栏内垂直居中，右侧预留窗口 40% 给居中的股票标题
