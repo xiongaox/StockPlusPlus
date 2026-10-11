@@ -1714,6 +1714,10 @@ void Stock::UpdateMacdCalcForStock(const std::wstring& code)
 
 	time_t now = time(nullptr);
 
+	// 直写 stock_data 的 MACD 缓存并读取 K线/分时 vector（抓取线程同时在锁内扩容），
+	// 全程持 m_stockDataMutex（宿主回调线程与抓取/UI 线程共用这把锁）
+	std::lock_guard<std::mutex> dataLock(Stock::Instance().m_stockDataMutex);
+
 	// 辅助lambda：计算单周期MACD并缓存，数据不足时不更新calcTime以便下次重试
 	auto calcPeriodMacd = [&](STOCK::StockData::PeriodMacdCache& cache, int interval,
 		std::function<bool(std::vector<STOCK::Bar>&)> getBars) {
@@ -1812,6 +1816,9 @@ void Stock::JudgeMacdTrendForStock(const std::wstring& code)
 	auto stock_data = g_data.GetStockData(code);
 	if (!stock_data || !stock_data->info.is_ok)
 		return;
+
+	// 读 MACD 缓存 + 写 macdTrendSignal/Desc（CString 引用计数非线程安全），持 m_stockDataMutex
+	std::lock_guard<std::mutex> dataLock(Stock::Instance().m_stockDataMutex);
 
 	// 至少需要日K数据才能判定格局
 	if (!stock_data->dayMacdCache.dataReady)

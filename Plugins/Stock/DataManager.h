@@ -209,14 +209,10 @@ public:
 	// 按 id 删除一笔
 	bool DeleteStockTrade(const std::wstring& code, long long id);
 	// 按股票缓存的台账失效（云端恢复等外部直接改写 trades 表后调用）
-	void InvalidateTradeCache() { m_trade_cache.clear(); m_ledger_codes_valid = false; }
+	void InvalidateTradeCache();
 	// 台账写入后失效单个股票的流水缓存，并一并作废全量代码缓存
 	//（新增/删除成交可能让某股票首次出现或彻底消失于台账，「已清仓」分组依赖该全集）
-	void InvalidateTradeCacheFor(const std::wstring& code)
-	{
-		m_trade_cache.erase(code);
-		m_ledger_codes_valid = false;
-	}
+	void InvalidateTradeCacheFor(const std::wstring& code);
 	// 台账类型标签：按历史持仓推导 建仓/加仓/减仓/清仓（首笔买入=建仓，其后买入=加仓）
 	static std::wstring GetTradeKindLabel(const std::vector<StockTradeRecord>& trades, size_t index);
 	// 当日盈亏修正值：今日各笔 Σ卖出量×(卖价−昨收) + Σ买入量×(昨收−买价)。昨收<=0 时返回 0
@@ -300,6 +296,15 @@ private:
 	std::mutex m_fetch_status_mutex;
 	std::map<std::wstring, std::vector<STOCK::FetchStatusEntry>> m_fetch_status;  // code -> 最近状态（新在后，最多保留4条）
 
+	// 台账缓存（GetStockTrades 惰性加载 / 写后失效），m_trade_cache_mutex 保护。
+	// 读方在 UI 绘制线程，写失效方可能来自 WebDAV 后台线程，必须互斥
+	std::mutex m_trade_cache_mutex;
+	std::map<std::wstring, std::vector<StockTradeRecord>> m_trade_cache;
+
+	// 均幅统计四容器（m_avg_diff_stats/m_avg_diff_history 及两个采样时间戳 map），
+	// m_avg_diff_mutex 保护：写方在行情抓取线程，读方在 UI 绘制线程
+	std::mutex m_avg_diff_mutex;
+
 	std::map<UINT, CString> m_string_table;
 	std::map<UINT, HICON> m_icons;
 	int m_dpi{ 96 };
@@ -319,9 +324,6 @@ private:
 
 	// 持仓配置映射表: code -> (cost_price, holding_count, buy_date)
 	std::map<std::wstring, std::tuple<double, double, std::wstring>> m_stock_positions;
-
-	// 交易台账缓存: code -> 台账记录（惰性加载，写操作后失效重载）
-	std::map<std::wstring, std::vector<StockTradeRecord>> m_trade_cache;
 
 	// 台账出现过的全部股票代码（「已清仓」分组枚举用；与 m_trade_cache 同步失效）
 	std::vector<std::wstring> m_ledger_codes_cache;

@@ -296,7 +296,10 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 	// 加载每个股票的持仓配置
 	m_stock_positions.clear();
 	// 交易台账缓存（按股票惰性加载，写操作后失效）
-	m_trade_cache.clear();
+	{
+		std::lock_guard<std::mutex> lock(m_trade_cache_mutex);
+		m_trade_cache.clear();
+	}
 	// 加载每个股票的状态栏展示配置
 	m_stock_statusbar.clear();
 	// 加载每个股票的关联股票配置
@@ -427,7 +430,10 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 	{
 		auto stats = m_db_mgr.LoadAvgDiffStats(item.first);
 		if (stats.minVal != 0.0 || stats.maxVal != 0.0 || stats.currentVal != 0.0)
+		{
+			std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
 			m_avg_diff_stats[item.first] = stats;
+		}
 	}
 
 	// 初始化日均幅日期，确保跨天检测生效
@@ -909,8 +915,11 @@ void CDataManager::ResetToDefault()
 	m_stock_positions.clear();
 	m_stock_alert_prices.clear();
 	m_stock_related.clear();
-	m_avg_diff_stats.clear();
-	m_avg_diff_history.clear();
+	{
+		std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
+		m_avg_diff_stats.clear();
+		m_avg_diff_history.clear();
+	}
 
 	// 3. 删除原有 ini 配置文件，彻底清除历史无效项
 	if (!m_config_path.empty())
@@ -1775,20 +1784,45 @@ void CDataManager::SetPosition(const std::wstring& code, double cost, double cou
 std::vector<StockTradeRecord> CDataManager::GetStockTrades(const std::wstring& code)
 {
 	// 惰性加载：首次访问读库并缓存，写操作后失效重载（读取频率高，重绘时避免反复查库）
-	auto it = m_trade_cache.find(code);
-	if (it != m_trade_cache.end())
-		return it->second;
+	// 缓存 map 加锁：读方在 UI 绘制线程，失效方可能来自 WebDAV 后台线程
+	{
+		std::lock_guard<std::mutex> lock(m_trade_cache_mutex);
+		auto it = m_trade_cache.find(code);
+		if (it != m_trade_cache.end())
+			return it->second;
+	}
 	std::vector<StockTradeRecord> records = m_db_mgr.LoadTradeRecords(code);
-	m_trade_cache[code] = records;
+	{
+		std::lock_guard<std::mutex> lock(m_trade_cache_mutex);
+		m_trade_cache[code] = records;
+	}
 	return records;
+}
+
+void CDataManager::InvalidateTradeCache()
+{
+	// 云端恢复线程整体清空缓存，UI 绘制线程同时在读，必须互斥
+	std::lock_guard<std::mutex> lock(m_trade_cache_mutex);
+	m_trade_cache.clear();
+	m_ledger_codes_valid = false;
+}
+
+void CDataManager::InvalidateTradeCacheFor(const std::wstring& code)
+{
+	std::lock_guard<std::mutex> lock(m_trade_cache_mutex);
+	m_trade_cache.erase(code);
+	m_ledger_codes_valid = false;
 }
 
 bool CDataManager::HasStockTrades(const std::wstring& code)
 {
 	// 与 GetStockTrades 共用缓存：命中缓存直接判空，未命中才查一次库（结果一并入缓存）
-	auto it = m_trade_cache.find(code);
-	if (it != m_trade_cache.end())
-		return !it->second.empty();
+	{
+		std::lock_guard<std::mutex> lock(m_trade_cache_mutex);
+		auto it = m_trade_cache.find(code);
+		if (it != m_trade_cache.end())
+			return !it->second.empty();
+	}
 	return !GetStockTrades(code).empty();
 }
 
@@ -2116,6 +2150,7 @@ void CDataManager::SetRelatedStocks(const std::wstring& code, const std::vector<
 
 AvgDiffStats CDataManager::GetAvgDiffData(const std::wstring& code)
 {
+	std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
 	auto it = m_avg_diff_stats.find(code);
 	if (it != m_avg_diff_stats.end())
 		return it->second;
@@ -2124,6 +2159,7 @@ AvgDiffStats CDataManager::GetAvgDiffData(const std::wstring& code)
 
 void CDataManager::UpdateAvgDiffStats(const std::wstring& code, double avgDiff)
 {
+	std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
 	auto it = m_avg_diff_stats.find(code);
 	if (it != m_avg_diff_stats.end())
 	{
@@ -2142,6 +2178,7 @@ void CDataManager::UpdateAvgDiffStats(const std::wstring& code, double avgDiff)
 
 void CDataManager::SetAvgDiffStats(const std::wstring& code, double minVal, double maxVal, double currentVal)
 {
+	std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
 	auto it = m_avg_diff_stats.find(code);
 	if (it != m_avg_diff_stats.end())
 	{
@@ -2160,10 +2197,17 @@ void CDataManager::SetAvgDiffStats(const std::wstring& code, double minVal, doub
 
 bool CDataManager::SaveAvgDiffStatsDb(const std::wstring& stockCode)
 {
-	auto it = m_avg_diff_stats.find(stockCode);
-	if (it == m_avg_diff_stats.end())
-		return false;
-	return m_db_mgr.SaveAvgDiffStats(stockCode, it->second.minVal, it->second.maxVal, it->second.currentVal);
+	double minVal = 0.0, maxVal = 0.0, curVal = 0.0;
+	{
+		std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
+		auto it = m_avg_diff_stats.find(stockCode);
+		if (it == m_avg_diff_stats.end())
+			return false;
+		minVal = it->second.minVal;
+		maxVal = it->second.maxVal;
+		curVal = it->second.currentVal;
+	}
+	return m_db_mgr.SaveAvgDiffStats(stockCode, minVal, maxVal, curVal);
 }
 
 void CDataManager::CheckAndResetAvgDiffDaily()
@@ -2175,6 +2219,7 @@ void CDataManager::CheckAndResetAvgDiffDaily()
 	char dateStr[16];
 	sprintf_s(dateStr, "%04d-%02d-%02d", t.tm_year + 1900, t.tm_mon + 1, t.tm_mday);
 
+	std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
 	if (m_avg_diff_last_date.empty())
 	{
 		m_avg_diff_last_date = dateStr;
@@ -2265,28 +2310,39 @@ void CDataManager::UpdateRelatedStocksAvgDiff()
 		}
 
 		// 每5秒采样一次均值到历史队列（最多60个，5分钟数据）
+		// 两个时间戳 map 与 stats/history 同被 m_avg_diff_mutex 保护（PushAvgDiffHistory 内部会再次加锁，
+		// 该 mutex 需为递归语义——改为在锁外取时间戳再调用，避免引入 recursive_mutex）
+		bool doSample = false, doSave = false;
 		time_t sampleNow = time(nullptr);
-		time_t& lastSampleTime = m_avg_diff_last_sample_time[stockId];
-		if (sampleNow - lastSampleTime >= 5)
+		time_t now = time(nullptr);
 		{
-			lastSampleTime = sampleNow;
-			PushAvgDiffHistory(stockId, avgDiffPercent);
+			std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
+			time_t& lastSampleTime = m_avg_diff_last_sample_time[stockId];
+			if (sampleNow - lastSampleTime >= 5)
+			{
+				lastSampleTime = sampleNow;
+				doSample = true;
+			}
+			time_t& lastSaveTime = m_avg_diff_last_save_time[stockId];
+			if (now - lastSaveTime >= 60 && (CCommon::IsMarketSession() || m_setting_data.m_full_day == 1))
+			{
+				lastSaveTime = now;
+				doSave = true;
+			}
 		}
+		if (doSample)
+			PushAvgDiffHistory(stockId, avgDiffPercent);
 
 		// 每分钟保存最低/最高均幅到数据库（交易时段或全天模式；跨天污染由每日重置兜底）
 		// 注意：用按股票的时间戳，避免函数级static被多只股票共享导致只有第一只被写库
-		time_t now = time(nullptr);
-		time_t& lastSaveTime = m_avg_diff_last_save_time[stockId];
-		if (now - lastSaveTime >= 60 && (CCommon::IsMarketSession() || m_setting_data.m_full_day == 1))
-		{
-			lastSaveTime = now;
+		if (doSave)
 			SaveAvgDiffStatsDb(stockId);
-		}
 	}
 }
 
 void CDataManager::PushAvgDiffHistory(const std::wstring& code, double avgDiff)
 {
+	std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
 	auto& queue = m_avg_diff_history[code];
 	queue.push_back(avgDiff);
 	if (queue.size() > 60)
@@ -2295,37 +2351,43 @@ void CDataManager::PushAvgDiffHistory(const std::wstring& code, double avgDiff)
 
 RegResult CDataManager::Get1MinAvgTrend(const std::wstring& code)
 {
-	auto it = m_avg_diff_history.find(code);
-	if (it == m_avg_diff_history.end())
+	std::deque<double> win;
 	{
-		RegResult r;
-		r.valid = false;
-		r.slope = 0.0;
-		r.r2 = 0.0;
-		return r;
+		std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
+		auto it = m_avg_diff_history.find(code);
+		if (it == m_avg_diff_history.end())
+		{
+			RegResult r;
+			r.valid = false;
+			r.slope = 0.0;
+			r.r2 = 0.0;
+			return r;
+		}
+		// 取最近6个点（30秒：6×5秒=30秒）
+		int startIdx = max(0, static_cast<int>(it->second.size()) - 6);
+		win.assign(it->second.begin() + startIdx, it->second.end());
 	}
-
-	const auto& queue = it->second;
-	// 取最近6个点（30秒：6×5秒=30秒）
-	int startIdx = max(0, static_cast<int>(queue.size()) - 6);
-	std::deque<double> win(queue.begin() + startIdx, queue.end());
 	return CSignalAnalyzer::CalcLinearRegFromDeque(win);
 }
 
 RegResult CDataManager::Get5MinAvgTrend(const std::wstring& code)
 {
-	auto it = m_avg_diff_history.find(code);
-	if (it == m_avg_diff_history.end())
+	std::deque<double> copy;
 	{
-		RegResult r;
-		r.valid = false;
-		r.slope = 0.0;
-		r.r2 = 0.0;
-		return r;
+		std::lock_guard<std::mutex> lock(m_avg_diff_mutex);
+		auto it = m_avg_diff_history.find(code);
+		if (it == m_avg_diff_history.end())
+		{
+			RegResult r;
+			r.valid = false;
+			r.slope = 0.0;
+			r.r2 = 0.0;
+			return r;
+		}
+		// 5分钟：全部60个点
+		copy = it->second;
 	}
-
-	// 5分钟：全部60个点
-	return CSignalAnalyzer::CalcLinearRegFromDeque(it->second);
+	return CSignalAnalyzer::CalcLinearRegFromDeque(copy);
 }
 
 static bool IsSameLocalDate(time_t lhs, time_t rhs)
