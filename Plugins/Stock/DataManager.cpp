@@ -1098,48 +1098,54 @@ int CDataManager::UpdateRealtimeFromQuotes(const std::vector<QuoteItem>& items)
 		if (!stockData)
 			continue;
 
+		// UI 线程（状态栏/盘口绘制）无锁读取 info 的这些字段（std::wstring 赋值会先释放旧缓冲，
+		// 半新半旧指针会崩），info 写入段必须持 m_stockDataMutex；
+		// 锁序约定：m_stockDataMutex 是外层锁，getStock 的 m_mutex 在内（与 LoadCallAuctionData 一致）
 		StockInfo& info = stockData->info;
-		info.code = code;
-		info.is_ok = true;
+		{
+			std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
+			info.code = code;
+			info.is_ok = true;
 
-		// 首次启动时更新股票名称（displayName为空时才从共享内存写入）
-		if (info.displayName.empty() && item.name[0] != '\0')
-			info.displayName = CCommon::StrToUnicode(item.name);
+			// 首次启动时更新股票名称（displayName为空时才从共享内存写入）
+			if (info.displayName.empty() && item.name[0] != '\0')
+				info.displayName = CCommon::StrToUnicode(item.name);
 
-		bool isEtf = info.IsETF();
-		// 更新价格数据
-		info.prevClosePrice = (Price)(isEtf ? item.pre_close / 10 : item.pre_close);
-		info.openPrice = (Price)(isEtf ? item.open / 10 : item.open);
-		info.highPrice = (Price)(isEtf ? item.high / 10 : item.high);
-		info.lowPrice = (Price)(isEtf ? item.low / 10 : item.low);
-		info.currentPrice = (Price)(isEtf ? item.price / 10 : item.price);
+			bool isEtf = info.IsETF();
+			// 更新价格数据
+			info.prevClosePrice = (Price)(isEtf ? item.pre_close / 10 : item.pre_close);
+			info.openPrice = (Price)(isEtf ? item.open / 10 : item.open);
+			info.highPrice = (Price)(isEtf ? item.high / 10 : item.high);
+			info.lowPrice = (Price)(isEtf ? item.low / 10 : item.low);
+			info.currentPrice = (Price)(isEtf ? item.price / 10 : item.price);
 
-		// 更新五档数据
-		info.bidLevels[0] = OrderLevel((Price)(isEtf ? item.bid1 / 10 : item.bid1), (Volume)item.bid_vol1 * 100);
-		info.bidLevels[1] = OrderLevel((Price)(isEtf ? item.bid2 / 10 : item.bid2), (Volume)item.bid_vol2 * 100);
-		info.bidLevels[2] = OrderLevel((Price)(isEtf ? item.bid3 / 10 : item.bid3), (Volume)item.bid_vol3 * 100);
-		info.bidLevels[3] = OrderLevel((Price)(isEtf ? item.bid4 / 10 : item.bid4), (Volume)item.bid_vol4 * 100);
-		info.bidLevels[4] = OrderLevel((Price)(isEtf ? item.bid5 / 10 : item.bid5), (Volume)item.bid_vol5 * 100);
-		info.askLevels[0] = OrderLevel((Price)(isEtf ? item.ask1 / 10 : item.ask1), (Volume)item.ask_vol1 * 100);
-		info.askLevels[1] = OrderLevel((Price)(isEtf ? item.ask2 / 10 : item.ask2), (Volume)item.ask_vol2 * 100);
-		info.askLevels[2] = OrderLevel((Price)(isEtf ? item.ask3 / 10 : item.ask3), (Volume)item.ask_vol3 * 100);
-		info.askLevels[3] = OrderLevel((Price)(isEtf ? item.ask4 / 10 : item.ask4), (Volume)item.ask_vol4 * 100);
-		info.askLevels[4] = OrderLevel((Price)(isEtf ? item.ask5 / 10 : item.ask5), (Volume)item.ask_vol5 * 100);
+			// 更新五档数据
+			info.bidLevels[0] = OrderLevel((Price)(isEtf ? item.bid1 / 10 : item.bid1), (Volume)item.bid_vol1 * 100);
+			info.bidLevels[1] = OrderLevel((Price)(isEtf ? item.bid2 / 10 : item.bid2), (Volume)item.bid_vol2 * 100);
+			info.bidLevels[2] = OrderLevel((Price)(isEtf ? item.bid3 / 10 : item.bid3), (Volume)item.bid_vol3 * 100);
+			info.bidLevels[3] = OrderLevel((Price)(isEtf ? item.bid4 / 10 : item.bid4), (Volume)item.bid_vol4 * 100);
+			info.bidLevels[4] = OrderLevel((Price)(isEtf ? item.bid5 / 10 : item.bid5), (Volume)item.bid_vol5 * 100);
+			info.askLevels[0] = OrderLevel((Price)(isEtf ? item.ask1 / 10 : item.ask1), (Volume)item.ask_vol1 * 100);
+			info.askLevels[1] = OrderLevel((Price)(isEtf ? item.ask2 / 10 : item.ask2), (Volume)item.ask_vol2 * 100);
+			info.askLevels[2] = OrderLevel((Price)(isEtf ? item.ask3 / 10 : item.ask3), (Volume)item.ask_vol3 * 100);
+			info.askLevels[3] = OrderLevel((Price)(isEtf ? item.ask4 / 10 : item.ask4), (Volume)item.ask_vol4 * 100);
+			info.askLevels[4] = OrderLevel((Price)(isEtf ? item.ask5 / 10 : item.ask5), (Volume)item.ask_vol5 * 100);
 
-		// 更新成交量/额（共享内存中vol已经是手）
-		info.volume = (Volume)item.vol * 100;       // 手->股
-		info.turnover = (Amount)item.amount;
-		info.innerVolume = (Volume)item.inner_vol * 100; // 手->股
-		info.outerVolume = (Volume)item.outer_vol * 100; // 手->股
+			// 更新成交量/额（共享内存中vol已经是手）
+			info.volume = (Volume)item.vol * 100;       // 手->股
+			info.turnover = (Amount)item.amount;
+			info.innerVolume = (Volume)item.inner_vol * 100; // 手->股
+			info.outerVolume = (Volume)item.outer_vol * 100; // 手->股
+
+			// 更新显示字段（价格/涨跌幅/涨跌额）
+			info.UpdateDisplayFields();
+		}
 
 		// 更新内外盘采样（净比计算）
 		stockData->UpdateVolumeSample();
 
 		// 更新五档挂单变化量（+N/-N）
 		stockData->UpdateOrderPriceAccum();
-
-		// 更新显示字段（价格/涨跌幅/涨跌额）
-		info.UpdateDisplayFields();
 
 		// 每日涨跌幅阈值提醒：行情更新后检查是否达标（方案A：宿主托盘气泡）
 		Stock::Instance().CheckDailyPercentAlertForStock(code);
@@ -1254,8 +1260,10 @@ void CDataManager::ApplyTimeline(const std::wstring& code, const std::string& re
 	auto timelineData = stockData ? stockData->getTimelineData() : nullptr;
 	if (timelineData && !timelineData->data.empty())
 	{
+		// 分时数据加载后，合并基金净值缓存到iopv字段。
+		// 原地改 timeline 数组时 UI 正在绘制同一 vector，必须持 m_stockDataMutex
+		std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
 		SaveTimelineCache(code, timelineData->data);
-		// 分时数据加载后，合并基金净值缓存到iopv字段
 		if (CCommon::IsFundCode(code))
 		{
 			auto navPoints = m_db_mgr.LoadLatestFundNavCache(code);

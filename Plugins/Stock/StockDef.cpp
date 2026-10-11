@@ -35,6 +35,8 @@ static Price GetJsonPrice(yyjson_val* obj, const char* key);
 void STOCK::StockMarket::LoadRealtimeDataByJson(std::string json, const std::vector<std::wstring>& codes)
 {
 	std::lock_guard<std::recursive_mutex> lock(m_mutex);
+	// UI 线程（状态栏/盘口绘制）无锁读取 info 的这些字段，写入必须与读取互斥；
+	// 锁序与 LoadCallAuctionData 一致：先 m_stockDataMutex 再 getStock 的 m_mutex
 	ClearRealtimeData(codes);
 
 	if (json.empty())
@@ -50,6 +52,7 @@ void STOCK::StockMarket::LoadRealtimeDataByJson(std::string json, const std::vec
 		return;
 	}
 
+	std::lock_guard<std::mutex> dataLock(Stock::Instance().m_stockDataMutex);
 	for (std::string line : lines)
 	{
 		if (line.empty()) continue;
@@ -250,11 +253,13 @@ void STOCK::StockData::UpdateOrderBookCumVol(Price prevAsk1, Price prevBid1)
 void STOCK::StockMarket::LoadInnerOuterData(std::string data)
 {
 	std::lock_guard<std::recursive_mutex> lock(m_mutex);
+	// 写 info 的内外盘/换手率/市值等字段，UI 线程在无锁读，必须持 m_stockDataMutex（锁序同上）
 	if (data.empty())
 	{
 		return;
 	}
 
+	std::lock_guard<std::mutex> dataLock(Stock::Instance().m_stockDataMutex);
 	std::vector<std::string> lines = CCommon::split(CCommon::removeChar(data, '\n'), ";");
 	for (std::string line : lines)
 	{
@@ -423,6 +428,8 @@ void STOCK::StockMarket::LoadFundIOPVData(const std::wstring& key, const std::st
 	auto stockData = getStock(key);
 	if (!stockData) return;
 
+	// 写 info 的 IOPV 相关字段，UI 线程在无锁读，必须持 m_stockDataMutex（锁序同上）
+
 	// 兼容三种格式：
 	// 1. 上交所JSONP: jQuery...({"code":"513060","snap":["恒生医疗",0.5220,...,0.5201,...]})
 	//    snap[12] = IOPV值, snap[5] = 昨收价
@@ -457,6 +464,7 @@ void STOCK::StockMarket::LoadFundIOPVData(const std::wstring& key, const std::st
 		return;
 	}
 
+	std::lock_guard<std::mutex> dataLock(Stock::Instance().m_stockDataMutex);
 	StockInfo& info = stockData->info;
 
 	// 检查是否有"snap"字段（上交所格式）
