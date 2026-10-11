@@ -1016,9 +1016,13 @@ bool CStockDbManager::SaveKLineCache(const std::wstring& stockCode, STOCK::Perio
 	const char* table = GetKLineCacheTable(period);
 	if (table[0] == '\0') return false;
 
-	// 整批重建（单事务内先删后插）：调用方传入的总是某周期完整的K线序列（如日K为750根），
+	// 整批重建（先删后插）：调用方传入的总是某周期完整的K线序列（如日K为750根），
 	// 删除该股票旧行后整体写入，保证缓存中同一股票始终是最近一次成功获取的单一复权口径，
-	// 避免旧口径残留行与新口径行拼接形成虚假断崖（旧实现 INSERT OR IGNORE 永不更新旧行）
+	// 避免旧口径残留行与新口径行拼接形成虚假断崖（旧实现 INSERT OR IGNORE 永不更新旧行）。
+	// 写入按 100 行分段提交（外层 BEGIN、每 100 行 COMMIT+重新 BEGIN）：整批单事务时
+	// 750 根K线的写入全程持 DB 锁，抓取线程写库期间 UI 同步读缓存只能干等；分段后
+	// 单段持锁时间缩到毫秒级。前段已提交、后段失败时会留下部分新数据——缓存表
+	// 允许（下次整批重建覆盖），口径不会混（同一次写入复权口径一致）
 	if (sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK)
 		return false;
 
@@ -1043,6 +1047,7 @@ bool CStockDbManager::SaveKLineCache(const std::wstring& stockCode, STOCK::Perio
 	sqlite3_stmt* stmt = nullptr;
 	if (ok && sqlite3_prepare_v2(m_db, (std::string("INSERT INTO ") + table + "(stock_code, day, open, high, low, close, volume, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?);").c_str(), -1, &stmt, nullptr) == SQLITE_OK)
 	{
+		int batchCount = 0;
 		for (const auto& item : data)
 		{
 			if (item.day.empty()) continue;
@@ -1061,6 +1066,17 @@ bool CStockDbManager::SaveKLineCache(const std::wstring& stockCode, STOCK::Perio
 			{
 				ok = false;
 				break;
+			}
+			// 分段提交，缩短单次持锁时长
+			if (++batchCount >= 100)
+			{
+				batchCount = 0;
+				if (sqlite3_exec(m_db, "COMMIT;", nullptr, nullptr, nullptr) != SQLITE_OK
+					|| sqlite3_exec(m_db, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) != SQLITE_OK)
+				{
+					ok = false;
+					break;
+				}
 			}
 		}
 		sqlite3_finalize(stmt);
