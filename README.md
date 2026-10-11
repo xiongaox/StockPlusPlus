@@ -236,6 +236,45 @@ dumpbin /headers bin\ARM64EC\Release\Stock.dll | Select-String "machine|a64xrm|h
 
 ---
 
+## 📡 通达信直连通道（可选增强）
+
+插件默认通过 **腾讯 + 新浪 HTTP 接口每 2 秒轮询** A 股实时行情，开箱即用，无需任何额外组件。
+`tools/getPrice.py` 提供一条**可选的增强通道**：用 pytdx 直连通达信行情服务器，把自选股快照
+（现价/五档/内外盘）以 **每 1 秒** 的节奏推送给插件，盘中价格跳动更接近行情源的逐笔节奏。
+
+| | 不部署（默认） | 部署 getPrice |
+|---|---|---|
+| A 股现价刷新 | 每 2 秒 | **每 1 秒** |
+| 五档/内外盘 | 有 | 有（同一套字段） |
+| K 线/分时/台账/行情中心 | 相同 | 相同（不走此通道） |
+| 额外依赖 | 无 | Python 打包一次，或拷贝现成 exe |
+
+**「接口检测」页的通达信直连显示黄色「未部署 · HTTP 轮询模式」属正常状态**，不是故障。
+
+### 部署方法（两种任选）
+
+**方式一：直接运行 Python 脚本**（目标机器装 Python 3.8+）：
+
+```bash
+pip install pytdx pywin32 requests
+python tools/getPrice.py
+```
+
+**方式二：打包成免环境 exe**（推荐给没有 Python 的机器）：
+
+```bash
+pip install pytdx pywin32 requests pyinstaller
+cd tools
+pyinstaller --onefile getPrice.py
+# 产物 dist/getPrice.exe 拷贝到 Stock.dll 同目录
+```
+
+部署或打包后，把 `getPrice.exe`（或直接运行脚本）放在 **`Stock.dll` 同目录**，重启 TrafficMonitor 即可。
+它会读取同目录 `Stock.ini` 的自选股列表（自动跟随插件的自选变化），盘中每 1 秒推送、非交易时段自动降到每 10 秒。
+不想用了直接删掉 exe，插件自动回退 HTTP 轮询。
+
+---
+
 ## 📄 开源许可证
 
 本项目遵循 [MIT License](LICENSE) 协议。

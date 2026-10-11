@@ -5105,6 +5105,7 @@ void CManagerDialog::DrawApiHealthPage(Gdiplus::Graphics& g, const CRect& conten
 	Gdiplus::SolidBrush brOk(Gdiplus::Color(255, 16, 185, 129));        // 翠绿 #10B981
 	Gdiplus::SolidBrush brWarn(Gdiplus::Color(255, 245, 158, 11));      // 暖黄 #F59E0B
 	Gdiplus::SolidBrush brFail(Gdiplus::Color(255, 239, 68, 68));       // 赤红 #EF4444
+	Gdiplus::SolidBrush brNeutral(Gdiplus::Color(255, 148, 163, 184));  // 石板灰 #94A3B8（未部署/待命）
 	Gdiplus::SolidBrush brEmpty(Gdiplus::Color(255, 37, 41, 54));       // 空槽 #252936
 
 	Gdiplus::StringFormat sfNear;
@@ -5150,6 +5151,8 @@ void CManagerDialog::DrawApiHealthPage(Gdiplus::Graphics& g, const CRect& conten
 			accentColor = Gdiplus::Color(255, 239, 68, 68);
 		else if (src.history.back().level == LEVEL_WARN)
 			accentColor = Gdiplus::Color(255, 245, 158, 11);
+		else if (src.history.back().level == LEVEL_NEUTRAL)
+			accentColor = Gdiplus::Color(255, 100, 116, 139);
 		else
 			accentColor = Gdiplus::Color(255, 16, 185, 129);
 
@@ -5187,6 +5190,11 @@ void CManagerDialog::DrawApiHealthPage(Gdiplus::Graphics& g, const CRect& conten
 		{
 			tagTxtCol = Gdiplus::Color(255, 251, 191, 36);
 			tagText = L"● 响应偏慢";
+		}
+		else if (curLvl == LEVEL_NEUTRAL)
+		{
+			tagTxtCol = Gdiplus::Color(255, 148, 163, 184);
+			tagText = L"● 未部署";
 		}
 		else
 		{
@@ -5254,6 +5262,8 @@ void CManagerDialog::DrawApiHealthPage(Gdiplus::Graphics& g, const CRect& conten
 					g.FillRectangle(&brOk, rBarF);
 				else if (pt.level == LEVEL_WARN)
 					g.FillRectangle(&brWarn, rBarF);
+				else if (pt.level == LEVEL_NEUTRAL)
+					g.FillRectangle(&brNeutral, rBarF);
 				else
 					g.FillRectangle(&brFail, rBarF);
 			}

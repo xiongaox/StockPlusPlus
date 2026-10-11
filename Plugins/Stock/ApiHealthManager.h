@@ -22,9 +22,10 @@ enum ApiSourceType
 // 心跳健康度等级
 enum HeartbeatLevel
 {
-	LEVEL_OK = 0,    // 正常 (绿色)
-	LEVEL_WARN = 1,  // 耗时较长或触发降级 (黄色)
-	LEVEL_FAIL = 2   // 请求失败 / WAF拦截 / 超时 (红色)
+	LEVEL_OK = 0,       // 正常 (绿色)
+	LEVEL_WARN = 1,     // 耗时较长或触发降级 (黄色)
+	LEVEL_FAIL = 2,     // 请求失败 / WAF拦截 / 超时 (红色)
+	LEVEL_NEUTRAL = 3   // 未部署/待命 (灰色)：可选组件未安装，非故障，不计入可用率
 };
 
 // 单次心跳记录点

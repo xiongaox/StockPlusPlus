@@ -85,7 +85,7 @@ void CApiHealthManager::RecordPoint(ApiSourceType type, int latencyMs, int statu
 	}
 
 	src.totalRequests++;
-	if (level != LEVEL_FAIL)
+	if (level != LEVEL_FAIL && level != LEVEL_NEUTRAL)
 		src.successRequests++;
 
 	src.lastLatencyMs = latencyMs;
@@ -148,7 +148,7 @@ void CApiHealthManager::DoActiveProbes()
 		}
 		else
 		{
-			RecordPoint(API_TDX, 0, 404, LEVEL_WARN, L"getPrice 外部进程未启动 (已自动降级至 HTTP)");
+			RecordPoint(API_TDX, 0, 404, LEVEL_NEUTRAL, L"未部署 getPrice · HTTP 轮询模式 (部署方法见 README)");
 		}
 	}
 
