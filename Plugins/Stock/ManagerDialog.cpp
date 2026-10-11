@@ -5194,7 +5194,7 @@ void CManagerDialog::DrawApiHealthPage(Gdiplus::Graphics& g, const CRect& conten
 		else if (curLvl == LEVEL_NEUTRAL)
 		{
 			tagTxtCol = Gdiplus::Color(255, 148, 163, 184);
-			tagText = L"● 未部署";
+			tagText = L"● 可优化";
 		}
 		else
 		{

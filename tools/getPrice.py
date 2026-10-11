@@ -3,6 +3,14 @@
 
 import mmap
 import ctypes
+import sys
+import io
+# 状态文本含 emoji（⚠️✅❌），GBK 控制台/无控制台环境下 print 会直接 UnicodeEncodeError 崩溃，
+# 统一重配为 UTF-8 并容错替换
+if sys.stdout:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace', line_buffering=True)
+if sys.stderr:
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace', line_buffering=True)
 from pytdx.hq import TdxHq_API
 import time
 import win32event
@@ -86,6 +94,12 @@ single_buf_size = ctypes.sizeof(ShareMemHeader)
 double_buf_size = single_buf_size * 2
 # 创建双缓冲共享内存
 mm = mmap.mmap(-1, double_buf_size, SHARE_NAME)
+print(f"mmap 实际大小: {mm.size()}, 期望: {double_buf_size}")
+if mm.size() < double_buf_size:
+    # 同名映射已存在且偏小（多为残留的旧实例/误创建的小映射）：
+    # Windows 会直接返回既有映射并忽略新大小，后续写缓冲B必然越界
+    print(f"❌共享内存 {SHARE_NAME} 已存在且大小不足（{mm.size()} < {double_buf_size}），请关闭残留进程后重试")
+    exit(1)
 
 # 创建两个自动重置事件
 h_event_a = win32event.CreateEvent(None, False, False, EVENT_NAME_A)
@@ -115,12 +129,13 @@ def is_trade_time() -> bool:
 
 def load_watch_list_from_ini():
     import sys
+    # 候选目录依次找 Stock.ini：当前工作目录（部署形态=cwd 即 exe/Stock.dll 目录）、
+    # 打包 exe 所在目录、脚本自身目录（开发形态）
+    candidates = [os.path.abspath("Stock.ini")]
     if hasattr(sys, '_MEIPASS'):
-        exe_full_path = sys.executable
-        app_path = os.path.dirname(os.path.abspath(exe_full_path))
-    else:
-        app_path = os.path.dirname(os.path.abspath(__file__))
-    ini_path = os.path.join(app_path, "Stock.ini")
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "Stock.ini"))
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Stock.ini"))
+    ini_path = next((c for c in candidates if os.path.exists(c)), candidates[0])
     if not os.path.exists(ini_path):
         print(f"❌找不到配置文件：{ini_path}")
         raise FileNotFoundError("Stock.ini不存在，请放置在exe同目录")
@@ -344,6 +359,7 @@ while True:
         mm.seek(buf_offset)
         # 先清空当前缓冲区整块0
         mm.write(b'\x00' * single_buf_size)
+        mm.seek(buf_offset)  # 清零把指针推到缓冲区末尾，必须拉回起点再写数据
         # 写入新数据
         mm.write(current_bin)
         # 触发对应事件
