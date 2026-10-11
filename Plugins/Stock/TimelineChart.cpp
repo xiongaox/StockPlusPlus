@@ -26,10 +26,11 @@ struct TimeMarker {
 static const COLORREF kBsBuyColor = RGB(59, 130, 246);
 static const COLORREF kBsSellColor = RGB(249, 115, 22);
 
-// 交易台账只对持仓股有意义：非持仓（自选股等）不画 B/S 标记
+// 交易台账标记按"是否录有流水"绘制：清仓后流水仍在库中，
+// 该股的 B/S 标记应照常显示（此前以持股数>0 为准，清仓即整条消失）
 static bool ShouldDrawBsMarkers(const std::wstring& stockId)
 {
-	return !stockId.empty() && g_data.GetHoldingCount(stockId) > 0;
+	return !stockId.empty() && g_data.HasStockTrades(stockId);
 }
 
 // 次数角标要从当前字体派生出一个小号字体来画普通数字，而不是用 Unicode 下标字符

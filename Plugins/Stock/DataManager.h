@@ -196,6 +196,8 @@ public:
 	// ── 交易台账（人工录入的建仓/加仓/减仓；当日盈亏修正与日K B/S 标记的数据源）──
 	// 读取该股票全部成交（时间升序）；内部按股票缓存，写操作后自动失效
 	std::vector<StockTradeRecord> GetStockTrades(const std::wstring& code);
+	// 是否录有台账流水（供 BS 按钮/面板的显示判据使用，避免为判空而复制整份流水）
+	bool HasStockTrades(const std::wstring& code);
 	// 新增一笔，成功返回新记录 id（0 表示失败）
 	long long AddStockTrade(const std::wstring& code, bool is_sell, const std::wstring& time,
 		double price, double amount, double fee = 0.0);

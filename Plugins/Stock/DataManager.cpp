@@ -1774,6 +1774,15 @@ std::vector<StockTradeRecord> CDataManager::GetStockTrades(const std::wstring& c
 	return records;
 }
 
+bool CDataManager::HasStockTrades(const std::wstring& code)
+{
+	// 与 GetStockTrades 共用缓存：命中缓存直接判空，未命中才查一次库（结果一并入缓存）
+	auto it = m_trade_cache.find(code);
+	if (it != m_trade_cache.end())
+		return !it->second.empty();
+	return !GetStockTrades(code).empty();
+}
+
 long long CDataManager::AddStockTrade(const std::wstring& code, bool is_sell, const std::wstring& time,
 	double price, double amount, double fee)
 {

@@ -4572,10 +4572,12 @@ void CFloatingWnd::LayoutInfoButtons(int w, int obBtnTop, int obBtnW, int obBtnH
 	SafeShowWindow(m_btnBsTrades, showObBtns && IsHoldingStock());
 }
 
-// 当前股票是否持仓（台账/标记/BS 按钮均以此为准）
+// 当前股票是否展示交易台账（BS 按钮/面板/图上标记均以此为准）。
+// 判据是"有台账流水"而非"正在持仓"：清仓后流水仍留在库中，
+// 用户需要能回看该股的完整成交流水（此前以持股数>0 为准，清仓即看不到台账）。
 bool CFloatingWnd::IsHoldingStock() const
 {
-	return g_data.GetHoldingCount(m_stock_id) > 0;
+	return g_data.HasStockTrades(m_stock_id);
 }
 
 HBRUSH CFloatingWnd::OnCtlColor(CDC* pDC, CWnd* pWnd, UINT nCtlColor)
