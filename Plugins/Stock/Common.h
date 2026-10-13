@@ -141,6 +141,9 @@ public:
 	// 判断代码是否为东财 secid 形态（如 118.AUTD、118.SHAU、101.GC00Y 等纯数字市场前缀+点+代码）
 	static bool IsEmSecidCode(const std::wstring& code);
 	static bool IsEmSecidCode(const std::string& code);
+	// 校验股票代码只含安全字符（字母/数字/点/下划线）。代码会拼进 HTTP 头（Referer）与
+	// URL 查询参数，含 \r\n 或空白的代码可注入/拆分请求头；来源含远程搜索接口，入库前必须校验
+	static bool IsValidStockCode(const std::wstring& code);
 
 	// 校验分时数据点时间是否在交易时段内（A股：09:30-11:30, 13:00-15:00；港股：09:30-12:00, 13:00-16:10；全时段/贵金属/期货：00:00-23:59）
 	static bool IsValidTimelineTime(const std::string& timeStr, bool isHK = false, bool isFullSession = false);

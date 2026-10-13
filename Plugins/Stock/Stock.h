@@ -7,6 +7,7 @@
 #include <map>
 #include <vector>
 #include <mutex>
+#include <thread>
 #include <set>
 
 constexpr auto kSH = L"sh";    // 上海
@@ -112,6 +113,11 @@ private:
 	bool m_floating_show_jz{ false };
 
 	ITrafficMonitor* m_pMonitor{};          // 主程序接口指针
+
+	// 启动时 WebDAV 自动同步线程：必须受管（可 join）。
+	// detach 会在宿主退出、DLL 卸载后继续跑 g_data/DB 代码导致退出崩溃；
+	// Stock 是静态单例，析构发生在 DLL 卸载期，join 保证线程先于全局对象析构结束
+	std::thread m_webdav_sync_thread;
 
 	// 价格关注弹窗状态：存储上一次弹窗时的价格
 	std::map<std::wstring, double> m_last_alert_price;

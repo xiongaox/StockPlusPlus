@@ -133,7 +133,9 @@ void CTdxTcpClient::SetQuotesCallback(OnQuotesCallback callback)
 
 void CTdxTcpClient::StartListening(const std::wstring& logPath)
 {
-	if (m_listening.load())
+	// exchange 判重：主线程 Start 与实时线程重连路径可能同时进入，
+	// load/store 之间的窗口会让两者都通过检查、对 joinable 线程二次赋值触发 std::terminate
+	if (m_listening.exchange(true))
 		return;
 
 	m_log_path = logPath;
@@ -143,6 +145,7 @@ void CTdxTcpClient::StartListening(const std::wstring& logPath)
 	{
 		if (!Connect())
 		{
+			m_listening.store(false);	// exchange 已置位，失败路径必须复位
 			CCommon::WriteLog(L"[TDX] 共享内存打开失败，监听线程未启动（Python端未启动？）", m_log_path.c_str());
 			return;
 		}
@@ -152,9 +155,11 @@ void CTdxTcpClient::StartListening(const std::wstring& logPath)
 	// 创建退出信号事件（手动重置）
 	m_hStopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
 	if (!m_hStopEvent)
+	{
+		m_listening.store(false);
 		return;
+	}
 
-	m_listening.store(true);
 	m_listen_thread = std::thread(&CTdxTcpClient::ListenProc, this);
 }
 

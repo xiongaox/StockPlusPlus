@@ -41,6 +41,7 @@ __pycache__/
 # 本地临时脚本一律忽略；仅图标生成器入库
 *.py
 !Plugins/Stock/Icons/gen_icons.py
+!tools/getPrice.py
 
 # ---------- 本地 AI 助手 / 工具状态 ----------
 .opencode/
@@ -65,3 +66,5 @@ tools/_*
 _session_data.json
 _session_export.html
 *.lnk
+
+# getPrice.exe 已作为分发物入库（用户直接下载，无需 PyInstaller）

@@ -14,6 +14,69 @@ CLocalHttpProxy& CLocalHttpProxy::Instance()
 	return instance;
 }
 
+namespace
+{
+	// 代理目标白名单：本插件只会请求这些行情数据域名。
+	// 该代理监听 127.0.0.1 随机端口且无鉴权，同机任意进程都能连上；
+	// 不限目标的话任何本地进程都可借道 SOCKS5 出口访问任意主机（含内网）。
+	const char* kAllowedHostSuffixes[] = {
+		".gtimg.cn",            // 腾讯行情（qt.gtimg.cn / web.ifzq.gtimg.cn / smartbox.gtimg.cn / gu.qq.com 等）
+		".sinajs.cn",           // 新浪行情（hq.sinajs.cn / suggest3.sinajs.cn）
+		".sina.com.cn",         // 新浪财经各子域（finance.sina.com.cn / hq.sinajs 系等）
+		".eastmoney.com",       // 东财全系（push2*/datacenter*/fundmobapi/fund 等）
+		".1234567.com.cn",      // 天天基金（fundgz.1234567.com.cn）
+		".sse.com.cn",          // 上交所（yunhq.sse.com.cn / etf.sse.com.cn）
+		".qq.com",              // 腾讯财经页（gu.qq.com / finance.qq.com）
+	};
+
+	// 拒绝内网/环网段目标，防借道探测本机其他回环服务与内网
+	bool IsPrivateHost(const std::string& host)
+	{
+		if (host.empty())
+			return true;
+		if (host == "localhost")
+			return true;
+		in_addr addr{};
+		if (inet_pton(AF_INET, host.c_str(), &addr) == 1)
+		{
+			unsigned long ip = ntohl(addr.S_un.S_addr);
+			if ((ip >> 24) == 127 || (ip >> 24) == 10 ||
+				(ip >> 16) == 0xC0A8 ||            // 192.168/16
+				(ip >> 16) == 0xAC10 ||            // 172.16/16 起段（粗判）
+				((ip >> 16) >= 0xAC10 && (ip >> 16) <= 0xAC1F) ||  // 172.16-31
+				(ip >> 16) == 0xA9FE)              // 169.254/16
+				return true;
+			return false;
+		}
+		// 非 IP 文本按域名处理
+		return false;
+	}
+
+	// 返回是否允许代理该目标主机
+	bool IsHostAllowed(const std::string& host)
+	{
+		if (IsPrivateHost(host))
+			return false;
+		std::string lower;
+		lower.reserve(host.size());
+		for (char c : host)
+			lower.push_back((c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c);
+		for (const char* suffix : kAllowedHostSuffixes)
+		{
+			size_t sl = strlen(suffix);
+			if (lower.size() >= sl && lower.compare(lower.size() - sl, sl, suffix) == 0)
+				return true;
+		}
+		return false;
+	}
+
+	void SendForbidden(SOCKET clientSocket)
+	{
+		const char* resp = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n";
+		send(clientSocket, resp, (int)strlen(resp), 0);
+	}
+}
+
 CLocalHttpProxy::CLocalHttpProxy()
 	: m_socks5_port(0)
 	, m_listen_socket(INVALID_SOCKET)
@@ -387,6 +450,15 @@ void CLocalHttpProxy::ClientLoop(SOCKET clientSocket)
 			return;
 		}
 
+		// 目标白名单：仅允许行情域名，且拒绝内网/环回目标
+		if (!IsHostAllowed(host))
+		{
+			SendForbidden(clientSocket);
+			closesocket(clientSocket);
+			m_active_workers.fetch_sub(1);
+			return;
+		}
+
 		// 通过 SOCKS5 连接
 		remoteSocket = ConnectViaSocks5(host, port);
 		if (remoteSocket == INVALID_SOCKET)
@@ -506,6 +578,15 @@ void CLocalHttpProxy::ClientLoop(SOCKET clientSocket)
 		{
 			const char* resp = "HTTP/1.1 400 Bad Request\r\n\r\n";
 			send(clientSocket, resp, (int)strlen(resp), 0);
+			closesocket(clientSocket);
+			m_active_workers.fetch_sub(1);
+			return;
+		}
+
+		// 目标白名单：仅允许行情域名，且拒绝内网/环回目标
+		if (!IsHostAllowed(host))
+		{
+			SendForbidden(clientSocket);
 			closesocket(clientSocket);
 			m_active_workers.fetch_sub(1);
 			return;

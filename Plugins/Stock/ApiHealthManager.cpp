@@ -60,49 +60,8 @@ void CApiHealthManager::InitSources()
 	m_sources[API_FUND_IOPV].targetUrl = L"http://fundgz.1234567.com.cn/";
 	m_sources[API_FUND_IOPV].lastStatusMsg = L"待命 / 等待检测";
 
-	time_t now = time(nullptr);
-	for (int srcIdx = 0; srcIdx < API_SOURCE_COUNT; ++srcIdx)
-	{
-		for (int i = 25; i >= 1; --i)
-		{
-			ApiHeartbeatPoint pt;
-			pt.timestamp = now - i * 60;
-			pt.statusCode = 200;
-			pt.level = LEVEL_OK;
-			if (srcIdx == API_TDX) {
-				pt.latencyMs = 5 + (i % 6);
-				pt.detail = L"共享内存同步正常 (5ms)";
-			}
-			else if (srcIdx == API_TENCENT) {
-				pt.latencyMs = 28 + (i % 18);
-				pt.detail = L"HTTP 200 OK (35ms)";
-			}
-			else if (srcIdx == API_SINA) {
-				pt.latencyMs = 45 + (i % 25);
-				pt.detail = L"HTTP 200 OK (52ms)";
-			}
-			else if (srcIdx == API_EASTMONEY) {
-				if (i == 7) {
-					pt.latencyMs = 480;
-					pt.level = LEVEL_WARN;
-					pt.detail = L"响应偏慢 (480ms)";
-				} else {
-					pt.latencyMs = 60 + (i % 35);
-					pt.detail = L"HTTP 200 OK (78ms)";
-				}
-			}
-			else {
-				pt.latencyMs = 50 + (i % 30);
-				pt.detail = L"HTTP 200 OK (65ms)";
-			}
-			m_sources[srcIdx].history.push_back(pt);
-			m_sources[srcIdx].totalRequests++;
-			m_sources[srcIdx].successRequests++;
-			m_sources[srcIdx].lastLatencyMs = pt.latencyMs;
-			m_sources[srcIdx].lastActiveTime = pt.timestamp;
-			m_sources[srcIdx].lastStatusMsg = pt.detail;
-		}
-	}
+	// 不再预置假心跳历史：此前启动时硬编码 25 条 200 OK（含一条假「响应偏慢」），
+	// 用户刚打开健康面板看到的是假记录，成功率统计也被稀释。初始置空，界面显示待首次探测
 }
 
 void CApiHealthManager::RecordPoint(ApiSourceType type, int latencyMs, int statusCode, HeartbeatLevel level, const std::wstring& detail)
@@ -126,7 +85,7 @@ void CApiHealthManager::RecordPoint(ApiSourceType type, int latencyMs, int statu
 	}
 
 	src.totalRequests++;
-	if (level != LEVEL_FAIL)
+	if (level != LEVEL_FAIL && level != LEVEL_NEUTRAL)
 		src.successRequests++;
 
 	src.lastLatencyMs = latencyMs;
@@ -189,7 +148,7 @@ void CApiHealthManager::DoActiveProbes()
 		}
 		else
 		{
-			RecordPoint(API_TDX, 0, 404, LEVEL_WARN, L"getPrice 外部进程未启动 (已自动降级至 HTTP)");
+			RecordPoint(API_TDX, 0, 404, LEVEL_NEUTRAL, L"HTTP 轮询模式 · 放入 getPrice.exe 可升级为 1 秒直连 (见 README)");
 		}
 	}
 

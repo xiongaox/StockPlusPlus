@@ -38,10 +38,22 @@ namespace
 
 	constexpr const wchar_t* MC_FONT = L"微软雅黑";
 
-	std::unique_ptr<Gdiplus::Font> MkFont(int px, bool bold = false)
+	// 字体缓存：行情中心每秒全量重绘 + 鼠标移动触发重绘，每个页面绘制函数开头集中
+	// 构造 7~9 个 Gdiplus::Font（全文件 79 处调用），每帧构造再析构纯属浪费。
+	// 按 (DPI换算后像素, bold) 缓存——DPI 变化时换算值不同自然生成新条目，无需失效逻辑
+	Gdiplus::Font* MkFont(int px, bool bold = false)
 	{
-		return std::make_unique<Gdiplus::Font>(MC_FONT, static_cast<Gdiplus::REAL>(g_data.DPI(px)),
+		// 缓存持有所有权，返回裸指针只读借用（条目数有限，进程生命周期内不释放）
+		static std::map<std::pair<int, bool>, std::unique_ptr<Gdiplus::Font>> cache;
+		auto key = std::make_pair(g_data.DPI(px), bold);
+		auto it = cache.find(key);
+		if (it != cache.end())
+			return it->second.get();
+		auto f = std::make_unique<Gdiplus::Font>(MC_FONT, static_cast<Gdiplus::REAL>(key.first),
 			bold ? Gdiplus::FontStyleBold : Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+		Gdiplus::Font* raw = f.get();
+		cache[key] = std::move(f);
+		return raw;
 	}
 
 	Gdiplus::Color Gdi(COLORREF c, BYTE a = 255)
@@ -257,6 +269,8 @@ void CMarketCenterPanel::DrawHeaderClock(CDC& memDC, const CRect& rc)
 
 	std::wstring status = m_clock_status == 0 ? L"开市" : L"休市";
 	// OnPaint 已将宿主字体选入 memDC，取其 LOGFONT 派生时钟字体（与股票名标题同字号）
+	// 宿主字体派生的三枚字体逐帧构造无法避免（依赖当前 DC 的 LOGFONT），
+	// 但兜底路径改为借用 MkFont 缓存，避免每帧再构造普通字体
 	std::unique_ptr<Gdiplus::Font> fStatus, fTime, fCache;
 	{
 		HDC hdc = memDC.GetSafeHdc();
@@ -278,11 +292,11 @@ void CMarketCenterPanel::DrawHeaderClock(CDC& memDC, const CRect& rc)
 			fCache.reset(new Gdiplus::Font(hdc, &lf));
 		}
 		if (!fStatus || Gdiplus::Ok != fStatus->GetLastStatus())
-			fStatus = MkFont(13);
+			fStatus.reset(MkFont(13));
 		if (!fTime || Gdiplus::Ok != fTime->GetLastStatus())
-			fTime = MkFont(13, true);
+			fTime.reset(MkFont(13, true));
 		if (!fCache || Gdiplus::Ok != fCache->GetLastStatus())
-			fCache = MkFont(12);
+			fCache.reset(MkFont(12));
 	}
 		CSize szStatus = MeasureStr(g, fStatus.get(), status);
 		CSize szTime = MeasureStr(g, fTime.get(), m_clock_time);
@@ -625,13 +639,13 @@ void CMarketCenterPanel::DrawSidebar(Gdiplus::Graphics& g, const CRect& rc)
 		}
 
 		COLORREF txt = (i == m_page || i == m_hover_menu) ? MC_TEXT : MC_TEXT_SUB;
-		auto f12 = MkFont(12, i == m_page);
-		DrawStr(g, titles[i], f12.get(), CRect(item.left + g_data.DPI(14), item.top, item.right - g_data.DPI(4), item.bottom), txt);
+		Gdiplus::Font* const f12 = MkFont(12, i == m_page);
+		DrawStr(g, titles[i], f12, CRect(item.left + g_data.DPI(14), item.top, item.right - g_data.DPI(4), item.bottom), txt);
 	}
 
 	// 底部数据来源（单行式，居中）；开市/休市时钟已迁移到顶部标题条（FloatingWnd 调用 DrawHeaderClock）
-	auto f10 = MkFont(10);
-	DrawStrSingle(g, L"数据来源 - 东方财富", f10.get(), CRect(rc.left, rc.bottom - g_data.DPI(30), rc.right, rc.bottom - g_data.DPI(12)), MC_TEXT_DIM);
+	Gdiplus::Font* const f10 = MkFont(10);
+	DrawStrSingle(g, L"数据来源 - 东方财富", f10, CRect(rc.left, rc.bottom - g_data.DPI(30), rc.right, rc.bottom - g_data.DPI(12)), MC_TEXT_DIM);
 	Gdiplus::Pen divPen(Gdi(MC_BORDER), 1.0f);
 	g.DrawLine(&divPen, Gdiplus::REAL(rc.right), Gdiplus::REAL(rc.top), Gdiplus::REAL(rc.right), Gdiplus::REAL(rc.bottom));
 }
@@ -651,16 +665,16 @@ void CMarketCenterPanel::DrawPage(Gdiplus::Graphics& g, const CRect& content)
 
 void CMarketCenterPanel::DrawPageTitle(Gdiplus::Graphics& g, const CRect& content, const std::wstring& title, const std::wstring& sub)
 {
-	auto f13 = MkFont(13, true);
+	Gdiplus::Font* const f13 = MkFont(13, true);
 	CRect titleRc(content.left + g_data.DPI(16), content.top + g_data.DPI(16), content.right - g_data.DPI(140), content.top + g_data.DPI(38));
-	DrawStr(g, title, f13.get(), titleRc, MC_TEXT);
+	DrawStr(g, title, f13, titleRc, MC_TEXT);
 	if (!sub.empty())
 	{
-		auto f10 = MkFont(10);
-		CSize sz = MeasureStr(g, f10.get(), sub);
+		Gdiplus::Font* const f10 = MkFont(10);
+		CSize sz = MeasureStr(g, f10, sub);
 		CRect subRc(titleRc.right, titleRc.top, titleRc.right + sz.cx + g_data.DPI(8), titleRc.bottom);
 		if (subRc.right <= content.right - g_data.DPI(130))
-			DrawStr(g, sub, f10.get(), subRc, MC_TEXT_DIM);
+			DrawStr(g, sub, f10, subRc, MC_TEXT_DIM);
 	}
 }
 
@@ -824,23 +838,23 @@ void CMarketCenterPanel::DrawBubblePage(Gdiplus::Graphics& g, const CRect& rc)
 	// 无数据：提示 + 由 RequestData 拉取
 	if (m_sectors_snapshot.empty())
 	{
-		auto f12 = MkFont(12);
+		Gdiplus::Font* const f12 = MkFont(12);
 		if (CMarketCenterData::Instance().IsPremarketNoData(CMarketCenterData::DS_SECTORS))
-			DrawStatus(g, rc, CMarketCenterData::DS_SECTORS, L"盘前/清算时段，暂无板块资金流数据（开盘后自动恢复）", f12.get());
+			DrawStatus(g, rc, CMarketCenterData::DS_SECTORS, L"盘前/清算时段，暂无板块资金流数据（开盘后自动恢复）", f12);
 		else
-			DrawStatus(g, rc, CMarketCenterData::DS_SECTORS, L"正在获取行业板块资金流…", f12.get());
+			DrawStatus(g, rc, CMarketCenterData::DS_SECTORS, L"正在获取行业板块资金流…", f12);
 		return;
 	}
 
-	auto f10 = MkFont(10);
-	auto f11 = MkFont(11);
-	auto f11b = MkFont(11, true);
-	auto f12 = MkFont(12);
-	auto f12b = MkFont(12, true);
-	auto f14b = MkFont(14, true);
-	auto f15b = MkFont(15, true);
-	auto f16b = MkFont(16, true);
-	auto f20b = MkFont(20, true);
+	Gdiplus::Font* const f10 = MkFont(10);
+	Gdiplus::Font* const f11 = MkFont(11);
+	Gdiplus::Font* const f11b = MkFont(11, true);
+	Gdiplus::Font* const f12 = MkFont(12);
+	Gdiplus::Font* const f12b = MkFont(12, true);
+	Gdiplus::Font* const f14b = MkFont(14, true);
+	Gdiplus::Font* const f15b = MkFont(15, true);
+	Gdiplus::Font* const f16b = MkFont(16, true);
+	Gdiplus::Font* const f20b = MkFont(20, true);
 
 	// 统计条（grid4）：流入合计/流出合计/最强板块/最弱板块
 	int maxIdx = 0, minIdx = 0;
@@ -904,11 +918,11 @@ void CMarketCenterPanel::DrawBubblePage(Gdiplus::Graphics& g, const CRect& rc)
 					Gdiplus::REAL(cell.Width()), Gdiplus::REAL(cell.Height()));
 			}
 		}
-		DrawStrMid(g, cells[i].label, f11.get(), CRect(cell.left, cell.top + g_data.DPI(6), cell.right, cell.top + g_data.DPI(21)),
+		DrawStrMid(g, cells[i].label, f11, CRect(cell.left, cell.top + g_data.DPI(6), cell.right, cell.top + g_data.DPI(21)),
 			statActive || (i < 2 && m_hover_bubble_stat == i) || (i >= 2 && m_hover_sector_card == i - 2) ? MC_TEXT : MC_TEXT_SUB);
 		if (i < 2)
 		{
-			DrawStrMid(g, cells[i].value, f15b.get(), CRect(cell.left, cell.top + g_data.DPI(21), cell.right, cell.bottom - g_data.DPI(4)), cells[i].color);
+			DrawStrMid(g, cells[i].value, f15b, CRect(cell.left, cell.top + g_data.DPI(21), cell.right, cell.bottom - g_data.DPI(4)), cells[i].color);
 		}
 		else
 		{
@@ -917,19 +931,19 @@ void CMarketCenterPanel::DrawBubblePage(Gdiplus::Graphics& g, const CRect& rc)
 			std::wstring name = sec.name;
 			std::wstring flowTxt = FormatYi(sec.flow);
 			CRect valRc(cell.left + g_data.DPI(4), cell.top + g_data.DPI(21), cell.right - g_data.DPI(4), cell.bottom - g_data.DPI(4));
-			CSize nameSz = MeasureStr(g, f15b.get(), name);
-			CSize flowSz = MeasureStr(g, f15b.get(), flowTxt);
+			CSize nameSz = MeasureStr(g, f15b, name);
+			CSize flowSz = MeasureStr(g, f15b, flowTxt);
 			if (nameSz.cx + g_data.DPI(6) + flowSz.cx <= valRc.Width())
 			{
-				DrawStrSingle(g, name + L"  " + flowTxt, f15b.get(), valRc, cells[i].color);
+				DrawStrSingle(g, name + L"  " + flowTxt, f15b, valRc, cells[i].color);
 			}
 			else
 			{
 				CRect flowRc(max(valRc.left, valRc.right - flowSz.cx), valRc.top, valRc.right, valRc.bottom);
 				CRect nameRc(valRc.left, valRc.top, flowRc.left - g_data.DPI(3), valRc.bottom);
 				if (nameRc.Width() > g_data.DPI(8))
-					DrawStrSingle(g, name, f15b.get(), nameRc, cells[i].color, 255, Gdiplus::StringAlignmentNear);
-				DrawStrSingle(g, flowTxt, f15b.get(), flowRc, cells[i].color, 255, Gdiplus::StringAlignmentFar);
+					DrawStrSingle(g, name, f15b, nameRc, cells[i].color, 255, Gdiplus::StringAlignmentNear);
+				DrawStrSingle(g, flowTxt, f15b, flowRc, cells[i].color, 255, Gdiplus::StringAlignmentFar);
 			}
 		}
 	}
@@ -1000,16 +1014,16 @@ void CMarketCenterPanel::DrawBubblePage(Gdiplus::Graphics& g, const CRect& rc)
 			int fontSize = static_cast<int>(clampf(minSide * 0.26f / (g_data.GetDpi() / 96.0f), 9.0f, 13.0f));
 			if (cellNode.rect.Width() >= g_data.DPI(34) && cellNode.rect.Height() >= g_data.DPI(30))
 			{
-				auto fTxt = MkFont(fontSize, true);
-				auto fVal = MkFont(max(9, fontSize - 2));
+				Gdiplus::Font* const fTxt = MkFont(fontSize, true);
+				Gdiplus::Font* const fVal = MkFont(max(9, fontSize - 2));
 				// 名称单行、溢出省略（完整名称在右侧详情卡展示）
-				DrawStrSingle(g, s.name, fTxt.get(), CRect(cellNode.rect.left, cellNode.rect.top, cellNode.rect.right, cellNode.rect.top + cellNode.rect.Height() / 2 + g_data.DPI(2)), RGB(255, 255, 255));
-				DrawStrMid(g, FormatYi(s.flow), fVal.get(), CRect(cellNode.rect.left, cellNode.rect.top + cellNode.rect.Height() / 2 - g_data.DPI(2), cellNode.rect.right, cellNode.rect.bottom), RGB(255, 255, 255));
+				DrawStrSingle(g, s.name, fTxt, CRect(cellNode.rect.left, cellNode.rect.top, cellNode.rect.right, cellNode.rect.top + cellNode.rect.Height() / 2 + g_data.DPI(2)), RGB(255, 255, 255));
+				DrawStrMid(g, FormatYi(s.flow), fVal, CRect(cellNode.rect.left, cellNode.rect.top + cellNode.rect.Height() / 2 - g_data.DPI(2), cellNode.rect.right, cellNode.rect.bottom), RGB(255, 255, 255));
 			}
 			else if (cellNode.rect.Width() >= g_data.DPI(26) && minSide >= g_data.DPI(15))
 			{
-				auto fTxt = MkFont(fontSize, true);
-				DrawStrSingle(g, s.name, fTxt.get(), cellNode.rect, RGB(255, 255, 255));
+				Gdiplus::Font* const fTxt = MkFont(fontSize, true);
+				DrawStrSingle(g, s.name, fTxt, cellNode.rect, RGB(255, 255, 255));
 			}
 		}
 	}
@@ -1059,12 +1073,12 @@ void CMarketCenterPanel::DrawBubblePage(Gdiplus::Graphics& g, const CRect& rc)
 			g.FillRectangle(&hovBrush, Gdiplus::REAL(rTab.left), Gdiplus::REAL(rTab.top),
 				Gdiplus::REAL(rTab.Width()), Gdiplus::REAL(rTab.Height()));
 		}
-		DrawStrMid(g, tabLabels[i], active ? f11b.get() : f11.get(), rTab,
+		DrawStrMid(g, tabLabels[i], active ? f11b : f11, rTab,
 			active ? RGB(255, 255, 255) : (hov ? MC_TEXT : MC_TEXT_SUB));
 	}
 
 	// 绘制数据时间
-	DrawStrMid(g, std::wstring(L"数据时间 ") + (m_clock_time.empty() ? L"--" : m_clock_time.substr(0, 5)), f10.get(),
+	DrawStrMid(g, std::wstring(L"数据时间 ") + (m_clock_time.empty() ? L"--" : m_clock_time.substr(0, 5)), f10,
 		rcTime, MC_TEXT_DIM);
 
 	if (m_selected_sector >= 0 && m_selected_sector < static_cast<int>(m_sectors_snapshot.size()))
@@ -1074,22 +1088,22 @@ void CMarketCenterPanel::DrawBubblePage(Gdiplus::Graphics& g, const CRect& rc)
 		std::wstring dispName = s.name;
 		{
 			int availW = dc1.Width();
-			if (MeasureStr(g, f12b.get(), dispName).cx > availW * 2 - g_data.DPI(4))
+			if (MeasureStr(g, f12b, dispName).cx > availW * 2 - g_data.DPI(4))
 			{
 				std::wstring ell = L"…";
-				int limit = availW * 2 - MeasureStr(g, f12b.get(), ell).cx;
+				int limit = availW * 2 - MeasureStr(g, f12b, ell).cx;
 				size_t n = dispName.size();
-				while (n > 0 && MeasureStr(g, f12b.get(), dispName.substr(0, n)).cx > limit)
+				while (n > 0 && MeasureStr(g, f12b, dispName.substr(0, n)).cx > limit)
 					n--;
 				dispName = dispName.substr(0, n) + ell;
 			}
 		}
 		// 名称区高度按实际行数收放，单行时顶部间距与左右一致
-		int nameLines = (MeasureStr(g, f12b.get(), dispName).cx > dc1.Width()) ? 2 : 1;
+		int nameLines = (MeasureStr(g, f12b, dispName).cx > dc1.Width()) ? 2 : 1;
 		CRect rcName(dc1.left, dc1.top, dc1.right, dc1.top + g_data.DPI(19) * nameLines);
 		CRect rcFlow(dc1.left, rcName.bottom + g_data.DPI(4), dc1.right, rcName.bottom + g_data.DPI(32));
-		DrawStr(g, dispName, f12b.get(), rcName, MC_TEXT, 255, Gdiplus::StringAlignmentFar);
-		DrawStr(g, FormatYi(s.flow), f20b.get(), rcFlow, UpDownColor(s.flow), 255, Gdiplus::StringAlignmentFar);
+		DrawStr(g, dispName, f12b, rcName, MC_TEXT, 255, Gdiplus::StringAlignmentFar);
+		DrawStr(g, FormatYi(s.flow), f20b, rcFlow, UpDownColor(s.flow), 255, Gdiplus::StringAlignmentFar);
 		// 明细行：涨跌幅/主力/超大/大/中/小
 		struct Row { const wchar_t* label; std::wstring value; COLORREF color; };
 		Row rows[6] = {
@@ -1112,13 +1126,13 @@ void CMarketCenterPanel::DrawBubblePage(Gdiplus::Graphics& g, const CRect& rc)
 				Gdiplus::Pen rowPen(Gdi(MC_BORDER), 1.0f);
 				g.DrawLine(&rowPen, Gdiplus::REAL(rRow.left), Gdiplus::REAL(rRow.top), Gdiplus::REAL(rRow.right), Gdiplus::REAL(rRow.top));
 			}
-			DrawStr(g, rows[i].label, f11.get(), CRect(rRow.left, rRow.top, rRow.CenterPoint().x, rRow.bottom), MC_TEXT_SUB);
-			DrawStr(g, rows[i].value, f11.get(), CRect(rRow.CenterPoint().x, rRow.top, rRow.right, rRow.bottom), rows[i].color, 255, Gdiplus::StringAlignmentFar);
+			DrawStr(g, rows[i].label, f11, CRect(rRow.left, rRow.top, rRow.CenterPoint().x, rRow.bottom), MC_TEXT_SUB);
+			DrawStr(g, rows[i].value, f11, CRect(rRow.CenterPoint().x, rRow.top, rRow.right, rRow.bottom), rows[i].color, 255, Gdiplus::StringAlignmentFar);
 		}
 	}
 	else
 	{
-		DrawStrMid(g, L"选择或悬停板块查看详情", f11.get(), CRect(dc1.left, dc1.top + g_data.DPI(60), dc1.right, tabTop - g_data.DPI(20)), MC_TEXT_DIM);
+		DrawStrMid(g, L"选择或悬停板块查看详情", f11, CRect(dc1.left, dc1.top + g_data.DPI(60), dc1.right, tabTop - g_data.DPI(20)), MC_TEXT_DIM);
 	}
 }
 
@@ -1128,18 +1142,18 @@ void CMarketCenterPanel::DrawSectorTimelinePage(Gdiplus::Graphics& g, const CRec
 
 	if (m_sector_timelines_snapshot.empty())
 	{
-		auto f12 = MkFont(12);
+		Gdiplus::Font* const f12 = MkFont(12);
 		if (CMarketCenterData::Instance().IsPremarketNoData(CMarketCenterData::DS_SECTOR_TIMELINES))
-			DrawStatus(g, chartRc, CMarketCenterData::DS_SECTOR_TIMELINES, L"盘前/清算时段，暂无板块资金分时走向数据", f12.get());
+			DrawStatus(g, chartRc, CMarketCenterData::DS_SECTOR_TIMELINES, L"盘前/清算时段，暂无板块资金分时走向数据", f12);
 		else
-			DrawStatus(g, chartRc, CMarketCenterData::DS_SECTOR_TIMELINES, L"正在获取板块资金时间走向…", f12.get());
+			DrawStatus(g, chartRc, CMarketCenterData::DS_SECTOR_TIMELINES, L"正在获取板块资金时间走向…", f12);
 		return;
 	}
 
-	auto f10 = MkFont(10);
-	auto f10b = MkFont(10, true);
-	auto f11 = MkFont(11);
-	auto f11b = MkFont(11, true);
+	Gdiplus::Font* const f10 = MkFont(10);
+	Gdiplus::Font* const f10b = MkFont(10, true);
+	Gdiplus::Font* const f11 = MkFont(11);
+	Gdiplus::Font* const f11b = MkFont(11, true);
 
 	// 15 种流入暖色系（红、橙、黄、粉、紫）
 	static const COLORREF s_inflowColors[15] = {
@@ -1286,7 +1300,7 @@ void CMarketCenterPanel::DrawSectorTimelinePage(Gdiplus::Graphics& g, const CRec
 
 		std::wstring lbl = (tv > 0 ? L"+" : L"") + FormatAxisNum(tv, step) + L"亿";
 		CRect lblRc(chartRc.left + g_data.DPI(2), static_cast<int>(y) - g_data.DPI(8), plotRc.left - g_data.DPI(4), static_cast<int>(y) + g_data.DPI(8));
-		DrawStr(g, lbl, f10.get(), lblRc, isZero ? RGB(255, 255, 255) : MC_TEXT_SUB, 255, Gdiplus::StringAlignmentFar);
+		DrawStr(g, lbl, f10, lblRc, isZero ? RGB(255, 255, 255) : MC_TEXT_SUB, 255, Gdiplus::StringAlignmentFar);
 	}
 
 	// 绘制 X 轴时间刻度 09:30 10:30 11:30/13:00 14:00 15:00
@@ -1297,7 +1311,7 @@ void CMarketCenterPanel::DrawSectorTimelinePage(Gdiplus::Graphics& g, const CRec
 		int mi = timeMarks[k];
 		float x = fx(mi);
 		CRect lblRc(static_cast<int>(x) - g_data.DPI(30), plotRc.bottom + g_data.DPI(4), static_cast<int>(x) + g_data.DPI(30), plotRc.bottom + g_data.DPI(20));
-		DrawStrMid(g, timeLabels[k], f10.get(), lblRc, MC_TEXT_SUB);
+		DrawStrMid(g, timeLabels[k], f10, lblRc, MC_TEXT_SUB);
 	}
 
 	// 右边界竖向截断线 (15:00 时间轴终点基准线)
@@ -1516,7 +1530,7 @@ void CMarketCenterPanel::DrawSectorTimelinePage(Gdiplus::Graphics& g, const CRec
 		if (topInTl) headerStr += L"  |  流入首位: " + topInTl->name + L" " + FormatYi(maxInVal * 1e8, 1);
 		if (topOutTl) headerStr += L"  |  流出首位: " + topOutTl->name + L" " + FormatYi(minOutVal * 1e8, 1);
 	}
-	DrawStr(g, headerStr, f11.get(), CRect(plotRc.left, chartRc.top + g_data.DPI(5), plotRc.right + padR, plotRc.top - g_data.DPI(3)), MC_TEXT);
+	DrawStr(g, headerStr, f11, CRect(plotRc.left, chartRc.top + g_data.DPI(5), plotRc.right + padR, plotRc.top - g_data.DPI(3)), MC_TEXT);
 
 	// 绘制右侧末端名称标签
 	for (const auto& node : nodes)
@@ -1526,7 +1540,7 @@ void CMarketCenterPanel::DrawSectorTimelinePage(Gdiplus::Graphics& g, const CRec
 
 		CRect lblRc(plotRc.right + g_data.DPI(5), static_cast<int>(node.y) - g_data.DPI(7),
 			chartRc.right - g_data.DPI(2), static_cast<int>(node.y) + g_data.DPI(8));
-		DrawStrSingle(g, node.text, isFocused ? f10b.get() : f10.get(), lblRc, node.color, alpha, Gdiplus::StringAlignmentNear);
+		DrawStrSingle(g, node.text, isFocused ? f10b : f10, lblRc, node.color, alpha, Gdiplus::StringAlignmentNear);
 	}
 }
 
@@ -1536,17 +1550,17 @@ void CMarketCenterPanel::DrawEtfInflowPage(Gdiplus::Graphics& g, const CRect& rc
 {
 	if (m_etfs_snapshot.empty())
 	{
-		auto f12 = MkFont(12);
-		DrawStatus(g, rc, CMarketCenterData::DS_ETFS, L"正在获取ETF数据…", f12.get());
+		Gdiplus::Font* const f12 = MkFont(12);
+		DrawStatus(g, rc, CMarketCenterData::DS_ETFS, L"正在获取ETF数据…", f12);
 		return;
 	}
 
-	auto f10 = MkFont(10);
-	auto f11 = MkFont(11);
-	auto f11b = MkFont(11, true);
-	auto f12 = MkFont(12);
-	auto f12b = MkFont(12, true);
-	auto f15b = MkFont(15, true);
+	Gdiplus::Font* const f10 = MkFont(10);
+	Gdiplus::Font* const f11 = MkFont(11);
+	Gdiplus::Font* const f11b = MkFont(11, true);
+	Gdiplus::Font* const f12 = MkFont(12);
+	Gdiplus::Font* const f12b = MkFont(12, true);
+	Gdiplus::Font* const f15b = MkFont(15, true);
 
 	double totalIn = 0, totalOut = 0;
 	long long upCnt = 0, downCnt = 0;
@@ -1585,14 +1599,14 @@ void CMarketCenterPanel::DrawEtfInflowPage(Gdiplus::Graphics& g, const CRect& rc
 			Gdiplus::Pen sepPen(Gdi(MC_BORDER), 1.0f);
 			g.DrawLine(&sepPen, Gdiplus::REAL(cell.left), Gdiplus::REAL(cell.top + g_data.DPI(10)), Gdiplus::REAL(cell.left), Gdiplus::REAL(cell.bottom - g_data.DPI(10)));
 		}
-		DrawStrMid(g, inCells[i].label, f11.get(), CRect(cell.left, cell.top + g_data.DPI(8), cell.right, cell.top + g_data.DPI(24)), MC_TEXT_SUB);
-		DrawStrMid(g, inCells[i].value, f15b.get(), CRect(cell.left, cell.top + g_data.DPI(26), cell.right, cell.bottom - g_data.DPI(6)), inCells[i].color);
+		DrawStrMid(g, inCells[i].label, f11, CRect(cell.left, cell.top + g_data.DPI(8), cell.right, cell.top + g_data.DPI(24)), MC_TEXT_SUB);
+		DrawStrMid(g, inCells[i].value, f15b, CRect(cell.left, cell.top + g_data.DPI(26), cell.right, cell.bottom - g_data.DPI(6)), inCells[i].color);
 		m_inflow_stat_rects.push_back({ cell, i });
 	}
 
 	// 标题
 	CRect headingRc(statsRc.left, statsRc.bottom + g_data.DPI(6), statsRc.right, statsRc.bottom + g_data.DPI(24));
-	DrawStr(g, m_inflow_out ? L"ETF 当日主力净流出 Top10（亿）" : L"ETF 当日主力净流入 Top10（亿）", f12b.get(), headingRc, MC_TEXT);
+	DrawStr(g, m_inflow_out ? L"ETF 当日主力净流出 Top10（亿）" : L"ETF 当日主力净流入 Top10（亿）", f12b, headingRc, MC_TEXT);
 
 	// 横向条形图
 	CRect chartRc(headingRc.left, headingRc.bottom + g_data.DPI(4), headingRc.right, rc.bottom - g_data.DPI(16));
@@ -1610,7 +1624,7 @@ void CMarketCenterPanel::DrawEtfInflowPage(Gdiplus::Graphics& g, const CRect& rc
 		order.resize(10);
 	if (order.empty())
 	{
-		DrawStrMid(g, L"暂无主题聚合数据", f12.get(), chartRc, MC_TEXT_DIM);
+		DrawStrMid(g, L"暂无主题聚合数据", f12, chartRc, MC_TEXT_DIM);
 		return;
 	}
 
@@ -1622,7 +1636,7 @@ void CMarketCenterPanel::DrawEtfInflowPage(Gdiplus::Graphics& g, const CRect& rc
 	// 名称列宽按可见最长名称自适应，文字右对齐贴条形起点（字块起点仍与标题左缘一致）
 	int nameW = 0;
 	for (int idx : order)
-		nameW = max(nameW, MeasureStr(g, f11.get(), m_theme_inflow[static_cast<size_t>(idx)].theme + L"ETF").cx);
+		nameW = max(nameW, MeasureStr(g, f11, m_theme_inflow[static_cast<size_t>(idx)].theme + L"ETF").cx);
 	nameW = min(nameW + g_data.DPI(16), g_data.DPI(120));
 	const int valW = g_data.DPI(64);
 	const int barH = g_data.DPI(18);
@@ -1639,7 +1653,7 @@ void CMarketCenterPanel::DrawEtfInflowPage(Gdiplus::Graphics& g, const CRect& rc
 		const auto& th = m_theme_inflow[static_cast<size_t>(idx)];
 		int yTop = chartRc.top + static_cast<int>(k) * slot + (slot - barH) / 2;
 		CRect nameRc(chartRc.left, yTop - g_data.DPI(2), plotLeft - g_data.DPI(8), yTop + barH + g_data.DPI(2));
-		DrawStr(g, th.theme + L"ETF", f11.get(), nameRc, MC_TEXT_SUB, 255, Gdiplus::StringAlignmentFar);
+		DrawStr(g, th.theme + L"ETF", f11, nameRc, MC_TEXT_SUB, 255, Gdiplus::StringAlignmentFar);
 		double vYi = th.inflow / 1e8;
 		int x1 = plotLeft + static_cast<int>(fabs(vYi) / maxAbs * (plotRight - plotLeft));
 		CRect barRc(plotLeft, yTop, max(plotLeft + g_data.DPI(2), x1), yTop + barH);
@@ -1656,7 +1670,7 @@ void CMarketCenterPanel::DrawEtfInflowPage(Gdiplus::Graphics& g, const CRect& rc
 		swprintf_s(vbuf, L"%s%.2f", vYi >= 0 ? L"+" : L"", vYi);
 		CRect valRc(barRc.right + g_data.DPI(6), yTop,
 			barRc.right + g_data.DPI(6) + valW, yTop + barH);
-		DrawStr(g, vbuf, f10.get(), valRc, MC_TEXT_SUB, 255, Gdiplus::StringAlignmentNear);
+		DrawStr(g, vbuf, f10, valRc, MC_TEXT_SUB, 255, Gdiplus::StringAlignmentNear);
 		// 整行命中区（整个槽位高度，避免行间死区），点击打开主题浮层
 		int slotTop = chartRc.top + static_cast<int>(k) * slot;
 		int slotBottom = (k == order.size() - 1) ? chartRc.bottom : (slotTop + slot);
@@ -1670,11 +1684,11 @@ void CMarketCenterPanel::DrawEtfInflowPage(Gdiplus::Graphics& g, const CRect& rc
 
 void CMarketCenterPanel::DrawThemePanel(Gdiplus::Graphics& g, const CRect& chartRc)
 {
-	auto f10 = MkFont(10);
-	auto f10b = MkFont(10, true);
-	auto f11 = MkFont(11);
-	auto f11b = MkFont(11, true);
-	auto f12b = MkFont(12, true);
+	Gdiplus::Font* const f10 = MkFont(10);
+	Gdiplus::Font* const f10b = MkFont(10, true);
+	Gdiplus::Font* const f11 = MkFont(11);
+	Gdiplus::Font* const f11b = MkFont(11, true);
+	Gdiplus::Font* const f12b = MkFont(12, true);
 
 	const int panelW = g_data.DPI(310);
 	m_theme_panel_rect = CRect(chartRc.right - panelW, chartRc.top, chartRc.right, chartRc.bottom);
@@ -1691,8 +1705,8 @@ void CMarketCenterPanel::DrawThemePanel(Gdiplus::Graphics& g, const CRect& chart
 	const int P = g_data.DPI(10);
 	CRect headRc(m_theme_panel_rect.left + P, m_theme_panel_rect.top + P, m_theme_panel_rect.right - P, m_theme_panel_rect.top + P + g_data.DPI(20));
 	m_theme_close_rect = CRect(headRc.right - g_data.DPI(18), headRc.top, headRc.right, headRc.bottom);
-	DrawStr(g, m_theme_panel_title, f12b.get(), CRect(headRc.left, headRc.top, m_theme_close_rect.left - g_data.DPI(4), headRc.bottom), MC_TEXT);
-	DrawStrMid(g, L"\x2715", f11.get(), m_theme_close_rect, m_hover_theme_close ? MC_TEXT : MC_TEXT_DIM);
+	DrawStr(g, m_theme_panel_title, f12b, CRect(headRc.left, headRc.top, m_theme_close_rect.left - g_data.DPI(4), headRc.bottom), MC_TEXT);
+	DrawStrMid(g, L"\x2715", f11, m_theme_close_rect, m_hover_theme_close ? MC_TEXT : MC_TEXT_DIM);
 
 	// 表头
 	CRect headRow(headRc.left, headRc.bottom + g_data.DPI(4), headRc.right, headRc.bottom + g_data.DPI(4) + g_data.DPI(18));
@@ -1708,7 +1722,7 @@ void CMarketCenterPanel::DrawThemePanel(Gdiplus::Graphics& g, const CRect& chart
 	for (int i = 0; i < 4; i++)
 	{
 		CRect c(x, headRow.top, x + colWidths[i], headRow.bottom);
-		DrawStr(g, headers[i], f10.get(), c, MC_TEXT_DIM, 255, i == 0 ? Gdiplus::StringAlignmentNear : Gdiplus::StringAlignmentCenter);
+		DrawStr(g, headers[i], f10, c, MC_TEXT_DIM, 255, i == 0 ? Gdiplus::StringAlignmentNear : Gdiplus::StringAlignmentCenter);
 		x += colWidths[i];
 	}
 	Gdiplus::Pen sepPen(Gdi(MC_BORDER), 1.0f);
@@ -1746,10 +1760,10 @@ void CMarketCenterPanel::DrawThemePanel(Gdiplus::Graphics& g, const CRect& chart
 
 		// 股票名称：单行绘制，宽度不够时溢出隐藏截断，坚决不换行
 		CRect nameRc(rRow.left, rRow.top, rRow.left + colWidths[0] - g_data.DPI(4), rRow.bottom);
-		DrawStrSingle(g, e.name, f11.get(), nameRc, MC_TEXT, 255, Gdiplus::StringAlignmentNear);
-		DrawStrMid(g, e.code, f10.get(), CRect(rRow.left + colWidths[0], rRow.top, rRow.left + colWidths[0] + colWidths[1], rRow.bottom), MC_TEXT_SUB);
-		DrawStrMid(g, priceBuf, f10.get(), CRect(rRow.left + colWidths[0] + colWidths[1], rRow.top, rRow.left + colWidths[0] + colWidths[1] + colWidths[2], rRow.bottom), MC_TEXT_SUB);
-		DrawStrMid(g, pctBuf, f10b.get(), CRect(rRow.left + colWidths[0] + colWidths[1] + colWidths[2], rRow.top, rRow.right, rRow.bottom), UpDownColor(e.pct));
+		DrawStrSingle(g, e.name, f11, nameRc, MC_TEXT, 255, Gdiplus::StringAlignmentNear);
+		DrawStrMid(g, e.code, f10, CRect(rRow.left + colWidths[0], rRow.top, rRow.left + colWidths[0] + colWidths[1], rRow.bottom), MC_TEXT_SUB);
+		DrawStrMid(g, priceBuf, f10, CRect(rRow.left + colWidths[0] + colWidths[1], rRow.top, rRow.left + colWidths[0] + colWidths[1] + colWidths[2], rRow.bottom), MC_TEXT_SUB);
+		DrawStrMid(g, pctBuf, f10b, CRect(rRow.left + colWidths[0] + colWidths[1] + colWidths[2], rRow.top, rRow.right, rRow.bottom), UpDownColor(e.pct));
 	}
 	g.ResetClip();
 }
@@ -1760,11 +1774,11 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 {
 	DrawPageTitle(g, rc, L"资金流向", L"全市场大单/超大单博弈分时（沪深合计）");
 
-	auto f10 = MkFont(10);
-	auto f11 = MkFont(11);
-	auto f11b = MkFont(11, true);
-	auto f12b = MkFont(12, true);
-	auto f15b = MkFont(15, true);
+	Gdiplus::Font* const f10 = MkFont(10);
+	Gdiplus::Font* const f11 = MkFont(11);
+	Gdiplus::Font* const f11b = MkFont(11, true);
+	Gdiplus::Font* const f12b = MkFont(12, true);
+	Gdiplus::Font* const f15b = MkFont(15, true);
 
 	CMarketCenterData& mc = CMarketCenterData::Instance();
 	const int AXIS_N = 241;
@@ -1832,8 +1846,8 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 
 	if (!hasAny)
 	{
-		auto f12 = MkFont(12);
-		DrawStatus(g, rc, CMarketCenterData::DS_MAINFLOW, L"正在获取全市场资金流向分时…", f12.get());
+		Gdiplus::Font* const f12 = MkFont(12);
+		DrawStatus(g, rc, CMarketCenterData::DS_MAINFLOW, L"正在获取全市场资金流向分时…", f12);
 	}
 
 	// 顶部统计卡兼图例（4列：机构、主力、大户、散户，可点击开关曲线）
@@ -1872,18 +1886,18 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 		lblRc.bottom = lblRc.top + g_data.DPI(16);
 		int swatchW = g_data.DPI(14), swatchH = g_data.DPI(4);
 		std::wstring label = flowCells[i].label;
-		auto fLbl = MkFont(11);
-		CSize lblSize = MeasureStr(g, fLbl.get(), label);
+		Gdiplus::Font* const fLbl = MkFont(11);
+		CSize lblSize = MeasureStr(g, fLbl, label);
 		int totalW = swatchW + g_data.DPI(5) + lblSize.cx;
 		int startX = cell.CenterPoint().x - totalW / 2;
 		Gdiplus::SolidBrush swBrush(Gdi(flowCells[i].color, off ? static_cast<BYTE>(96) : static_cast<BYTE>(255)));
 		g.FillRectangle(&swBrush, Gdiplus::REAL(startX), Gdiplus::REAL(lblRc.top + (lblRc.Height() - swatchH) / 2), Gdiplus::REAL(swatchW), Gdiplus::REAL(swatchH));
-		DrawStr(g, label, fLbl.get(), CRect(startX + swatchW + g_data.DPI(5), lblRc.top, cell.right, lblRc.bottom), MC_TEXT_SUB, alpha);
+		DrawStr(g, label, fLbl, CRect(startX + swatchW + g_data.DPI(5), lblRc.top, cell.right, lblRc.bottom), MC_TEXT_SUB, alpha);
 
 		// 数值（带单位“亿”，正红负绿）
 		std::wstring valStr = isnan(flowCells[i].value) ? L"--" : FormatYi(flowCells[i].value * 1e8, 2);
 		COLORREF valColor = UpDownColor(flowCells[i].value);
-		DrawStrMid(g, valStr, f15b.get(), CRect(cell.left, cell.top + g_data.DPI(26), cell.right, cell.bottom - g_data.DPI(6)), valColor, alpha);
+		DrawStrMid(g, valStr, f15b, CRect(cell.left, cell.top + g_data.DPI(26), cell.right, cell.bottom - g_data.DPI(6)), valColor, alpha);
 		m_moneyflow_stat_rects.push_back({ cell, i });
 	}
 
@@ -1945,7 +1959,7 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 	// 网格 + 左轴刻度 + 强化0轴
 	{
 		double step = NiceStep(flowHi - flowLo);
-		auto f10 = MkFont(10);
+		Gdiplus::Font* const f10 = MkFont(10);
 		for (double tv = ceil(flowLo / step) * step; tv <= flowHi; tv += step)
 		{
 			float y = fyFlow(tv);
@@ -1960,13 +1974,13 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 				Gdiplus::SolidBrush bgBrush(Gdi(MC_BG, 190));
 				g.FillRectangle(&bgBrush, Gdiplus::REAL(lblRc.left - g_data.DPI(2)), Gdiplus::REAL(lblRc.top), Gdiplus::REAL(lblRc.Width() + g_data.DPI(4)), Gdiplus::REAL(lblRc.Height()));
 			}
-			DrawStr(g, lbl, f10.get(), lblRc, isZero ? MC_TEXT : MC_TEXT_SUB);
+			DrawStr(g, lbl, f10, lblRc, isZero ? MC_TEXT : MC_TEXT_SUB);
 		}
 	}
 
 	// X 轴时间标签 09:30 10:30 13:00 14:00 15:00
 	{
-		auto f10 = MkFont(10);
+		Gdiplus::Font* const f10 = MkFont(10);
 		const auto& axis = CMarketCenterData::TimeAxis();
 		const int marks[5] = { 0, 60, 120, 180, 240 };
 		for (int k = 0; k < 5; k++)
@@ -1975,7 +1989,7 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 			if (mi >= static_cast<int>(axis.size()))
 				continue;
 			CRect lblRc(static_cast<int>(fx(mi)) - g_data.DPI(24), plotRc.bottom + g_data.DPI(4), static_cast<int>(fx(mi)) + g_data.DPI(24), plotRc.bottom + g_data.DPI(20));
-			DrawStrMid(g, axis[static_cast<size_t>(mi)], f10.get(), lblRc, MC_TEXT_SUB);
+			DrawStrMid(g, axis[static_cast<size_t>(mi)], f10, lblRc, MC_TEXT_SUB);
 		}
 	}
 
@@ -2022,8 +2036,8 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 				+ L" 大户:" + (isnan(bVal) ? L"--" : FormatYi(bVal * 1e8, 2))
 				+ L" 散户:" + (isnan(sVal) ? L"--" : FormatYi(sVal * 1e8, 2));
 
-			auto fTip = MkFont(11);
-			CSize szTip = MeasureStr(g, fTip.get(), tip);
+			Gdiplus::Font* const fTip = MkFont(11);
+			CSize szTip = MeasureStr(g, fTip, tip);
 			int tipW = szTip.cx + g_data.DPI(16);
 			int tipH = g_data.DPI(20);
 			int tipX = min(max(static_cast<int>(curX) - tipW / 2, plotRc.left), plotRc.right - tipW);
@@ -2033,7 +2047,7 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 			g.FillRectangle(&tipBg, Gdiplus::REAL(tipRc.left), Gdiplus::REAL(tipRc.top), Gdiplus::REAL(tipRc.Width()), Gdiplus::REAL(tipRc.Height()));
 			Gdiplus::Pen tipBorder(Gdi(MC_BORDER), 1.0f);
 			g.DrawRectangle(&tipBorder, Gdiplus::REAL(tipRc.left), Gdiplus::REAL(tipRc.top), Gdiplus::REAL(tipRc.Width()), Gdiplus::REAL(tipRc.Height()));
-			DrawStrMid(g, tip, fTip.get(), tipRc, MC_TEXT);
+			DrawStrMid(g, tip, fTip, tipRc, MC_TEXT);
 		}
 	}
 
@@ -2043,7 +2057,7 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 		CRect instLeadRc(leaderRc.left, leaderRc.top, midX - g_data.DPI(10), leaderRc.bottom);
 		CRect mainLeadRc(midX + g_data.DPI(10), leaderRc.top, leaderRc.right, leaderRc.bottom);
 
-		auto f11bLead = MkFont(11, true);
+		Gdiplus::Font* const f11bLead = MkFont(11, true);
 
 		// 拆成「前缀 + 股票名 + 金额」三段绘制：只有股票名可点击跳转 K 线，
 		// 因此需要单独的矩形，不能整体一次 DrawStr（否则热区无法只覆盖名字）。
@@ -2056,7 +2070,7 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 
 			if (leader.name.empty())
 			{
-				DrawStr(g, pre + L"--", f11bLead.get(), rowRc, color, 255,
+				DrawStr(g, pre + L"--", f11bLead, rowRc, color, 255,
 					alignRight ? Gdiplus::StringAlignmentFar : Gdiplus::StringAlignmentNear);
 				return;
 			}
@@ -2065,16 +2079,16 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 			if (alignRight)
 			{
 				// 右对齐：先量出各段宽度，从右往左反推起点，保证整体贴右且名字热区精确
-				CSize szAmt = MeasureStr(g, f11bLead.get(), amt);
-				CSize szName = MeasureStr(g, f11bLead.get(), leader.name);
-				CSize szPre = MeasureStr(g, f11bLead.get(), pre);
+				CSize szAmt = MeasureStr(g, f11bLead, amt);
+				CSize szName = MeasureStr(g, f11bLead, leader.name);
+				CSize szPre = MeasureStr(g, f11bLead, pre);
 				int gap = g_data.DPI(6);
 				int nameL = rowRc.right - szAmt.cx - gap - szName.cx;
 				int preL = nameL - szPre.cx;
-				DrawStr(g, pre, f11bLead.get(), CRect(preL, rowRc.top, preL + szPre.cx, rowRc.bottom), color, 255, Gdiplus::StringAlignmentNear);
+				DrawStr(g, pre, f11bLead, CRect(preL, rowRc.top, preL + szPre.cx, rowRc.bottom), color, 255, Gdiplus::StringAlignmentNear);
 				CRect nameRc(nameL, rowRc.top, nameL + szName.cx, rowRc.bottom);
 				bool hot = (m_hover_moneyflow_leader == kind);
-				DrawStr(g, leader.name, f11bLead.get(), nameRc, color, 255, Gdiplus::StringAlignmentNear);
+				DrawStr(g, leader.name, f11bLead, nameRc, color, 255, Gdiplus::StringAlignmentNear);
 				if (hot)
 				{
 					// 悬停下划线：沿用文字色，避免引入新配色
@@ -2083,19 +2097,19 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 					g.DrawLine(&ul, Gdiplus::REAL(nameRc.left), Gdiplus::REAL(uy), Gdiplus::REAL(nameRc.right), Gdiplus::REAL(uy));
 				}
 				m_moneyflow_leader_rects[kind] = nameRc;
-				DrawStr(g, amt, f11bLead.get(), CRect(nameRc.right + gap, rowRc.top, rowRc.right, rowRc.bottom), color, 255, Gdiplus::StringAlignmentFar);
+				DrawStr(g, amt, f11bLead, CRect(nameRc.right + gap, rowRc.top, rowRc.right, rowRc.bottom), color, 255, Gdiplus::StringAlignmentFar);
 			}
 			else
 			{
 				// 左对齐：前缀 → 名字 → 金额依次向右侧排布
-				CSize szPre = MeasureStr(g, f11bLead.get(), pre);
-				CSize szName = MeasureStr(g, f11bLead.get(), leader.name);
+				CSize szPre = MeasureStr(g, f11bLead, pre);
+				CSize szName = MeasureStr(g, f11bLead, leader.name);
 				int gap = g_data.DPI(6);
-				DrawStr(g, pre, f11bLead.get(), CRect(rowRc.left, rowRc.top, rowRc.left + szPre.cx, rowRc.bottom), color, 255, Gdiplus::StringAlignmentNear);
+				DrawStr(g, pre, f11bLead, CRect(rowRc.left, rowRc.top, rowRc.left + szPre.cx, rowRc.bottom), color, 255, Gdiplus::StringAlignmentNear);
 				int nameL = rowRc.left + szPre.cx;
 				CRect nameRc(nameL, rowRc.top, nameL + szName.cx, rowRc.bottom);
 				bool hot = (m_hover_moneyflow_leader == kind);
-				DrawStr(g, leader.name, f11bLead.get(), nameRc, color, 255, Gdiplus::StringAlignmentNear);
+				DrawStr(g, leader.name, f11bLead, nameRc, color, 255, Gdiplus::StringAlignmentNear);
 				if (hot)
 				{
 					Gdiplus::Pen ul(Gdi(color), 1.0f);
@@ -2103,7 +2117,7 @@ void CMarketCenterPanel::DrawMoneyFlowPage(Gdiplus::Graphics& g, const CRect& rc
 					g.DrawLine(&ul, Gdiplus::REAL(nameRc.left), Gdiplus::REAL(uy), Gdiplus::REAL(nameRc.right), Gdiplus::REAL(uy));
 				}
 				m_moneyflow_leader_rects[kind] = nameRc;
-				DrawStr(g, amt, f11bLead.get(), CRect(nameRc.right + gap, rowRc.top, rowRc.right, rowRc.bottom), color, 255, Gdiplus::StringAlignmentNear);
+				DrawStr(g, amt, f11bLead, CRect(nameRc.right + gap, rowRc.top, rowRc.right, rowRc.bottom), color, 255, Gdiplus::StringAlignmentNear);
 			}
 		};
 
@@ -2118,11 +2132,11 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 {
 	DrawPageTitle(g, rc, L"实时主力资金", L"沪深创三大市场资金流");
 
-	auto f10 = MkFont(10);
-	auto f11 = MkFont(11);
-	auto f11b = MkFont(11, true);
-	auto f12b = MkFont(12, true);
-	auto f15b = MkFont(15, true);
+	Gdiplus::Font* const f10 = MkFont(10);
+	Gdiplus::Font* const f11 = MkFont(11);
+	Gdiplus::Font* const f11b = MkFont(11, true);
+	Gdiplus::Font* const f12b = MkFont(12, true);
+	Gdiplus::Font* const f15b = MkFont(15, true);
 
 	// 拷贝数据（锁内浅拷贝）
 	std::vector<MC::FflowMinute> sh, sz, cyb;
@@ -2159,8 +2173,8 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 	bool hasAny = (!isnan(shNow) || !isnan(szNow) || !isnan(idxNow));
 	if (!hasAny)
 	{
-		auto f12 = MkFont(12);
-		DrawStatus(g, rc, CMarketCenterData::DS_MAINFLOW, L"正在获取沪深主力资金分时…", f12.get());
+		Gdiplus::Font* const f12 = MkFont(12);
+		DrawStatus(g, rc, CMarketCenterData::DS_MAINFLOW, L"正在获取沪深主力资金分时…", f12);
 		// 统计条仍然绘制（无数据状态）
 		shArr.clear();
 	}
@@ -2198,17 +2212,17 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 		lblRc.bottom = lblRc.top + g_data.DPI(16);
 		int swatchW = g_data.DPI(14), swatchH = g_data.DPI(4);
 		std::wstring label = mfCells[i].label;
-		auto fLbl = MkFont(11);
-		CSize lblSize = MeasureStr(g, fLbl.get(), label);
+		Gdiplus::Font* const fLbl = MkFont(11);
+		CSize lblSize = MeasureStr(g, fLbl, label);
 		int totalW = swatchW + g_data.DPI(5) + lblSize.cx;
 		int startX = cell.CenterPoint().x - totalW / 2;
 		Gdiplus::SolidBrush swBrush(Gdi(mfCells[i].color, off ? static_cast<BYTE>(96) : static_cast<BYTE>(255)));
 		g.FillRectangle(&swBrush, Gdiplus::REAL(startX), Gdiplus::REAL(lblRc.top + (lblRc.Height() - swatchH) / 2), Gdiplus::REAL(swatchW), Gdiplus::REAL(swatchH));
-		DrawStr(g, label, fLbl.get(), CRect(startX + swatchW + g_data.DPI(5), lblRc.top, cell.right, lblRc.bottom), MC_TEXT_SUB, alpha);
+		DrawStr(g, label, fLbl, CRect(startX + swatchW + g_data.DPI(5), lblRc.top, cell.right, lblRc.bottom), MC_TEXT_SUB, alpha);
 		// 数值
 		std::wstring valStr = isnan(mfCells[i].value) ? L"--" : (mfCells[i].isIndex ? FormatAxisNum(mfCells[i].value, 1) : FormatYi(mfCells[i].value * 1e8, 2));
 		COLORREF valColor = mfCells[i].isIndex ? MC_TEXT : UpDownColor(mfCells[i].value);
-		DrawStrMid(g, valStr, f15b.get(), CRect(cell.left, cell.top + g_data.DPI(26), cell.right, cell.bottom - g_data.DPI(6)), valColor, alpha);
+		DrawStrMid(g, valStr, f15b, CRect(cell.left, cell.top + g_data.DPI(26), cell.right, cell.bottom - g_data.DPI(6)), valColor, alpha);
 		m_mainflow_stat_rects.push_back({ cell, i });
 	}
 
@@ -2264,7 +2278,7 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 	// 网格 + 左轴刻度（画在图内）
 	{
 		double step = NiceStep(flowHi - flowLo);
-		auto f10 = MkFont(10);
+		Gdiplus::Font* const f10 = MkFont(10);
 		for (double tv = ceil(flowLo / step) * step; tv <= flowHi; tv += step)
 		{
 			float y = fyFlow(tv);
@@ -2277,7 +2291,7 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 				Gdiplus::SolidBrush bgBrush(Gdi(MC_BG, 190));
 				g.FillRectangle(&bgBrush, Gdiplus::REAL(lblRc.left - g_data.DPI(2)), Gdiplus::REAL(lblRc.top), Gdiplus::REAL(lblRc.Width() + g_data.DPI(4)), Gdiplus::REAL(lblRc.Height()));
 			}
-			DrawStr(g, lbl, f10.get(), lblRc, MC_TEXT_SUB);
+			DrawStr(g, lbl, f10, lblRc, MC_TEXT_SUB);
 		}
 		// 右轴（指数）图内标签
 		if (idxAny)
@@ -2292,14 +2306,14 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 				Gdiplus::SolidBrush bgBrush(Gdi(MC_BG, 190));
 				g.FillRectangle(&bgBrush, Gdiplus::REAL(lblRc.left - g_data.DPI(2)), Gdiplus::REAL(lblRc.top), Gdiplus::REAL(lblRc.Width() + g_data.DPI(4)), Gdiplus::REAL(lblRc.Height()));
 			}
-				DrawStr(g, lbl, f10.get(), lblRc, MC_TEXT_SUB, 255, Gdiplus::StringAlignmentFar);
+				DrawStr(g, lbl, f10, lblRc, MC_TEXT_SUB, 255, Gdiplus::StringAlignmentFar);
 			}
 		}
 	}
 
 	// X 轴时间标签 09:30 10:30 11:30/13:00 14:00 15:00
 	{
-		auto f10 = MkFont(10);
+		Gdiplus::Font* const f10 = MkFont(10);
 		const auto& axis = CMarketCenterData::TimeAxis();
 		const int marks[5] = { 0, 60, 120, 180, 240 };
 		for (int k = 0; k < 5; k++)
@@ -2308,7 +2322,7 @@ void CMarketCenterPanel::DrawMainFlowPage(Gdiplus::Graphics& g, const CRect& rc)
 			if (mi >= static_cast<int>(axis.size()))
 				continue;
 			CRect lblRc(static_cast<int>(fx(mi)) - g_data.DPI(24), plotRc.bottom + g_data.DPI(4), static_cast<int>(fx(mi)) + g_data.DPI(24), plotRc.bottom + g_data.DPI(20));
-			DrawStrMid(g, axis[static_cast<size_t>(mi)], f10.get(), lblRc, MC_TEXT_SUB);
+			DrawStrMid(g, axis[static_cast<size_t>(mi)], f10, lblRc, MC_TEXT_SUB);
 		}
 	}
 
@@ -2339,12 +2353,12 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 {
 	DrawPageTitle(g, rc, L"涨跌趋势", L"全市场涨跌家数与沪深成交额");
 
-	auto f9 = MkFont(9);
-	auto f10 = MkFont(10);
-	auto f10b = MkFont(10, true);
-	auto f11 = MkFont(11);
-	auto f12b = MkFont(12, true);
-	auto f15b = MkFont(15, true);
+	Gdiplus::Font* const f9 = MkFont(9);
+	Gdiplus::Font* const f10 = MkFont(10);
+	Gdiplus::Font* const f10b = MkFont(10, true);
+	Gdiplus::Font* const f11 = MkFont(11);
+	Gdiplus::Font* const f12b = MkFont(12, true);
+	Gdiplus::Font* const f15b = MkFont(15, true);
 
 	MC::UpDownDist dist;
 	double turnoverToday = 0, turnoverYday = 0;
@@ -2472,11 +2486,11 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 		CSize szTmp;
 		for (int i = 0; i < 8; i++)
 		{
-			auto fProbe = MkFont(15, true);
-			szTmp = MeasureStr(g, fProbe.get(), tCells[i].value);
+			Gdiplus::Font* const fProbe = MkFont(15, true);
+			szTmp = MeasureStr(g, fProbe, tCells[i].value);
 			if (!tCells[i].sub.empty())
-				szTmp.cx += g_data.DPI(4) + MeasureStr(g, f15b.get(), tCells[i].sub).cx;
-			int wv = max(szTmp.cx, MeasureStr(g, f10.get(), tCells[i].label).cx);
+				szTmp.cx += g_data.DPI(4) + MeasureStr(g, f15b, tCells[i].sub).cx;
+			int wv = max(szTmp.cx, MeasureStr(g, f10, tCells[i].label).cx);
 			colW8[i] = max(wv + g_data.DPI(16), g_data.DPI(56));
 			totalW += colW8[i];
 		}
@@ -2495,22 +2509,22 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 			Gdiplus::Pen sepPen(Gdi(MC_BORDER), 1.0f);
 			g.DrawLine(&sepPen, Gdiplus::REAL(cell.left), Gdiplus::REAL(cell.top + g_data.DPI(10)), Gdiplus::REAL(cell.left), Gdiplus::REAL(cell.bottom - g_data.DPI(10)));
 		}
-		DrawStrMid(g, tCells[i].label, f10.get(), CRect(cell.left, cell.top + g_data.DPI(8), cell.right, cell.top + g_data.DPI(22)), MC_TEXT_SUB);
+		DrawStrMid(g, tCells[i].label, f10, CRect(cell.left, cell.top + g_data.DPI(8), cell.right, cell.top + g_data.DPI(22)), MC_TEXT_SUB);
 		CRect valRc(cell.left, cell.top + g_data.DPI(26), cell.right, cell.bottom - g_data.DPI(6));
 		if (tCells[i].sub.empty())
 		{
-			DrawStrMid(g, tCells[i].value, f15b.get(), valRc, tCells[i].color);
+			DrawStrMid(g, tCells[i].value, f15b, valRc, tCells[i].color);
 		}
 		else
 		{
 			// 主值 + 同行附注（较前一日同期的幅度，与主值同字号），整体居中基线对齐，StringFormat 默认折行不再出现
-			CSize wMain = MeasureStr(g, f15b.get(), tCells[i].value);
-			CSize wSub = MeasureStr(g, f15b.get(), tCells[i].sub);
+			CSize wMain = MeasureStr(g, f15b, tCells[i].value);
+			CSize wSub = MeasureStr(g, f15b, tCells[i].sub);
 			int gap = g_data.DPI(4);
 			int total = wMain.cx + gap + wSub.cx;
 			int x0 = cell.CenterPoint().x - total / 2;
-			DrawStr(g, tCells[i].value, f15b.get(), CRect(x0, valRc.top, x0 + wMain.cx, valRc.bottom), tCells[i].color, 255, Gdiplus::StringAlignmentNear);
-			DrawStr(g, tCells[i].sub, f15b.get(), CRect(x0 + wMain.cx + gap, valRc.top, x0 + total, valRc.bottom), tCells[i].subColor, 255, Gdiplus::StringAlignmentNear);
+			DrawStr(g, tCells[i].value, f15b, CRect(x0, valRc.top, x0 + wMain.cx, valRc.bottom), tCells[i].color, 255, Gdiplus::StringAlignmentNear);
+			DrawStr(g, tCells[i].sub, f15b, CRect(x0 + wMain.cx + gap, valRc.top, x0 + total, valRc.bottom), tCells[i].subColor, 255, Gdiplus::StringAlignmentNear);
 		}
 		m_trend_stat_rects.push_back({ cell, i });
 	}
@@ -2523,8 +2537,8 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 		m_hover_dist_bar = -1;
 		if (m_bin_panel_open)
 			CloseBinPanel();
-		auto f12 = MkFont(12);
-		DrawStatus(g, CRect(rc.left, blockRc.bottom, rc.right, rc.bottom), CMarketCenterData::DS_TREND, L"正在获取涨跌分布…", f12.get());
+		Gdiplus::Font* const f12 = MkFont(12);
+		DrawStatus(g, CRect(rc.left, blockRc.bottom, rc.right, rc.bottom), CMarketCenterData::DS_TREND, L"正在获取涨跌分布…", f12);
 		return;
 	}
 
@@ -2532,7 +2546,7 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 	CRect bodyRc(blockRc.left, blockRc.bottom + g_data.DPI(8), blockRc.right, rc.bottom - g_data.DPI(16));
 	CRect distRc(bodyRc.left, bodyRc.top, bodyRc.right, bodyRc.bottom);
 
-	DrawStr(g, L"涨跌分布", f12b.get(), CRect(distRc.left + g_data.DPI(6), distRc.top, distRc.left + g_data.DPI(100), distRc.top + g_data.DPI(18)), MC_TEXT);
+	DrawStr(g, L"涨跌分布", f12b, CRect(distRc.left + g_data.DPI(6), distRc.top, distRc.left + g_data.DPI(100), distRc.top + g_data.DPI(18)), MC_TEXT);
 	CRect distPlot(distRc.left + g_data.DPI(44), distRc.top + g_data.DPI(24), distRc.right - g_data.DPI(8), distRc.bottom - g_data.DPI(22));
 
 	auto bucketSum = [&dist](int lo, int hi) -> long long {
@@ -2574,7 +2588,7 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 			float y = distPlot.bottom - static_cast<float>(tv / hiV * distPlot.Height());
 			Gdiplus::Pen gridPen(Gdi(MC_GRID), 1.0f);
 			g.DrawLine(&gridPen, Gdiplus::REAL(distPlot.left), y, Gdiplus::REAL(distPlot.right), y);
-			DrawStr(g, FormatAxisNum(tv, step), f10.get(), CRect(distRc.left + g_data.DPI(2), static_cast<int>(y) - g_data.DPI(8), distPlot.left - g_data.DPI(4), static_cast<int>(y) + g_data.DPI(8)), MC_TEXT_SUB, 255, Gdiplus::StringAlignmentFar);
+			DrawStr(g, FormatAxisNum(tv, step), f10, CRect(distRc.left + g_data.DPI(2), static_cast<int>(y) - g_data.DPI(8), distPlot.left - g_data.DPI(4), static_cast<int>(y) + g_data.DPI(8)), MC_TEXT_SUB, 255, Gdiplus::StringAlignmentFar);
 		}
 	}
 	m_dist_bars.clear();
@@ -2590,8 +2604,8 @@ void CMarketCenterPanel::DrawTrendPage(Gdiplus::Graphics& g, const CRect& rc)
 		if (static_cast<int>(i) == m_hover_dist_bar)
 			FillRounded(g, CRect(barRc.left - g_data.DPI(1), barRc.top - g_data.DPI(1), barRc.right + g_data.DPI(1), barRc.bottom), RGB(60, 66, 84), 0);
 		FillRounded(g, barRc, c, 0);
-		DrawStrMid(g, FormatInt(bins[i].count), f9.get(), CRect(barRc.left - g_data.DPI(8), barRc.top - g_data.DPI(14), barRc.right + g_data.DPI(8), barRc.top - g_data.DPI(2)), MC_TEXT_SUB);
-		DrawStrMid(g, bins[i].label, f9.get(), CRect(cx - slotW / 2, distPlot.bottom + g_data.DPI(4), cx + slotW / 2, distPlot.bottom + g_data.DPI(18)), MC_TEXT_SUB);
+		DrawStrMid(g, FormatInt(bins[i].count), f9, CRect(barRc.left - g_data.DPI(8), barRc.top - g_data.DPI(14), barRc.right + g_data.DPI(8), barRc.top - g_data.DPI(2)), MC_TEXT_SUB);
+		DrawStrMid(g, bins[i].label, f9, CRect(cx - slotW / 2, distPlot.bottom + g_data.DPI(4), cx + slotW / 2, distPlot.bottom + g_data.DPI(18)), MC_TEXT_SUB);
 		// 命中区取整个槽位（含柱底与标签）：柱子很矮时也能点得到
 		m_dist_bars.push_back({ CRect(cx - slotW / 2, distPlot.top, cx + slotW / 2, distPlot.bottom + g_data.DPI(20)), i });
 	}
@@ -2656,11 +2670,11 @@ void CMarketCenterPanel::CloseBinPanel()
 
 void CMarketCenterPanel::DrawBinPanel(Gdiplus::Graphics& g, const CRect& areaRc)
 {
-	auto f10 = MkFont(10);
-	auto f10b = MkFont(10, true);
-	auto f11 = MkFont(11);
-	auto f11b = MkFont(11, true);
-	auto f12b = MkFont(12, true);
+	Gdiplus::Font* const f10 = MkFont(10);
+	Gdiplus::Font* const f10b = MkFont(10, true);
+	Gdiplus::Font* const f11 = MkFont(11);
+	Gdiplus::Font* const f11b = MkFont(11, true);
+	Gdiplus::Font* const f12b = MkFont(12, true);
 
 	// 贴在分布图右侧、上下不出分布区：浮层里的命中矩形就是这里算出来的，
 	// 尺寸必须与 HandleLButtonDown/HandleMouseMove 完全同源
@@ -2688,8 +2702,8 @@ void CMarketCenterPanel::DrawBinPanel(Gdiplus::Graphics& g, const CRect& areaRc)
 		title += L" · 共" + std::to_wstring(m_bin_total) + L"只";
 	if (!allLoaded && !m_bin_failed)
 		title += L" · 加载中";
-	DrawStr(g, title, f12b.get(), CRect(headRc.left, headRc.top, m_bin_close_rect.left - g_data.DPI(4), headRc.bottom), MC_TEXT);
-	DrawStrMid(g, L"\x2715", f11.get(), m_bin_close_rect, m_hover_bin_close ? MC_TEXT : MC_TEXT_DIM);
+	DrawStr(g, title, f12b, CRect(headRc.left, headRc.top, m_bin_close_rect.left - g_data.DPI(4), headRc.bottom), MC_TEXT);
+	DrawStrMid(g, L"\x2715", f11, m_bin_close_rect, m_hover_bin_close ? MC_TEXT : MC_TEXT_DIM);
 
 	// 表头
 	CRect headRow(headRc.left, headRc.bottom + g_data.DPI(4), headRc.right, headRc.bottom + g_data.DPI(4) + g_data.DPI(18));
@@ -2705,7 +2719,7 @@ void CMarketCenterPanel::DrawBinPanel(Gdiplus::Graphics& g, const CRect& areaRc)
 	for (int i = 0; i < 4; i++)
 	{
 		CRect c(x, headRow.top, x + colWidths[i], headRow.bottom);
-		DrawStr(g, headers[i], f10.get(), c, MC_TEXT_DIM, 255, i == 0 ? Gdiplus::StringAlignmentNear : Gdiplus::StringAlignmentCenter);
+		DrawStr(g, headers[i], f10, c, MC_TEXT_DIM, 255, i == 0 ? Gdiplus::StringAlignmentNear : Gdiplus::StringAlignmentCenter);
 		x += colWidths[i];
 	}
 	Gdiplus::Pen sepPen(Gdi(MC_BORDER), 1.0f);
@@ -2728,7 +2742,7 @@ void CMarketCenterPanel::DrawBinPanel(Gdiplus::Graphics& g, const CRect& areaRc)
 	{
 		const wchar_t* msg = m_bin_failed ? L"获取失败，滚轮可重试"
 			: (allLoaded ? L"本档暂无个股" : L"正在获取名单…");
-		DrawStrMid(g, msg, f11.get(), listRc,
+		DrawStrMid(g, msg, f11, listRc,
 			m_bin_failed ? RGB(240, 173, 107) : MC_TEXT_DIM);
 		return;
 	}
@@ -2751,24 +2765,24 @@ void CMarketCenterPanel::DrawBinPanel(Gdiplus::Graphics& g, const CRect& areaRc)
 
 		// 名称单行绘制：宽度不够时截断，坚决不换行（换行会把行高压不住、点和画就错位）
 		CRect nameRc(rRow.left, rRow.top, rRow.left + colWidths[0] - g_data.DPI(4), rRow.bottom);
-		DrawStrSingle(g, row.name, f11.get(), nameRc, MC_TEXT, 255, Gdiplus::StringAlignmentNear);
-		DrawStrMid(g, row.code, f10.get(), CRect(rRow.left + colWidths[0], rRow.top, rRow.left + colWidths[0] + colWidths[1], rRow.bottom), MC_TEXT_SUB);
-		DrawStrMid(g, priceBuf, f10.get(), CRect(rRow.left + colWidths[0] + colWidths[1], rRow.top, rRow.left + colWidths[0] + colWidths[1] + colWidths[2], rRow.bottom), MC_TEXT_SUB);
-		DrawStrMid(g, pctBuf, f10b.get(), CRect(rRow.left + colWidths[0] + colWidths[1] + colWidths[2], rRow.top, rRow.right, rRow.bottom), UpDownColor(row.pct));
+		DrawStrSingle(g, row.name, f11, nameRc, MC_TEXT, 255, Gdiplus::StringAlignmentNear);
+		DrawStrMid(g, row.code, f10, CRect(rRow.left + colWidths[0], rRow.top, rRow.left + colWidths[0] + colWidths[1], rRow.bottom), MC_TEXT_SUB);
+		DrawStrMid(g, priceBuf, f10, CRect(rRow.left + colWidths[0] + colWidths[1], rRow.top, rRow.left + colWidths[0] + colWidths[1] + colWidths[2], rRow.bottom), MC_TEXT_SUB);
+		DrawStrMid(g, pctBuf, f10b, CRect(rRow.left + colWidths[0] + colWidths[1] + colWidths[2], rRow.top, rRow.right, rRow.bottom), UpDownColor(row.pct));
 	}
 	g.ResetClip();
 
 	// 列表未取完时在底部提示带里给出进度
 	if (m_bin_failed)
 	{
-		DrawStrMid(g, L"获取失败，滚动可重试", f10.get(), footRc, RGB(240, 173, 107));
+		DrawStrMid(g, L"获取失败，滚动可重试", f10, footRc, RGB(240, 173, 107));
 	}
 	else if (!allLoaded)
 	{
 		int loaded = static_cast<int>(m_bin_rows.size());
 		std::wstring hint = L"已加载 " + std::to_wstring(loaded)
 			+ (m_bin_total > 0 ? (L" / " + std::to_wstring(m_bin_total)) : std::wstring()) + L"，滚动继续加载";
-		DrawStrMid(g, hint, f10.get(), footRc, MC_TEXT_DIM);
+		DrawStrMid(g, hint, f10, footRc, MC_TEXT_DIM);
 	}
 }
 
@@ -2838,18 +2852,18 @@ void CMarketCenterPanel::DrawEtfRankPage(Gdiplus::Graphics& g, const CRect& rc)
 {
 	DrawPageTitle(g, rc, L"ETF涨跌榜", L"按涨跌幅排序（列头点击排序）");
 
-	auto f9 = MkFont(9);
-	auto f10 = MkFont(10);
-	auto f10b = MkFont(10, true);
-	auto f11 = MkFont(11);
-	auto f11b = MkFont(11, true);
-	auto f12b = MkFont(12, true);
-	auto f14b = MkFont(14, true);
+	Gdiplus::Font* const f9 = MkFont(9);
+	Gdiplus::Font* const f10 = MkFont(10);
+	Gdiplus::Font* const f10b = MkFont(10, true);
+	Gdiplus::Font* const f11 = MkFont(11);
+	Gdiplus::Font* const f11b = MkFont(11, true);
+	Gdiplus::Font* const f12b = MkFont(12, true);
+	Gdiplus::Font* const f14b = MkFont(14, true);
 
 	if (m_etfs_snapshot.empty())
 	{
-		auto f12 = MkFont(12);
-		DrawStatus(g, rc, CMarketCenterData::DS_ETFS, L"正在获取ETF数据…", f12.get());
+		Gdiplus::Font* const f12 = MkFont(12);
+		DrawStatus(g, rc, CMarketCenterData::DS_ETFS, L"正在获取ETF数据…", f12);
 		return;
 	}
 
@@ -2894,8 +2908,8 @@ void CMarketCenterPanel::DrawEtfRankPage(Gdiplus::Graphics& g, const CRect& rc)
 			Gdiplus::Pen sepPen(Gdi(MC_BORDER), 1.0f);
 			g.DrawLine(&sepPen, Gdiplus::REAL(cell.left), Gdiplus::REAL(cell.top + g_data.DPI(8)), Gdiplus::REAL(cell.left), Gdiplus::REAL(cell.bottom - g_data.DPI(8)));
 		}
-		DrawStrMid(g, tools[i].label, f11.get(), CRect(cell.left, cell.top + g_data.DPI(7), cell.right, cell.top + g_data.DPI(21)), MC_TEXT_SUB);
-		DrawStrMid(g, tools[i].value, f14b.get(), CRect(cell.left, cell.top + g_data.DPI(24), cell.right, cell.bottom - g_data.DPI(5)), tools[i].color);
+		DrawStrMid(g, tools[i].label, f11, CRect(cell.left, cell.top + g_data.DPI(7), cell.right, cell.top + g_data.DPI(21)), MC_TEXT_SUB);
+		DrawStrMid(g, tools[i].value, f14b, CRect(cell.left, cell.top + g_data.DPI(24), cell.right, cell.bottom - g_data.DPI(5)), tools[i].color);
 		m_rank_stat_rects.push_back({ cell, i });
 	}
 
@@ -2939,7 +2953,7 @@ void CMarketCenterPanel::DrawEtfRankPage(Gdiplus::Graphics& g, const CRect& rc)
 			if (isSorted)
 				lblRc.right -= g_data.DPI(12);
 			const COLORREF headerColor = isSorted ? MC_ACCENT : MC_TEXT_DIM;
-			DrawStr(g, headers[i], f11.get(), lblRc, headerColor, 255, i == 0 ? Gdiplus::StringAlignmentNear : Gdiplus::StringAlignmentCenter);
+			DrawStr(g, headers[i], f11, lblRc, headerColor, 255, i == 0 ? Gdiplus::StringAlignmentNear : Gdiplus::StringAlignmentCenter);
 			if (isSorted)
 			{
 				const int iconSize = g_data.DPI(12);
@@ -2979,28 +2993,28 @@ void CMarketCenterPanel::DrawEtfRankPage(Gdiplus::Graphics& g, const CRect& rc)
 		m_rank_row_etf.push_back(etfIdx);
 
 		// 名称 / 代码（独立列，字号与表格其他列一致）
-		DrawStr(g, e.name, f11b.get(), CRect(colX[0], rowRc.top, colX[1] - g_data.DPI(6), rowRc.bottom), MC_TEXT);
-		DrawStrMid(g, e.code, f11.get(), CRect(colX[1], rowRc.top, colX[2], rowRc.bottom), MC_TEXT_SUB);
+		DrawStr(g, e.name, f11b, CRect(colX[0], rowRc.top, colX[1] - g_data.DPI(6), rowRc.bottom), MC_TEXT);
+		DrawStrMid(g, e.code, f11, CRect(colX[1], rowRc.top, colX[2], rowRc.bottom), MC_TEXT_SUB);
 		// 行业（纯文字，与表格其他列一致）
-		DrawStrMid(g, e.theme, f11.get(), CRect(colX[2], rowRc.top, colX[3], rowRc.bottom), MC_TEXT_SUB);
+		DrawStrMid(g, e.theme, f11, CRect(colX[2], rowRc.top, colX[3], rowRc.bottom), MC_TEXT_SUB);
 		// 现价
 		swprintf_s(buf, L"%.3f", e.price);
-		DrawStrMid(g, buf, f11.get(), CRect(colX[3], rowRc.top, colX[4], rowRc.bottom), MC_TEXT);
+		DrawStrMid(g, buf, f11, CRect(colX[3], rowRc.top, colX[4], rowRc.bottom), MC_TEXT);
 		// 涨跌幅 pill（宽度贴文字，列内居中）
 		{
-			CSize szPct = MeasureStr(g, f11.get(), FormatPct(e.pct));
+			CSize szPct = MeasureStr(g, f11, FormatPct(e.pct));
 			int pillW = min(szPct.cx + g_data.DPI(12), colX[5] - colX[4]);
 			int cxMid = (colX[4] + colX[5]) / 2;
 			CRect pillRc(cxMid - pillW / 2, rowRc.top + g_data.DPI(5), cxMid + pillW / 2, rowRc.bottom - g_data.DPI(5));
 			FillRounded(g, pillRc, e.pct >= 0 ? MC_UP : MC_DOWN, static_cast<float>(pillRc.Height() / 2), 36);
-			DrawStrMid(g, FormatPct(e.pct), f11.get(), pillRc, e.pct >= 0 ? RGB(255, 173, 183) : RGB(148, 240, 200));
+			DrawStrMid(g, FormatPct(e.pct), f11, pillRc, e.pct >= 0 ? RGB(255, 173, 183) : RGB(148, 240, 200));
 		}
 		// 成交额
 		swprintf_s(buf, L"%.1f", e.amount / 1e8);
-		DrawStrMid(g, buf, f11.get(), CRect(colX[5], rowRc.top, colX[6], rowRc.bottom), MC_TEXT);
+		DrawStrMid(g, buf, f11, CRect(colX[5], rowRc.top, colX[6], rowRc.bottom), MC_TEXT);
 		// 主力净流入
 		swprintf_s(buf, L"%s%.2f", e.inflow >= 0 ? L"+" : L"-", fabs(e.inflow) / 1e8);
-		DrawStrMid(g, buf, f11.get(), CRect(colX[6], rowRc.top, colEnd, rowRc.bottom), UpDownColor(e.inflow));
+		DrawStrMid(g, buf, f11, CRect(colX[6], rowRc.top, colEnd, rowRc.bottom), UpDownColor(e.inflow));
 	}
 	g.ResetClip();
 }

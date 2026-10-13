@@ -14,7 +14,6 @@
 #include "TradeRecordDialog.h"
 #include "StockFetchThread.h"
 #include "StockHttpFetcher.h"
-#include "SmartSignalTestDlg.h"
 #include "ChartColors.h"
 #include "Icons/Icons.h"
 #include "StockListPanel.h"
@@ -2133,17 +2132,6 @@ void CFloatingWnd::OnPaint()
 // ========== RSI相对强弱指标绘制 ==========
 // 注：CalculateTimelineRSI/CalculateKLineRSI 已移至 CStockIndicator 类。
 
-// ========== K线图公共辅助函数 ==========
-// 已移至 CKLineChart
-
-// 注：CalculatePeriodHighsLows 已移至 CStockIndicator 类。
-
-// ========== K线图绘制 ==========
-// 已移至 CKLineChart
-
-// ========== 走势图绘制 ==========
-// 已移至 CKLineChart
-
 BOOL CFloatingWnd::OnEraseBkgnd(CDC* pDC)
 {
 	return TRUE; // 不擦除背景
@@ -2534,8 +2522,7 @@ void CFloatingWnd::OnLButtonDown(UINT nFlags, CPoint point)
 				const auto& item = timelinePoint[countX];
 				m_pendingTradeTime = item.time.c_str();
 				m_pendingTradePrice = item.price;
-				// PostMessage(FWND_MSG_SHOW_TRADE_DLG);  // 测试买卖点检测时暂时屏蔽交易记录弹窗
-				CSmartSignalTestDlg::Show(m_stock_id, countX, m_viewMode, m_pendingTradePrice, m_pendingTradeTime, this);
+				PostMessage(FWND_MSG_SHOW_TRADE_DLG);  // 双击分时/K线：弹出交易记录录入（时间/价格预填自双击位置）
 				return;
 			}
 		}
@@ -2779,17 +2766,6 @@ void CFloatingWnd::OnLButtonUp(UINT nFlags, CPoint point)
 	}
 	CWnd::OnLButtonUp(nFlags, point);
 }
-
-// ========== KDJ 指标绘制 ==========
-// 注：CalculateKDJ/CalculateTimelineKDJ 已移至 CStockIndicator 类。
-
-// 已移至 CIndicatorChart
-
-// 已移至 CKLineChart
-
-// 已移至 CTimelineChart
-
-// 已移至 CIndicatorChart
 
 void CFloatingWnd::OnRButtonDown(UINT nFlags, CPoint point)
 {
@@ -3409,138 +3385,7 @@ void CFloatingWnd::OnMouseMove(UINT nFlags, CPoint point)
 	m_isHoveringVolume = false;
 	int prevHoveredBarIndex = m_hoveredBarIndex;
 	m_hoveredBarIndex = -1;
-	bool prevHoveringKLine = m_isHoveringKLine;
-	bool prevHoveringKLineVolume = m_isHoveringKLineVolume;
-	int prevKlineHoveredBarIndex = m_klineHoveredBarIndex;
-	m_isHoveringKLine = false;
-	m_isHoveringKLineVolume = false;
-	m_klineHoveredBarIndex = -1;
 
-	if ((m_viewMode == UI_VIEW_DAY_KLINE) && false)  // 日K线模式现在走分时悬停逻辑
-	{
-		std::vector<STOCK::KLinePoint> klineData;
-		{
-			std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
-			auto stockData = g_data.GetStockData(m_stock_id);
-			if (stockData)
-			{
-				auto klineObj = stockData->getKLineData();
-				if (klineObj)
-				{
-					klineData = klineObj->data;
-				}
-			}
-		}
-
-		if (!klineData.empty() && point.x >= chartLeft && point.x < chartRight)
-		{
-			// 使用与绘制完全一致的参数计算（x从chartLeft开始，宽度为chartWidth-chartLeft）
-			const int paddingY = g_data.RDPI(10);
-			CKLineChart::HoverState klineHover;
-			klineHover.isHoveringKLine = m_isHoveringKLine;
-			klineHover.isHoveringKLineVolume = m_isHoveringKLineVolume;
-			klineHover.isHoveringKDJ = m_isHoveringKDJ;
-			klineHover.klineHoveredBarIndex = m_klineHoveredBarIndex;
-			klineHover.klineHoverTip = m_klineHoverTip;
-			klineHover.klineVolumeHoverTip = m_klineVolumeHoverTip;
-			klineHover.klineTrendHoverTip = m_klineTrendHoverTip;
-			klineHover.kdjHoverTip = m_kdjHoverTip;
-			klineHover.showMA = m_showMA;
-			klineHover.showBollBands = m_showBollBands;
-			klineHover.showTrendView = m_showTrendView;
-			klineHover.viewMode = m_viewMode;
-			klineHover.klinePeriodDays = m_klinePeriodDays;
-			klineHover.scrollOffset = m_scrollOffset;
-			klineHover.stockId = m_stock_id;
-			KLineDrawData drawData = m_kLineChart.PrepareKLineDrawData(chartLeft, headerHeight + paddingY, chartWidth - chartLeft, priceChartHeight - paddingY * 2, klineData, klineHover);
-
-			if (point.y >= headerHeight && point.y < headerHeight + priceChartHeight)
-			{
-				// 鼠标在K线图上 - 使用与绘制一致的参数定位
-				int barIndex = -1;
-				int totalBars = klineData.size() - drawData.finalStartIndex;
-				if (totalBars > 0 && drawData.barWidth + drawData.gap > 0)
-				{
-					barIndex = drawData.finalStartIndex + (point.x - drawData.x) / (drawData.barWidth + drawData.gap);
-					barIndex = max(drawData.finalStartIndex, min(barIndex, (int)klineData.size() - 1));
-				}
-
-				if (barIndex >= 0)
-				{
-					m_isHoveringKLine = true;
-					m_klineHoveredBarIndex = barIndex;
-
-					const auto& item = klineData[barIndex];
-					m_klineHoverTip.Format(_T("开:%s  收:%s  高:%s  低:%s"),
-						CCommon::FormatFloat(item.open),
-						CCommon::FormatFloat(item.close),
-						CCommon::FormatFloat(item.high),
-						CCommon::FormatFloat(item.low));
-
-					m_klineTrendHoverTip.Format(_T("收:%s  最高:%s  最低:%s"),
-						CCommon::FormatFloat(item.close),
-						CCommon::FormatFloat(item.high),
-						CCommon::FormatFloat(item.low));
-
-					// 同时设置量柱提示，实现同步显示
-					STOCK::Volume volumeLots = item.volume / 100;
-					CString volumeStr = CCommon::FormatVolumeInt(volumeLots);
-					m_klineVolumeHoverTip.Format(_T("成交量:%s"),
-						volumeStr);
-				}
-			}
-			else
-			{
-				// 统一布局：成交量图紧贴走势图
-				int volumeY = headerHeight + priceChartHeight;
-				if (point.y >= volumeY && point.y < volumeY + volumeChartHeight)
-				{
-					// 鼠标在量柱图上 - 使用与绘制一致的参数定位
-					int barIndex = -1;
-					int totalBars = klineData.size() - drawData.finalStartIndex;
-					if (totalBars > 0 && drawData.barWidth + drawData.gap > 0)
-					{
-						barIndex = drawData.finalStartIndex + (point.x - drawData.x) / (drawData.barWidth + drawData.gap);
-						barIndex = max(drawData.finalStartIndex, min(barIndex, (int)klineData.size() - 1));
-					}
-
-					if (barIndex >= 0)
-					{
-						m_isHoveringKLineVolume = true;
-						m_klineHoveredBarIndex = barIndex;
-
-						const auto& item = klineData[barIndex];
-						STOCK::Volume volumeLots = item.volume / 100;
-						CString volumeStr = CCommon::FormatVolumeInt(volumeLots);
-						m_klineVolumeHoverTip.Format(_T("成交量:%s"),
-							volumeStr);
-
-						// 同时设置K线提示，实现同步显示
-						m_klineHoverTip.Format(_T("开:%s  收:%s  高:%s  低:%s"),
-							CCommon::FormatFloat(item.open),
-							CCommon::FormatFloat(item.close),
-							CCommon::FormatFloat(item.high),
-							CCommon::FormatFloat(item.low));
-
-						m_klineTrendHoverTip.Format(_T("收:%s  最高:%s  最低:%s"),
-							CCommon::FormatFloat(item.close),
-							CCommon::FormatFloat(item.high),
-							CCommon::FormatFloat(item.low));
-					}
-				}
-			}
-
-			// 只在悬停状态变化时重绘图表区域，避免按钮闪烁
-			bool hoverChanged = (m_isHoveringKLine != prevHoveringKLine ||
-				m_isHoveringKLineVolume != prevHoveringKLineVolume ||
-				m_klineHoveredBarIndex != prevKlineHoveredBarIndex);
-			if (hoverChanged)
-			{
-				InvalidateRect(CRect(0, headerHeight, chartWidth, rect.Height()));
-			}
-		}
-	}
-	else
 	{
 		std::vector<STOCK::TimelinePoint> timelinePoint;
 		{
@@ -4952,14 +4797,9 @@ void CFloatingWnd::EnsureKLineData(STOCK::Period period)
 
 void CFloatingWnd::ResetHoverState()
 {
-	m_isHoveringKLine = false;
-	m_isHoveringKLineVolume = false;
 	m_isHoveringVolume = false;
-	m_klineHoveredBarIndex = -1;
 	m_hoveredBarIndex = -1;
-	m_klineHoverTip.Empty();
 	m_hoverTip.Empty();
-	m_klineTrendHoverTip.Empty();
 	m_timelineVolumeTitleTip.Empty();
 	m_timelineMacdTitleTip.Empty();
 	m_timelineKdjTitleTip.Empty();
@@ -5211,11 +5051,9 @@ LRESULT CFloatingWnd::OnShowAddDialog(WPARAM wParam, LPARAM lParam)
 LRESULT CFloatingWnd::OnShowTradeDialog(WPARAM wParam, LPARAM lParam)
 {
 	AFX_MANAGE_STATE(AfxGetStaticModuleState());
-	/* 测试买卖点检测时暂时屏蔽交易记录弹窗
 	CTradeRecordDialog dlg(this);
 	dlg.SetTradeInfo(m_pendingTradeTime, m_pendingTradePrice, CString(m_stock_id.c_str()));
 	dlg.DoModal();
-	*/
 	return 0;
 }
 

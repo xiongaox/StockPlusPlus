@@ -236,6 +236,47 @@ dumpbin /headers bin\ARM64EC\Release\Stock.dll | Select-String "machine|a64xrm|h
 
 ---
 
+## 📡 通达信直连通道（可选增强）
+
+插件默认通过 **腾讯 + 新浪 HTTP 接口每 2 秒轮询** A 股实时行情，开箱即用，无需任何额外组件。
+`tools/getPrice.py` 提供一条**可选的增强通道**：用 pytdx 直连通达信行情服务器，把自选股快照
+（现价/五档/内外盘）以 **每 1 秒** 的节奏推送给插件，盘中价格跳动更接近行情源的逐笔节奏。
+
+| | 不部署（默认） | 部署 getPrice |
+|---|---|---|
+| A 股现价刷新 | 每 2 秒 | **每 1 秒** |
+| 五档/内外盘 | 有 | 有（同一套字段） |
+| K 线/分时/台账/行情中心 | 相同 | 相同（不走此通道） |
+| 额外依赖 | 无 | Python 打包一次，或拷贝现成 exe |
+
+**「接口检测」页的通达信直连显示灰色「● 可优化」属正常状态**——不是故障，只是提示：部署后 A 股现价刷新可从 2 秒进一步优化到 1 秒，不部署也完全可用。
+
+### 部署方法
+
+**方式一：下载现成的 exe（推荐，目标机零依赖）**
+
+仓库已内置打包好的 [tools/getPrice.exe](./tools/getPrice.exe)（约 43MB，Python 环境与全部依赖已内嵌）：
+
+```bash
+# 浏览器直接下载，或命令行：
+curl -L -o getPrice.exe https://github.com/xiongaox/StockPlusPlus/raw/dev/tools/getPrice.exe
+```
+
+下载后放到 **`Stock.dll` 同目录**（TrafficMonitor 的插件目录），重启 TrafficMonitor 即可。
+
+**方式二：用 Python 直接跑脚本**（开发/自打包场景）：
+
+```bash
+pip install pytdx pywin32 requests
+python tools/getPrice.py
+```
+想自己打成免环境 exe：`pip install pyinstaller` 后在 tools 目录执行 `pyinstaller --onefile getPrice.py`。
+
+部署后它会读取同目录 `Stock.ini` 的自选股列表——该文件由插件自动生成与维护（TrafficMonitor 的配置目录或插件同目录，插件跑过一次就有），自选变化会自动跟随；全新环境没有 ini 时程序用内置默认自选照常运行，插件首次保存配置后下次启动自动接管。盘中每 1 秒推送、非交易时段自动降到每 10 秒。
+不想用了直接删掉 exe，插件自动回退 HTTP 轮询。
+
+---
+
 ## 📄 开源许可证
 
 本项目遵循 [MIT License](LICENSE) 协议。

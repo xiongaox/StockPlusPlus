@@ -124,6 +124,10 @@ Stock::Stock() : m_pFloatingWnd(NULL)
 
 Stock::~Stock()
 {
+	// 先等 WebDAV 自动同步线程结束：它内部会重载配置、重建台账并触 UI 请求，
+	// 必须在浮动窗销毁与抓取线程停止之前完成，也必须在全局对象析构（DLL 卸载期）前结束
+	if (m_webdav_sync_thread.joinable())
+		m_webdav_sync_thread.join();
 	DestroyFloatingWnd();
 	CMarketCenterData::Instance().StopExecutor();
 	CStockFetchThread::Instance().Stop();
@@ -247,14 +251,24 @@ void Stock::OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data)
 		// 检查是否开启了启动时自动同步 WebDAV 云端备份
 		if (g_data.m_setting_data.m_webdav_auto_sync && !g_data.m_setting_data.m_webdav_url.empty())
 		{
-			std::thread([]() {
+			// 受管线程（可 join）：detach 的线程会在宿主退出、DLL 卸载后继续执行
+			// g_data/DB 相关代码，导致退出崩溃。重复进入此分支时先等上一轮结束
+			if (m_instance.m_webdav_sync_thread.joinable())
+				m_instance.m_webdav_sync_thread.join();
+			m_instance.m_webdav_sync_thread = std::thread([]() {
 				AFX_MANAGE_STATE(AfxGetStaticModuleState());
 				std::wstring errMsg;
 				if (CWebDavSync::DownloadBackup(g_data.m_setting_data, errMsg))
 				{
 					Stock::Instance().SendStockInfoRequest();
 				}
-			}).detach();
+				else if (!errMsg.empty())
+				{
+					// 跳过/失败原因落日志：自动同步没有界面，用户只能靠日志排障
+					//（「本地较新跳过」「空台账拒绝恢复」这类防护性跳过也会出现在这里）
+					CCommon::WriteLog((L"[WebDAV] 启动自动同步未应用云端备份: " + errMsg).c_str(), g_data.m_log_path.c_str());
+				}
+			});
 		}
 		break;
 	case ITMPlugin::EI_TASKBAR_WND_VALUE_RIGHT_ALIGN:
@@ -1708,6 +1722,10 @@ void Stock::UpdateMacdCalcForStock(const std::wstring& code)
 
 	time_t now = time(nullptr);
 
+	// 直写 stock_data 的 MACD 缓存并读取 K线/分时 vector（抓取线程同时在锁内扩容），
+	// 全程持 m_stockDataMutex（宿主回调线程与抓取/UI 线程共用这把锁）
+	std::lock_guard<std::mutex> dataLock(Stock::Instance().m_stockDataMutex);
+
 	// 辅助lambda：计算单周期MACD并缓存，数据不足时不更新calcTime以便下次重试
 	auto calcPeriodMacd = [&](STOCK::StockData::PeriodMacdCache& cache, int interval,
 		std::function<bool(std::vector<STOCK::Bar>&)> getBars) {
@@ -1806,6 +1824,9 @@ void Stock::JudgeMacdTrendForStock(const std::wstring& code)
 	auto stock_data = g_data.GetStockData(code);
 	if (!stock_data || !stock_data->info.is_ok)
 		return;
+
+	// 读 MACD 缓存 + 写 macdTrendSignal/Desc（CString 引用计数非线程安全），持 m_stockDataMutex
+	std::lock_guard<std::mutex> dataLock(Stock::Instance().m_stockDataMutex);
 
 	// 至少需要日K数据才能判定格局
 	if (!stock_data->dayMacdCache.dataReady)

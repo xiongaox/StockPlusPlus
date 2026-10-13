@@ -278,31 +278,49 @@ void CStockFetchThread::Stop()
 	// 唤醒实时行情线程
 	m_realtime_cv.notify_all();
 
-	// 等待图表线程退出（最多2秒，超时则强制终止）
+	// 等待图表线程退出。
+	// 不再用 TerminateThread 强杀：强杀会让线程带着已锁住的互斥锁（数据锁/DB锁）消失，
+	// 锁永远无法释放，后续任何加锁的线程永久挂死；杀在 sqlite3_step 中途还可能损坏库文件。
+	// 超时后选择"有意泄漏"该线程：孤儿线程会在当前网络任务结束后看到 m_stopping 自行退出，
+	// 句柄与 CWinThread 对象一并泄漏（进程退出由系统回收），远好于破坏锁状态。
+	// 注意：CWinThread 析构函数会 CloseHandle(m_hThread)，因此这里绝不能再手动 CloseHandle
+	//（旧代码双关同一句柄，句柄值被系统复用时会关掉无关内核对象）。
 	if (m_thread_handle != nullptr)
 	{
-		DWORD waitResult = WaitForSingleObject(m_thread_handle, 2000);
+		DWORD waitResult = WaitForSingleObject(m_thread_handle, 10000);
 		if (waitResult != WAIT_OBJECT_0)
-			TerminateThread(m_thread_handle, 0);
-		CloseHandle(m_thread_handle);
-		m_thread_handle = nullptr;
+		{
+			CCommon::WriteLog(L"[FetchThread] 图表线程10秒内未退出，放弃等待（有意泄漏，等待其自行退出）", g_data.m_log_path.c_str());
+			m_thread_handle = nullptr;
+			m_pThread = nullptr;	// 不 delete：句柄归线程对象所有，泄漏以避免悬垂
+		}
+		else
+		{
+			m_thread_handle = nullptr;
+			delete m_pThread;		// 析构内部关闭线程句柄（唯一一次关闭）
+			m_pThread = nullptr;
+		}
 	}
-	delete m_pThread;
-	m_pThread = nullptr;
 	m_busy = false;
 	m_callAuction_busy = false;
 
-	// 等待实时行情线程退出（最多2秒，超时则强制终止）
+	// 等待实时行情线程退出（策略同上）
 	if (m_realtime_thread_handle != nullptr)
 	{
-		DWORD waitResult = WaitForSingleObject(m_realtime_thread_handle, 2000);
+		DWORD waitResult = WaitForSingleObject(m_realtime_thread_handle, 10000);
 		if (waitResult != WAIT_OBJECT_0)
-			TerminateThread(m_realtime_thread_handle, 0);
-		CloseHandle(m_realtime_thread_handle);
-		m_realtime_thread_handle = nullptr;
+		{
+			CCommon::WriteLog(L"[FetchThread] 实时行情线程10秒内未退出，放弃等待（有意泄漏，等待其自行退出）", g_data.m_log_path.c_str());
+			m_realtime_thread_handle = nullptr;
+			m_realtime_pThread = nullptr;
+		}
+		else
+		{
+			m_realtime_thread_handle = nullptr;
+			delete m_realtime_pThread;
+			m_realtime_pThread = nullptr;
+		}
 	}
-	delete m_realtime_pThread;
-	m_realtime_pThread = nullptr;
 	m_realtime_last_fetch = 0;
 
 	// 停止共享内存监听线程（阻塞等待退出）
@@ -413,8 +431,15 @@ void CStockFetchThread::SetFocusStockId(const std::wstring& stockId)
 			auto stillFocused = [&stockId]() {
 				return CStockFetchThread::Instance().GetFocusStockId() == stockId;
 			};
+			// 停止中的插件不再发起新网络请求（否则 Stop() 要白等一个完整请求链）
+			auto notStopping = []() {
+				return !CStockFetchThread::Instance().IsStopping();
+			};
+			auto keepGoing = [&stillFocused, &notStopping]() {
+				return stillFocused() && notStopping();
+			};
 
-			// 东财 secid（118.* / 116.* / 101.* 等）不在腾讯/新浪实时接口中，
+			// 东财 secid 形态代码（118.* / 116.* / 101.* 等）不在腾讯/新浪实时接口中，
 			// 必须首屏直接走 stock/get，否则 K线已到而标题/现价长期为空。
 			if (CCommon::IsEmSecidCode(stockId))
 			{
@@ -429,16 +454,16 @@ void CStockFetchThread::SetFocusStockId(const std::wstring& stockId)
 					g_data.ApplyRealtimeData(rtOut, rtResp);
 			}
 
-			if (!stillFocused()) return;
+			if (!keepGoing()) return;
 			CStockFetchThread::Instance().FetchDayKLine(stockId, 750);
 
-			if (!stillFocused()) return;
+			if (!keepGoing()) return;
 			CStockFetchThread::Instance().FetchWeekKLine(stockId, 750);
 
-			if (!stillFocused()) return;
+			if (!keepGoing()) return;
 			CStockFetchThread::Instance().FetchMonthKLine(stockId, 750);
 
-			if (!stillFocused()) return;
+			if (!keepGoing()) return;
 			if (CCommon::IsFundCode(stockId))
 				CStockFetchThread::Instance().FetchFundIOPV(stockId);
 		});

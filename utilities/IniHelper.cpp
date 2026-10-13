@@ -186,20 +186,42 @@ namespace utilities
 
     bool CIniHelper::Save()
     {
-        std::ofstream file_stream{ m_file_path };
-        if (file_stream.fail())
-            return false;
+        // 原子写入：先写临时文件，全部落盘后再替换目标文件。
+        // 直接以截断方式打开目标文件时，写一半崩溃/断电会让 ini 只剩半截（自选股全丢，
+        // 且 IsEmpty() 判定为新装）。MoveFileEx 保证「要么旧内容、要么完整新内容」。
         std::string ini_str{ StringHelper::UnicodeToStr(m_ini_str.c_str(), m_save_as_utf8) };
-        if (m_save_as_utf8)     //如果以UTF8编码保存，先插入BOM
+
+        std::wstring tmp_path = m_file_path + L".tmp";
         {
-            std::string utf8_bom;
-            utf8_bom.push_back(-17);
-            utf8_bom.push_back(-69);
-            utf8_bom.push_back(-65);
-            file_stream << utf8_bom;
+            std::ofstream tmp_stream{ tmp_path, std::ios::binary | std::ios::trunc };
+            if (tmp_stream.fail())
+                return false;
+            if (m_save_as_utf8)     //如果以UTF8编码保存，先插入BOM
+            {
+                std::string utf8_bom;
+                utf8_bom.push_back(-17);
+                utf8_bom.push_back(-69);
+                utf8_bom.push_back(-65);
+                tmp_stream << utf8_bom;
+            }
+
+            tmp_stream << ini_str;
+            tmp_stream.flush();
+            if (tmp_stream.fail())
+            {
+                tmp_stream.close();
+                DeleteFileW(tmp_path.c_str());
+                return false;
+            }
         }
 
-        file_stream << ini_str;
+        // WRITE_THROUGH：内容到达磁盘后才算成功；替换失败时清理临时文件
+        if (!MoveFileExW(tmp_path.c_str(), m_file_path.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        {
+            DeleteFileW(tmp_path.c_str());
+            return false;
+        }
         return true;
     }
 

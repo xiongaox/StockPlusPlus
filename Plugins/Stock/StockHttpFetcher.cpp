@@ -23,6 +23,29 @@ static double generateRandomDouble()
 	return random;
 }
 
+// 东财失败冷却：指数退避。60s 起步、连续失败翻倍、封顶 10 分钟。
+// 旧实现固定 5 秒等于 WAF 拦截后每 5 秒再撞一次，容易升级为长期封禁
+void CStockHttpFetcher::NoteEastMoneyFailure()
+{
+	int streak = m_eastmoney_fail_streak.fetch_add(1) + 1;
+	// 60 * 2^(streak-1)，封顶 600 秒（用移位避免浮点）
+	time_t backoff = 60;
+	for (int i = 1; i < streak && backoff < 600; ++i)
+		backoff *= 2;
+	if (backoff > 600)
+		backoff = 600;
+	m_eastmoney_fail_until.store(time(nullptr) + backoff);
+}
+
+void CStockHttpFetcher::ResetEastMoneyFailure()
+{
+	// 已在冷却期则保持（本次成功可能来自缓存旁路），仅清连败计数；
+	// 冷却已过或未设置时彻底复位
+	m_eastmoney_fail_streak.store(0);
+	if (m_eastmoney_fail_until.load() != 0 && time(nullptr) >= m_eastmoney_fail_until.load())
+		m_eastmoney_fail_until.store(0);
+}
+
 static double GetJsonDoubleValue(yyjson_val* val)
 {
 	if (val == nullptr) return 0.0;
@@ -179,6 +202,8 @@ bool CStockHttpFetcher::FetchRealtimeHtml(const std::vector<std::wstring>& allCo
 		return false;
 
 	// 1. 主数据源：腾讯证券 (qt.gtimg.cn)
+	// 自选股很多时 URL 可达数 KB，超过服务器/WinINet 接受长度会被截断或 414，
+	// 表现为「行情不更新」且无报错——按每批 60 个代码分批请求后拼接响应
 	std::vector<std::wstring> missingCodes;
 	{
 		std::vector<std::wstring> txCodes = outCodes;
@@ -195,20 +220,38 @@ bool CStockHttpFetcher::FetchRealtimeHtml(const std::vector<std::wstring>& allCo
 				code = L"us" + pure;  // gb_nvda.oq -> usNVDA
 			}
 		}
-		std::wstring url{ L"http://qt.gtimg.cn/q=" };
-		url += CCommon::vectorJoinString(txCodes, L",");
+		const size_t kTxBatchSize = 60;
+		bool txOk = false;
 		CString strHeaders = _T("Referer: https://finance.qq.com");
-		DWORD t0 = GetTickCount();
-		bool txOk = CCommon::GetURL(url, outResp, false, WEB_USERAGENT, strHeaders, strHeaders.GetLength()) && !outResp.empty() && outResp.find("v_") != std::string::npos;
-		DWORD latencyTx = GetTickCount() - t0;
-		static DWORD s_lastRecordTx = 0;
-		if (GetTickCount() - s_lastRecordTx > 10000)
+		for (size_t batchStart = 0; batchStart < txCodes.size(); batchStart += kTxBatchSize)
 		{
-			s_lastRecordTx = GetTickCount();
-			if (txOk)
-				CApiHealthManager::Instance().RecordPoint(API_TENCENT, latencyTx, 200, latencyTx > 250 ? LEVEL_WARN : LEVEL_OK, L"实时行情 (腾讯) 获取正常");
-			else
-				CApiHealthManager::Instance().RecordPoint(API_TENCENT, latencyTx, 0, LEVEL_FAIL, L"实时行情 (腾讯) 响应异常");
+			size_t batchCount = min(kTxBatchSize, txCodes.size() - batchStart);
+			std::vector<std::wstring> batch(txCodes.begin() + batchStart, txCodes.begin() + batchStart + batchCount);
+
+			std::wstring url{ L"http://qt.gtimg.cn/q=" };
+			url += CCommon::vectorJoinString(batch, L",");
+			DWORD t0 = GetTickCount();
+			std::string batchResp;
+			bool batchOk = CCommon::GetURL(url, batchResp, false, WEB_USERAGENT, strHeaders, strHeaders.GetLength())
+				&& !batchResp.empty() && batchResp.find("v_") != std::string::npos;
+			DWORD latencyTx = GetTickCount() - t0;
+			static DWORD s_lastRecordTx = 0;
+			if (GetTickCount() - s_lastRecordTx > 10000)
+			{
+				s_lastRecordTx = GetTickCount();
+				if (batchOk)
+					CApiHealthManager::Instance().RecordPoint(API_TENCENT, latencyTx, 200, latencyTx > 250 ? LEVEL_WARN : LEVEL_OK, L"实时行情 (腾讯) 获取正常");
+				else
+					CApiHealthManager::Instance().RecordPoint(API_TENCENT, latencyTx, 0, LEVEL_FAIL, L"实时行情 (腾讯) 响应异常");
+			}
+			if (batchOk)
+			{
+				txOk = true;
+				if (!outResp.empty())
+					outResp += "\n" + batchResp;
+				else
+					outResp = batchResp;
+			}
 		}
 		if (txOk)
 		{
@@ -255,16 +298,34 @@ bool CStockHttpFetcher::FetchRealtimeHtml(const std::vector<std::wstring>& allCo
 			}
 		}
 
-		std::wstring url{ L"https://hq.sinajs.cn/?" };
-		std::vector<std::wstring> params;
-		params.push_back(L"_=" + std::to_wstring(generateRandomDouble()));
-		params.push_back(L"list=" + CCommon::vectorJoinString(sinaCodes, L","));
-		url += CCommon::vectorJoinString(params, L"&");
-
+		// 新浪同样按批请求（100 个/批），响应拼接
+		const size_t kSinaBatchSize = 100;
 		CString strHeaders = _T("Referer: https://finance.sina.com.cn");
-		std::string sinaResp;
 		DWORD t0 = GetTickCount();
-		bool sinaOk = CCommon::GetURL(url, sinaResp, false, WEB_USERAGENT, strHeaders, strHeaders.GetLength()) && !sinaResp.empty() && sinaResp.find("hq_str_") != std::string::npos;
+		bool sinaOk = false;
+		for (size_t batchStart = 0; batchStart < sinaCodes.size(); batchStart += kSinaBatchSize)
+		{
+			size_t batchCount = min(kSinaBatchSize, sinaCodes.size() - batchStart);
+			std::vector<std::wstring> batch(sinaCodes.begin() + batchStart, sinaCodes.begin() + batchStart + batchCount);
+
+			std::wstring url{ L"https://hq.sinajs.cn/?" };
+			std::vector<std::wstring> params;
+			params.push_back(L"_=" + std::to_wstring(generateRandomDouble()));
+			params.push_back(L"list=" + CCommon::vectorJoinString(batch, L","));
+			url += CCommon::vectorJoinString(params, L"&");
+
+			std::string batchResp;
+			bool batchOk = CCommon::GetURL(url, batchResp, false, WEB_USERAGENT, strHeaders, strHeaders.GetLength())
+				&& !batchResp.empty() && batchResp.find("hq_str_") != std::string::npos;
+			if (batchOk)
+			{
+				sinaOk = true;
+				if (!outResp.empty())
+					outResp += "\n" + batchResp;
+				else
+					outResp = batchResp;
+			}
+		}
 		DWORD latencySina = GetTickCount() - t0;
 		static DWORD s_lastRecordSina = 0;
 		if (GetTickCount() - s_lastRecordSina > 10000)
@@ -274,13 +335,6 @@ bool CStockHttpFetcher::FetchRealtimeHtml(const std::vector<std::wstring>& allCo
 				CApiHealthManager::Instance().RecordPoint(API_SINA, latencySina, 200, LEVEL_OK, L"实时行情 (新浪兜底) 获取正常");
 			else
 				CApiHealthManager::Instance().RecordPoint(API_SINA, latencySina, 0, LEVEL_FAIL, L"实时行情 (新浪兜底) 响应异常");
-		}
-		if (sinaOk)
-		{
-			if (!outResp.empty())
-				outResp += "\n" + sinaResp;
-			else
-				outResp = sinaResp;
 		}
 	}
 
@@ -344,7 +398,7 @@ bool CStockHttpFetcher::FetchSgeKLine(const std::wstring& code, int klt, int lmt
 	{
 		NotifyStatus(code, stage, L"东方财富源", L"拉取失败");
 	}
-	m_eastmoney_fail_until = time(nullptr) + 5;
+	NoteEastMoneyFailure();
 	return false;
 }
 
@@ -406,15 +460,16 @@ bool CStockHttpFetcher::FetchTimeline(const std::wstring& code, std::string& out
 					&& !outResp.empty() && outResp.find("\"trends\"") != std::string::npos)
 				{
 					NotifyStatus(code, L"分时", L"东方财富源", L"拉取成功");
+					ResetEastMoneyFailure();
 					return true;
 				}
 				NotifyStatus(code, L"分时", L"东方财富源", L"拉取失败");
-				m_eastmoney_fail_until = time(nullptr) + 5;
+				NoteEastMoneyFailure();
 			}
 			catch (...)
 			{
 				NotifyStatus(code, L"分时", L"东方财富源", L"拉取异常");
-				m_eastmoney_fail_until = time(nullptr) + 5;
+				NoteEastMoneyFailure();
 			}
 		}
 
@@ -506,12 +561,12 @@ bool CStockHttpFetcher::FetchTimeline(const std::wstring& code, std::string& out
 			}
 			else
 			{
-				m_eastmoney_fail_until = time(nullptr) + 5;
+				NoteEastMoneyFailure();
 			}
 		}
 		catch (...)
 		{
-			m_eastmoney_fail_until = time(nullptr) + 5;
+			NoteEastMoneyFailure();
 		}
 	}
 
@@ -546,13 +601,13 @@ bool CStockHttpFetcher::FetchDayKLine(const std::wstring& code, int days, std::s
 				else
 				{
 					NotifyStatus(code, L"日K线", L"东方财富源", L"拉取失败");
-					m_eastmoney_fail_until = time(nullptr) + 5;
+					NoteEastMoneyFailure();
 				}
 			}
 			catch (...)
 			{
 				NotifyStatus(code, L"日K线", L"东方财富源", L"拉取异常");
-				m_eastmoney_fail_until = time(nullptr) + 5;
+				NoteEastMoneyFailure();
 			}
 		}
 
@@ -601,13 +656,13 @@ bool CStockHttpFetcher::FetchDayKLine(const std::wstring& code, int days, std::s
 			else
 			{
 				NotifyStatus(code, L"日K线", L"东方财富源", L"拉取失败");
-				m_eastmoney_fail_until = time(nullptr) + 5;
+				NoteEastMoneyFailure();
 			}
 		}
 		catch (...)
 		{
 			NotifyStatus(code, L"日K线", L"东方财富源", L"拉取异常");
-			m_eastmoney_fail_until = time(nullptr) + 5;
+			NoteEastMoneyFailure();
 		}
 	}
 	if (skip_eastmoney)
@@ -1325,9 +1380,9 @@ bool CStockHttpFetcher::FetchStockBasicCirculating(const std::wstring& stock_id,
 			DWORD latency = GetTickCount() - t0;
 			if (!fetch_ok)
 			{
-				// 东方财富请求失败：缓存失败状态 10 分钟，避免反复尝试
-				m_eastmoney_fail_until = time(nullptr) + 5;
-				CApiHealthManager::Instance().RecordPoint(API_EASTMONEY, latency, 403, LEVEL_FAIL, L"请求失败 / 疑似被 WAF 拦截 (休眠10分钟)");
+				// 东方财富请求失败：指数退避（60s 起步、连续失败翻倍、封顶 10 分钟）
+				NoteEastMoneyFailure();
+				CApiHealthManager::Instance().RecordPoint(API_EASTMONEY, latency, 403, LEVEL_FAIL, L"请求失败 / 疑似被 WAF 拦截 (指数退避冷却)");
 			}
 			else if (!response.empty())
 			{
@@ -1352,6 +1407,7 @@ bool CStockHttpFetcher::FetchStockBasicCirculating(const std::wstring& stock_id,
 							CApiHealthManager::Instance().RecordPoint(API_EASTMONEY, latency, 200, LEVEL_OK, L"流通股本 (f85) 获取成功");
 						}
 						outShares = circulatingAShares;
+						ResetEastMoneyFailure();
 						return true;
 					}
 				}
@@ -1360,11 +1416,11 @@ bool CStockHttpFetcher::FetchStockBasicCirculating(const std::wstring& stock_id,
 		catch (CInternetException* e)
 		{
 			e->Delete();
-			m_eastmoney_fail_until = time(nullptr) + 5;
+			NoteEastMoneyFailure();
 		}
 		catch (...)
 		{
-			m_eastmoney_fail_until = time(nullptr) + 5;
+			NoteEastMoneyFailure();
 		}
 	}
 
@@ -1434,7 +1490,7 @@ bool CStockHttpFetcher::FetchChipKLines(const std::wstring& stock_id, STOCK::Vol
 			bool fetch_ok = CCommon::GetURL(url, response, true, WEB_USERAGENT, strHeaders, strHeaders.GetLength());
 			if (!fetch_ok)
 			{
-				m_eastmoney_fail_until = time(nullptr) + 5;
+				NoteEastMoneyFailure();
 			}
 			else if (!response.empty())
 			{
@@ -1483,11 +1539,11 @@ bool CStockHttpFetcher::FetchChipKLines(const std::wstring& stock_id, STOCK::Vol
 		catch (CInternetException* e)
 		{
 			e->Delete();
-			m_eastmoney_fail_until = time(nullptr) + 5;
+			NoteEastMoneyFailure();
 		}
 		catch (...)
 		{
-			m_eastmoney_fail_until = time(nullptr) + 5;
+			NoteEastMoneyFailure();
 		}
 	}
 

@@ -6,8 +6,8 @@
 #include <afxinet.h>
 #include <vector>
 
-bool CNetFetch::s_prefer_proxy = false;
-std::time_t CNetFetch::s_prefer_proxy_until = 0;
+std::atomic<bool> CNetFetch::s_prefer_proxy{ false };
+std::atomic<std::time_t> CNetFetch::s_prefer_proxy_until{ 0 };
 
 // 代理模式下，直连失败后"优先代理"状态的缓存时长（秒）
 static const int PROXY_CACHE_SECONDS = 120;
@@ -184,11 +184,14 @@ bool CNetFetch::FetchOnce(const std::wstring& url, std::string& result,
 		DWORD statusCode = 0;
 		pFile->QueryInfoStatusCode(statusCode);
 
-		// 读取响应体
+		// 读取响应体（64MB 上限：上游被劫持/WAF 异常页返回超大 body 时防 OOM）
+		constexpr DWORD kMaxResponseBody = 64 * 1024 * 1024;
 		char buf[8192];
 		UINT nRead;
 		while ((nRead = pFile->Read(buf, sizeof(buf))) > 0)
 		{
+			if (result.size() + nRead > kMaxResponseBody)
+				return false;
 			result.append(buf, nRead);
 		}
 

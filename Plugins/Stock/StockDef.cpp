@@ -34,6 +34,11 @@ static Price GetJsonPrice(yyjson_val* obj, const char* key);
 
 void STOCK::StockMarket::LoadRealtimeDataByJson(std::string json, const std::vector<std::wstring>& codes)
 {
+	// 锁序全仓统一：m_stockDataMutex 外层、StockMarket::m_mutex 内层。
+	// UI 绘制路径（状态栏/悬浮窗几十处）都是持 m_stockDataMutex 调 GetStockData 拿 m_mutex，
+	// 此处反序曾与 UI/竞价路径构成 ABBA 死锁（v2.0.15-beta/v2.0.16-beta 盘中整程序冻结根因）。
+	// ClearRealtimeData 内部走 getStock（m_mutex），recursive 可重入，放在 dataLock 之后安全。
+	std::lock_guard<std::mutex> dataLock(Stock::Instance().m_stockDataMutex);
 	std::lock_guard<std::recursive_mutex> lock(m_mutex);
 	ClearRealtimeData(codes);
 
@@ -249,6 +254,9 @@ void STOCK::StockData::UpdateOrderBookCumVol(Price prevAsk1, Price prevBid1)
 
 void STOCK::StockMarket::LoadInnerOuterData(std::string data)
 {
+	// 锁序全仓统一：m_stockDataMutex 外层、m_mutex 内层（与 LoadRealtimeDataByJson 一致，
+	// 反序曾与 UI 绘制路径构成 ABBA 死锁）
+	std::lock_guard<std::mutex> dataLock(Stock::Instance().m_stockDataMutex);
 	std::lock_guard<std::recursive_mutex> lock(m_mutex);
 	if (data.empty())
 	{
@@ -423,6 +431,8 @@ void STOCK::StockMarket::LoadFundIOPVData(const std::wstring& key, const std::st
 	auto stockData = getStock(key);
 	if (!stockData) return;
 
+	// 写 info 的 IOPV 相关字段，UI 线程在无锁读，必须持 m_stockDataMutex（锁序同上）
+
 	// 兼容三种格式：
 	// 1. 上交所JSONP: jQuery...({"code":"513060","snap":["恒生医疗",0.5220,...,0.5201,...]})
 	//    snap[12] = IOPV值, snap[5] = 昨收价
@@ -457,6 +467,7 @@ void STOCK::StockMarket::LoadFundIOPVData(const std::wstring& key, const std::st
 		return;
 	}
 
+	std::lock_guard<std::mutex> dataLock(Stock::Instance().m_stockDataMutex);
 	StockInfo& info = stockData->info;
 
 	// 检查是否有"snap"字段（上交所格式）
@@ -599,6 +610,7 @@ void STOCK::StockMarket::LoadCallAuctionData(std::string data)
 	const int chartEndSecond = 9 * 3600 + 25 * 60;
 	const bool recordSnapshot = nowSecond >= chartStartSecond && nowSecond <= chartEndSecond;
 
+	// 锁序全仓统一：m_stockDataMutex 外层、getStock 的 m_mutex 内层（与 UI 绘制路径同向）
 	std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
 
 	for (std::string line : lines)
@@ -733,6 +745,7 @@ void STOCK::StockMarket::LoadCallAuctionReplayData(const std::vector<std::wstrin
 	if (startTime == static_cast<time_t>(-1))
 		return;
 
+	// 锁序全仓统一：m_stockDataMutex 外层、getStock 的 m_mutex 内层（与 UI 绘制路径同向）
 	std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
 	for (const auto& code : codes)
 	{

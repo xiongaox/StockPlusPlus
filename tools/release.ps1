@@ -36,11 +36,18 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
 }
 
 $cleanVer = $Version.TrimStart('v', 'V')
-$parts = $cleanVer.Split('.')
+# 预发布后缀（如 2.0.15-beta 的 "-beta"）：Version.h 的数字宏只允许纯数字，
+# 后缀单独保存，拼进界面展示串与 Tag/zip 名，不进 STOCK_VERSION_*_MAJOR/MINOR/PATCH
+$preSuffix = ''
+if ($cleanVer -match '^([0-9]+)\.([0-9]+)\.([0-9]+)(-.+)$') {
+    $cleanVer = $Matches[1] + '.' + $Matches[2] + '.' + $Matches[3]
+    $preSuffix = $Matches[4]
+}$parts = $cleanVer.Split('.')
 $major = if ($parts.Length -gt 0) { $parts[0] } else { "2" }
 $minor = if ($parts.Length -gt 1) { $parts[1] } else { "0" }
 $patch = if ($parts.Length -gt 2) { $parts[2] } else { "0" }
 $displayVer = if ($parts.Length -gt 2 -and $parts[2] -ne "0") { "$major.$minor.$patch" } else { "$major.$minor" }
+if ($preSuffix) { $displayVer = "$displayVer$preSuffix" }
 
 Write-Host ">>> [1/6] 正在更新 Version.h 为版本: v$displayVer ($major.$minor.$patch.0)..." -ForegroundColor Cyan
 
@@ -139,8 +146,8 @@ if ($LASTEXITCODE -ne 0) { throw "x86 编译失败！" }
 # 4. 产物闸门 + 打包（本仓库只发布 x64 / x86 两个预编译包）。
 # ARM64EC 不再提供预编译包：需要原生版的用户请照 README「编译 ARM64EC」一节自行编译。
 $candidates = @(
-    [pscustomobject]@{ Dll = "$root\bin\x64\Release\Stock.dll"; Zip = "$root\download\Stock_V${cleanVer}_x64.zip"; Arch = 'x64' },
-    [pscustomobject]@{ Dll = "$root\bin\Release\Stock.dll";     Zip = "$root\download\Stock_V${cleanVer}_x86.zip"; Arch = 'x86' }
+    [pscustomobject]@{ Dll = "$root\bin\x64\Release\Stock.dll"; Zip = "$root\download\Stock_V${cleanVer}${preSuffix}_x64.zip"; Arch = 'x64' },
+    [pscustomobject]@{ Dll = "$root\bin\Release\Stock.dll";     Zip = "$root\download\Stock_V${cleanVer}${preSuffix}_x86.zip"; Arch = 'x86' }
 )
 
 # 4a. 产物闸门：必须在 Compress-Archive 之前校验并中止。
@@ -204,7 +211,7 @@ if ($bullets.Count -eq 0) { throw "未能提取到 v$cleanVer 的更新日志：
 $bulletText = $bullets -join "`n"
 
 $releaseNotes = @"
-### 🚀 Stock Plugin v$cleanVer 更新日志
+### 🚀 Stock Plugin v$cleanVer$preSuffix 更新日志
 
 $bulletText
 

@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "Common.h"
+#include <mutex>
 #include <afxinet.h>    //用于支持使用网络相关的类
 #include <sstream>
 #include <iomanip>
@@ -61,6 +62,10 @@ void CCommon::WriteLog(const WORD w, LPCTSTR file_path)
 
 void CCommon::WriteLog(const char* str_text, LPCTSTR file_path)
 {
+	// 去重缓存与文件写入加锁：图表/实时/监听/UI 多线程并发写日志，
+	// std::string 竞写会堆损坏（不只是日志串行错乱）
+	static std::mutex s_log_mutex;
+	std::lock_guard<std::mutex> lock(s_log_mutex);
 	static std::string last_text;
 	//过滤相同内容的日志
 	if (last_text != str_text)
@@ -436,6 +441,22 @@ bool CCommon::IsEmSecidCode(const std::wstring& code)
 	for (size_t i = 0; i < dot; i++)
 	{
 		if (!iswdigit(code[i]))
+			return false;
+	}
+	return true;
+}
+
+bool CCommon::IsValidStockCode(const std::wstring& code)
+{
+	// 只允许字母/数字/点/下划线（覆盖 sh600519、gb_nvda.oq、118.AUTD 等全部形态），
+	// 长度上限 32；拒绝 \r\n、空格、引号等可注入 HTTP 头/URL 的字符
+	if (code.empty() || code.size() > 32)
+		return false;
+	for (wchar_t c : code)
+	{
+		bool ok = (c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z')
+			|| c == L'.' || c == L'_';
+		if (!ok)
 			return false;
 	}
 	return true;

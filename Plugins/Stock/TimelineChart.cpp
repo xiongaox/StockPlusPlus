@@ -5,7 +5,6 @@
 #include "DataManager.h"
 #include "SignalAnalyzer.h"
 #include "StockIndicator.h"
-#include "KLineChart.h"
 #include "IndicatorChart.h"
 #include "StatusBarPanel.h"
 #include "StockFont.h"
