@@ -133,13 +133,15 @@ def load_watch_list_from_ini():
     #   2. 都没有时回退内置默认自选（程序照常运行，等插件首次保存配置后下次启动自动接管）
     import sys
     # 候选目录依次找 Stock.ini：当前工作目录（部署形态=cwd 即 exe/Stock.dll 目录）、
-    # 打包 exe 所在目录、脚本自身目录（开发形态）
+    # 打包 exe 所在目录、脚本自身目录（开发形态）、TrafficMonitor 配置目录（便携版插件目录
+    # 与 %APPDATA% 配置目录不一致时，插件的 ini 实际写在 AppData，exe 目录里没有）
     candidates = [os.path.abspath("Stock.ini")]
     if hasattr(sys, '_MEIPASS'):
         candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "Stock.ini"))
         candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "Stock.dll.ini"))
     candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "Stock.ini"))
-    ini_path = next((c for c in candidates if os.path.exists(c)), None)
+    candidates.append(os.path.join(os.environ.get("APPDATA", ""), "TrafficMonitor", "plugins", "Stock.ini"))
+    ini_path = next((c for c in candidates if c and os.path.exists(c)), None)
     if ini_path is None:
         print("ℹ️未找到 Stock.ini（插件首次保存配置后生成），使用内置默认自选启动")
         return [(1, "000001", "sh000001"), (0, "399001", "sz399001"), (1, "600519", "sh600519")]
