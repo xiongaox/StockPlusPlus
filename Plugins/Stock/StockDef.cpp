@@ -607,6 +607,10 @@ void STOCK::StockMarket::LoadCallAuctionData(std::string data)
 	const int chartEndSecond = 9 * 3600 + 25 * 60;
 	const bool recordSnapshot = nowSecond >= chartStartSecond && nowSecond <= chartEndSecond;
 
+	// 锁序必须与实时行情路径（LoadRealtimeDataByJson/LoadInnerOuterData）一致：
+	// 先 StockMarket::m_mutex（recursive，getStock 重入安全），再 m_stockDataMutex。
+	// 反序会与实时线程互等死锁（v2.0.15-beta 盘中整程序冻结的根因）
+	std::lock_guard<std::recursive_mutex> marketLock(m_mutex);
 	std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
 
 	for (std::string line : lines)
@@ -741,6 +745,8 @@ void STOCK::StockMarket::LoadCallAuctionReplayData(const std::vector<std::wstrin
 	if (startTime == static_cast<time_t>(-1))
 		return;
 
+	// 锁序与 LoadCallAuctionData / 实时行情路径一致：先 m_mutex 再 m_stockDataMutex
+	std::lock_guard<std::recursive_mutex> marketLock(m_mutex);
 	std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
 	for (const auto& code : codes)
 	{
