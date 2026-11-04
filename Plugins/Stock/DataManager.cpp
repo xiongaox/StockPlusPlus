@@ -2014,9 +2014,9 @@ double CDataManager::GetLedgerAvgCost(const std::wstring& code)
 bool CDataManager::SyncPositionFromLedger(const std::wstring& code)
 {
 	// 台账增删改后按重放结果回填「持股数 + 摊薄成本价」。
-	// 安全阀（避免把正确的手填值悄悄改错）：
-	// 1) 台账里一笔买入都没有（空台账/只录了卖出）说明底仓未录入台账，重放结果不可信，不改写；
-	// 2) 重放净持为 0（清仓）不自动清零，防止误清真实持仓。
+	// 安全阀：台账里一笔买入都没有（空台账/只录了卖出）说明底仓未录入台账，重放结果不可信，不改写。
+	// 清仓（重放净持 0）则清零持股数与成本价：台账含买入说明流水是完整的，
+	// 该股随即从「持仓」移入「已清仓」派生分组，重新记录买入会自动回到「持仓」。
 	// 持股数与成本价分别比较，任一超出容差才写回（写回时两者一起落盘）。
 	bool hasBuy = false;
 	for (const auto& record : GetStockTrades(code))
@@ -2031,7 +2031,14 @@ bool CDataManager::SyncPositionFromLedger(const std::wstring& code)
 		return false;
 	const double hold = GetLedgerHoldCount(code);
 	if (hold <= 0.0)
-		return false;
+	{
+		// 已经是零值时不必重复写盘（SyncAllPositionsFromLedger 每次启动都会走一遍）
+		if (GetHoldingCount(code) <= 0.0001 && GetCostPrice(code) <= 0.0)
+			return false;
+		SetPosition(code, 0.0, 0.0, L"");
+		SaveConfig();
+		return true;
+	}
 	const double avgCost = GetLedgerAvgCost(code);
 	if (avgCost <= 0.0)
 		return false;
@@ -2052,9 +2059,11 @@ int CDataManager::SyncAllPositionsFromLedger()
 {
 	// 启动/云端恢复后对全部持仓执行台账重算回填，一次性消化存量旧数据
 	//（此前回填只挂在台账增删改上，台账与持仓脱节的旧配置会一直错下去）。
-	// 安全阀与单股逻辑相同：台账无买入/重放净持为 0 时不改写。
+	// 安全阀与单股逻辑相同：台账无买入时不改写；清仓则清零并移出持仓列表。
+	// 注意遍历副本：清仓分支会从 m_position_codes 中 erase，直接遍历原容器会失效
+	std::vector<std::wstring> codes = m_setting_data.m_position_codes;
 	int changed = 0;
-	for (const auto& code : m_setting_data.m_position_codes)
+	for (const auto& code : codes)
 	{
 		if (SyncPositionFromLedger(code))
 			++changed;

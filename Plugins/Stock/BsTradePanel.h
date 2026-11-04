@@ -20,6 +20,12 @@ public:
 	static int GetTableHeaderHeight();
 	// 底部汇总行高度（固定在列表区域底部，不随内容滚动）
 	static int GetSummaryHeight();
+	// 列表可视高度（面板总高减去标题栏、表头与固定汇总行）
+	static int GetListHeight(int height);
+	// 流水行可视高度（列表高度再扣掉底部固定的一行新增槽）
+	static int GetRowsHeight(int height);
+	// 滚动上限：行只在 GetRowsHeight 内滚动，新增槽始终钉在列表底部可双击
+	static int GetMaxScrollOffset(int height, int itemCount);
 
 	// 命中测试：返回点击的流水行下标（0 ~ itemCount-1），未命中返回 -1
 	// 与 EtfHoldingsPanel 的坐标约定一致：height 为从 headerHeight 起算的面板总高

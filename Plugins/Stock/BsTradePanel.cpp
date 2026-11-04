@@ -25,15 +25,36 @@ int CBsTradePanel::GetSummaryHeight()
 	return g_data.RDPI(70);
 }
 
+int CBsTradePanel::GetListHeight(int height)
+{
+	// height 为从标题栏起算的面板总高：减标题栏、表头与固定汇总行即列表可视区
+	return height - g_data.RDPI(16) - GetTableHeaderHeight() - GetSummaryHeight();
+}
+
+int CBsTradePanel::GetRowsHeight(int height)
+{
+	// 列表底部固定留一行作「新增槽」（双击空白新增），流水行只在其余高度内滚动
+	return max(0, GetListHeight(height) - GetRowHeight());
+}
+
+int CBsTradePanel::GetMaxScrollOffset(int height, int itemCount)
+{
+	const int rowsH = GetRowsHeight(height);
+	if (rowsH <= 0) return 0;
+	// 行可视区只有 rowsH（底部一行被新增槽占住）：否则台账铺满后最后一行紧贴列表底边，
+	// 面板里再也找不到空白处，双击新增就失效了
+	return max(0, itemCount * GetRowHeight() - rowsH);
+}
+
 int CBsTradePanel::HitTest(CPoint pt, int left, int right, int height, int scrollOffset, int itemCount)
 {
 	const int headerHeight = g_data.RDPI(26);
 	const int obTitleH = g_data.RDPI(16);
 	const int tableHeaderH = GetTableHeaderHeight();
-	const int summaryH = GetSummaryHeight();
 	const int topOffset = headerHeight + obTitleH;
 	const int listTop = topOffset + tableHeaderH;
-	const int listBottom = headerHeight + height - summaryH;
+	// 列表底部一行是固定的「新增槽」，不算流水行，点击一律按空白处理
+	const int listBottom = listTop + GetRowsHeight(height);
 	const int rowH = GetRowHeight();
 
 	if (pt.x < left || pt.x >= right || pt.y < listTop || pt.y >= listBottom)
@@ -102,16 +123,18 @@ void CBsTradePanel::Draw(CDC& memDC, int left, int right, int height,
 	memDC.DrawText(_T("价格"), rcPriceH, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
 	// 3. 列表区域（底部留出固定汇总行）
-	const int summaryH = GetSummaryHeight();
 	const int listTop = topOffset + tableHeaderH;
-	const int listH = contentH - tableHeaderH - summaryH;
+	const int listH = GetListHeight(height);
 	if (listH <= 0)
 	{
 		memDC.SelectObject(pOldFont);
 		return;
 	}
+	const int rowH = GetRowHeight();
+	// 列表最底一行固定作「新增槽」：流水行只在上方 rowsH 内滚动，台账满屏也不至于找不到空白
+	const int rowsH = max(0, listH - rowH);
 
-	CRect listClipRect(left, listTop, right, listTop + listH);
+	CRect listClipRect(left, listTop, right, listTop + rowsH);
 	CRgn clipRgn;
 	clipRgn.CreateRectRgn(listClipRect.left, listClipRect.top, listClipRect.right, listClipRect.bottom);
 	memDC.SelectClipRgn(&clipRgn);
@@ -120,20 +143,19 @@ void CBsTradePanel::Draw(CDC& memDC, int left, int right, int height,
 	{
 		memDC.SelectObject(&textFont);
 		memDC.SetTextColor(COLOR_TEXT_DIM);
-		CRect rcMsg = listClipRect;
+		CRect rcMsg(left, listTop, right, listTop + listH);
 		memDC.DrawText(_T("暂无台账\n双击空白处新增"), rcMsg, DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
 		memDC.SelectClipRgn(nullptr);
 		memDC.SelectObject(pOldFont);
 		return;
 	}
 
-	const int rowH = GetRowHeight();
 	memDC.SelectObject(&textFont);
 
 	for (size_t i = 0; i < trades.size(); ++i)
 	{
 		int itemY = listTop - scrollOffset + static_cast<int>(i) * rowH;
-		if (itemY + rowH <= listTop || itemY >= listTop + listH)
+		if (itemY + rowH <= listTop || itemY >= listTop + rowsH)
 			continue; // 视口外跳过绘制
 
 		const auto& record = trades[i];
@@ -184,7 +206,18 @@ void CBsTradePanel::Draw(CDC& memDC, int left, int right, int height,
 		memDC.DrawText(priceStr, rcPrice, DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 	}
 
+	// 「新增槽」：最后一行下方留一行空白作双击新增落点。
+	// 内容不满一屏时紧跟最后一行；铺满一屏时钉在列表底部（行区 rowsH 已扣掉这一行），
+	// 台账再长也随时能点到空白新增。
+	const int contentEndY = listTop - scrollOffset + static_cast<int>(trades.size()) * rowH;
+	const int slotY = min(contentEndY, listTop + rowsH);
 	memDC.SelectClipRgn(nullptr);
+	if (slotY >= listTop)
+	{
+		memDC.SetTextColor(COLOR_TEXT_DIM);
+		CRect rcSlot(left, slotY, right, slotY + rowH);
+		memDC.DrawText(_T("双击空白处新增"), rcSlot, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+	}
 
 	// 4. 底部汇总行（固定，不随滚动）：买入/卖出总笔数与股数 + 台账重放净持仓
 	int summaryY = listTop + listH;

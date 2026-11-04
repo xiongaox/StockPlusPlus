@@ -2722,6 +2722,23 @@ void CFloatingWnd::OnLButtonUp(UINT nFlags, CPoint point)
 								m_bsSelectedRow = static_cast<int>(i);
 						}
 					}
+					// 选中行滚进可视区：台账铺满一屏后新记录/改过时间的记录可能落在视口外，
+					// 不滚动的话用户只看到数字变了、列表没动静
+					if (m_bsSelectedRow >= 0)
+					{
+						const int rowsH = CBsTradePanel::GetRowsHeight(height);
+						const int rowH = CBsTradePanel::GetRowHeight();
+						const int rowTop = m_bsSelectedRow * rowH;
+						const int maxOffset = CBsTradePanel::GetMaxScrollOffset(height,
+							static_cast<int>(g_data.GetStockTrades(m_stock_id).size()));
+						if (rowsH > rowH)
+						{
+							if (rowTop < m_bsScrollOffset)
+								m_bsScrollOffset = max(0, min(rowTop, maxOffset));
+							else if (rowTop + rowH > m_bsScrollOffset + rowsH)
+								m_bsScrollOffset = min(rowTop + rowH - rowsH, maxOffset);
+						}
+					}
 				}
 				Invalidate();
 			}
@@ -3229,16 +3246,10 @@ void CFloatingWnd::OnMouseMove(UINT nFlags, CPoint point)
 
 		CRect clRect;
 		GetClientRect(&clRect);
-		const int headerHeight = g_data.RDPI(26);
-		const int relatedBarHeight = 0;
-		const int indexBarHeight = g_data.RDPI(20);
-		const int obTitleH = g_data.RDPI(16);
-		int listAreaH = (clRect.Height() - headerHeight - relatedBarHeight - indexBarHeight - obTitleH)
-			- CBsTradePanel::GetTableHeaderHeight() - CBsTradePanel::GetSummaryHeight();
-		const int rowHeight = CBsTradePanel::GetRowHeight();
-		int itemCount = static_cast<int>(g_data.GetStockTrades(m_stock_id).size());
-		int totalH = itemCount * rowHeight;
-		int maxOffset = max(0, totalH - listAreaH);
+		// 与 Draw 收到的面板高一致：整窗高减去主标题栏与底部指数栏
+		const int panelHeight = clRect.Height() - g_data.RDPI(26) - g_data.RDPI(20);
+		int maxOffset = CBsTradePanel::GetMaxScrollOffset(panelHeight,
+			static_cast<int>(g_data.GetStockTrades(m_stock_id).size()));
 
 		int newOffset = m_bsDragStartOffset - dy;
 		newOffset = max(0, min(newOffset, maxOffset));
@@ -4010,13 +4021,9 @@ BOOL CFloatingWnd::OnMouseWheel(UINT nFlags, short zDelta, CPoint pt)
 		int itemCount = static_cast<int>(g_data.GetStockTrades(m_stock_id).size());
 		if (itemCount > 0)
 		{
-			int rowHeight = CBsTradePanel::GetRowHeight();
-			int tableHeaderH = CBsTradePanel::GetTableHeaderHeight();
-			int obTitleH = g_data.RDPI(16);
-			int listAreaH = (clientRect.Height() - headerHeight - relatedBarHeight - indexBarHeight - obTitleH)
-				- tableHeaderH - CBsTradePanel::GetSummaryHeight();
-			int totalH = itemCount * rowHeight;
-			int maxOffset = max(0, totalH - listAreaH);
+			const int rowHeight = CBsTradePanel::GetRowHeight();
+			const int panelHeight = clientRect.Height() - headerHeight - relatedBarHeight - indexBarHeight;
+			const int maxOffset = CBsTradePanel::GetMaxScrollOffset(panelHeight, itemCount);
 
 			if (maxOffset > 0)
 			{
