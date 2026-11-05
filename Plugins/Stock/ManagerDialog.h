@@ -211,6 +211,9 @@ private:
 	CListCtrl m_stock_listctrl;
 	CListCtrl m_pos_listctrl;
 	CListCtrl m_custom_listctrl;
+	// 「已清仓」页签当前展示的代码（与列表行号一一对应；状态栏勾选列据此定位，
+	// 该页签为派生视图，行号不能当自定义分组下标用）
+	std::vector<std::wstring> m_cleared_codes;
 	CEdit m_search_edit;
 	CSearchResultDropdown m_search_dropdown;
 	CEdit m_ma_input_edit;

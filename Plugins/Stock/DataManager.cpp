@@ -417,6 +417,14 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 
 		m_db_mgr.Init(m_config_path);
 	m_db_mgr.CleanExpiredData();
+	// 已清仓股可能已不在自选/持仓/自定义分组里（上面的通用循环遍历不到），
+	// 其「状态栏显示」勾选直接按 ini 中的代码段补读，否则勾选在重启后会丢失。
+	// 必须放在 DB Init 之后：候选代码来自台账 trades 表
+	for (const auto& code : GetLedgerStockCodes())
+	{
+		if (m_stock_statusbar.find(code) == m_stock_statusbar.end())
+			m_stock_statusbar[code] = ini.GetBool(code.c_str(), L"show_in_statusbar", false);
+	}
 	// 历史版本曾把新浪不复权日K写入缓存（如基金份额折算形成的-65%断崖），启动时清理，
 	// 被清理的股票由随后的网络获取重建为前复权数据
 	int healedCodes = m_db_mgr.HealAbnormalDayKLineCache();
@@ -1844,9 +1852,14 @@ bool CDataManager::HasStockTrades(const std::wstring& code)
 std::vector<std::wstring> CDataManager::GetLedgerStockCodes()
 {
 	// 台账中出现过的全部代码，缓存到下一次台账写操作；
-	// 「已清仓」分组每次绘制都要枚举，故不做逐股试探（那是 O(股票数) 次查库）
+	// 「已清仓」分组每次绘制都要枚举，故不做逐股试探（那是 O(股票数) 次查库）。
+	// 加锁：状态栏注册（GetRegisteredStockCodes）在抓取线程也会调用到这里，
+	// 与台账写操作的失效（InvalidateTradeCache*）需要互斥
+	std::lock_guard<std::mutex> lock(m_trade_cache_mutex);
 	if (m_ledger_codes_valid)
 		return m_ledger_codes_cache;
+	if (!m_db_mgr.IsOpen())   // 配置尚未加载完（DB 未打开）时不缓存空结果
+		return {};
 	std::vector<std::wstring> codes;
 	m_db_mgr.LoadDistinctTradeCodes(codes);
 	m_ledger_codes_cache = std::move(codes);
@@ -2125,6 +2138,10 @@ std::vector<std::wstring> CDataManager::GetRegisteredStockCodes()
 		for (const auto& code : group.codes)
 			addIfFlagged(code);
 	}
+	// 台账里的代码（典型：已清仓股已不在任何分组）：让「已清仓」页签勾选的股票
+	// 能真正注册到状态栏；已持仓/已在分组里的代码由上面的循环去重
+	for (const auto& code : GetLedgerStockCodes())
+		addIfFlagged(code);
 	return result;
 }
 

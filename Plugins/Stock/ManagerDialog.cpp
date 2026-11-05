@@ -94,7 +94,8 @@ namespace
 
 	// 分组管理三个列表的「阈值提醒」列索引（7 列布局：交易所/代码/名称/阈值提醒/...）
 	const int ALERT_PERCENT_COLUMN = 3;
-	// 「状态栏显示」在三个列表中同为最后一列（阈值提醒列插入后右移而来的第7列）
+	// 「状态栏显示」在各列表同为最后一列（阈值提醒列插入后右移而来的第7列；
+	// 「已清仓」页签复用自定义列表控件，列含义改写后它仍是同一列号）
 	const int STATUSBAR_SHOW_COLUMN = 6;
 
 	struct WebDavAsyncResult
@@ -2858,9 +2859,10 @@ void CManagerDialog::SetCustomListHeaders(bool forClearedTab)
 	const wchar_t* labels[7] = { L"", L"", L"", L"", L"", L"", L"" };
 	if (forClearedTab)
 	{
-		// 列：交易所 / 代码 / 名称 / 最后成交日 / 台账笔数 （其余列留空不用）
+		// 列：交易所 / 代码 / 名称 / 最后成交日 / 台账笔数 /（空）/ 状态栏显示
+		// 已清仓股已不在自选/持仓列表，这里是它们唯一的「状态栏显示」勾选入口
 		labels[0] = L"交易所"; labels[1] = L"代码"; labels[2] = L"名称";
-		labels[3] = L"最后成交"; labels[4] = L"台账笔数";
+		labels[3] = L"最后成交"; labels[4] = L"台账笔数"; labels[6] = L"状态栏显示";
 	}
 	else
 	{
@@ -2936,6 +2938,7 @@ void CManagerDialog::RefreshClearedList()
 	// 复用自定义列表控件（只读）：本页签不提供增删改，清仓/买回由台账与持仓编辑驱动。
 	m_custom_listctrl.DeleteAllItems();
 	SetCustomListHeaders(true);
+	m_cleared_codes.clear();
 	int nItem = 0;
 	for (const auto& code : g_data.GetLedgerStockCodes())
 	{
@@ -2964,6 +2967,12 @@ void CManagerDialog::RefreshClearedList()
 		countStr.Format(_T("%d 笔"), static_cast<int>(trades.size()));
 		m_custom_listctrl.SetItemText(nItem, 4, countStr);
 
+		// 状态栏显示勾选：已清仓股不在自选/持仓列表，只能在本页签设置
+		m_custom_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN,
+			g_data.GetShowInStatusBar(code) ? L"√" : L"");
+		// 行号 -> 代码映射（本页签是派生视图，行号与任何分组下标都无关）
+		m_cleared_codes.push_back(code);
+
 		++nItem;
 	}
 }
@@ -2984,6 +2993,21 @@ void CManagerDialog::AdjustListColumns(CListCtrl& list, int tabType)
 		int w3 = max(g_data.DPI(112), totalW * 16 / 100);  // 阈值提醒（容纳 "+5.01%|-5.01%"）
 		int w4 = max(g_data.DPI(56), totalW * 11 / 100);   // 成本价
 		int w5 = max(g_data.DPI(56), totalW * 11 / 100);   // 持股数
+		int w6 = max(g_data.DPI(80), totalW - (w0 + w1 + w2 + w3 + w4 + w5)); // 状态栏显示
+		if (w6 < g_data.DPI(80)) w6 = g_data.DPI(80);
+
+		const int widths[7] = { w0, w1, w2, w3, w4, w5, w6 };
+		for (int i = 0; i < 7; ++i)
+			list.SetColumnWidth(i, widths[i]);
+	}
+	else if (tabType == 3) // 已清仓 (7 列: 交易所, 代码, 名称, 最后成交, 台账笔数, 空, 状态栏显示)
+	{
+		int w0 = max(g_data.DPI(46), totalW * 10 / 100);   // 交易所
+		int w1 = max(g_data.DPI(56), totalW * 11 / 100);   // 代码
+		int w2 = max(g_data.DPI(84), totalW * 26 / 100);   // 名称
+		int w3 = max(g_data.DPI(84), totalW * 15 / 100);   // 最后成交（yyyy-MM-dd）
+		int w4 = max(g_data.DPI(64), totalW * 12 / 100);   // 台账笔数
+		int w5 = 0;                                        // 空列：不占用宽度
 		int w6 = max(g_data.DPI(80), totalW - (w0 + w1 + w2 + w3 + w4 + w5)); // 状态栏显示
 		if (w6 < g_data.DPI(80)) w6 = g_data.DPI(80);
 
@@ -3440,7 +3464,8 @@ void CManagerDialog::UpdateControlsLayout()
 		else if (m_current_group_tab >= kTabCleared && m_custom_listctrl.GetSafeHwnd())
 		{
 			m_custom_listctrl.MoveWindow(listRect);
-			AdjustListColumns(m_custom_listctrl, 2);
+			// 已清仓列口径与自定义分组不同（最后成交/台账笔数/状态栏显示）
+			AdjustListColumns(m_custom_listctrl, m_current_group_tab == kTabCleared ? 3 : 2);
 		}
 
 		int btnTop = listTop + listHeight + g_data.DPI(10);
@@ -5508,6 +5533,10 @@ namespace
 		int count;
 	};
 
+	const wchar_t* kItems_1105[] = {
+		L"•  【新增】「已清仓」分组新增「状态栏显示」勾选列：清仓股已不在自选/持仓列表，此前没有任何入口设置它的状态栏显示；现最后一列可直接勾选/取消并立即落盘生效，本页签其余列仍为只读",
+		L"•  【修复】已清仓股勾选「状态栏显示」不生效、原来显示的又取消不掉：任务栏只注册自选/持仓/自定义分组里的代码，台账独有的清仓股即使勾了也不显示；现把台账股票一并纳入注册，并在启动时按代码补读它们的勾选配置，勾选跨重启保留",
+	};
 	const wchar_t* kItems_1104[] = {
 		L"•  【修复】 BS 台账铺满一屏后找不到空白双击新增：列表底部固定保留一行「新增槽」（内容不满一屏时紧跟最后一行、铺满时钉在列表底边），流水行只在上方滚动，台账再长也随时能点到空白新增",
 		L"•  【优化】 BS 台账新增或改动成交后自动滚动到选中行：此前台账铺满一屏时，新记录或改过时间的记录会落在视口外，用户只看到汇总数字变化、列表没动静；现自动把选中行滚进可视区",
@@ -5639,6 +5668,7 @@ namespace
 	};
 
 	const AboutLogGroup kAboutLogGroups[] = {
+		{ L"2026-11-05 (v2.1.17)", kItems_1105, _countof(kItems_1105) },
 		{ L"2026-11-04 (v2.1.16)", kItems_1104, _countof(kItems_1104) },
 		{ L"2026-10-13 (v2.1.15)", kItems_1013, _countof(kItems_1013) },
 		{ L"2026-10-11 (v2.1.14)", kItems_1011, _countof(kItems_1011) },
@@ -6885,13 +6915,6 @@ void CManagerDialog::OnListItemClick(NMHDR* pNMHDR, LRESULT* pResult)
 		int nItem = pNMItemActivate->iItem;
 		int nSubItem = pNMItemActivate->iSubItem;
 
-		// 「已清仓」页签的列表为派生只读内容，不参与勾选翻转（列号含义也与之无关）
-		if (m_current_group_tab == kTabCleared)
-		{
-			*pResult = 0;
-			return;
-		}
-
 		// 检查是否点击了 "状态栏显示" 列（7 列布局中位于最后一列，曾因阈值提醒列插入而比旧列号右移一位）
 		if (nSubItem == STATUSBAR_SHOW_COLUMN)
 		{
@@ -6906,7 +6929,14 @@ void CManagerDialog::OnListItemClick(NMHDR* pNMHDR, LRESULT* pResult)
 					g_data.m_log_path.c_str());
 				return !cur;
 			};
-			if (m_current_group_tab == kTabWatchlist) // 自选股
+			if (m_current_group_tab == kTabCleared) // 已清仓（派生只读页签，仅此列可交互）
+			{
+				if (nItem < static_cast<int>(m_cleared_codes.size()))
+				{
+					m_custom_listctrl.SetItemText(nItem, STATUSBAR_SHOW_COLUMN, flip(m_cleared_codes[nItem]) ? L"√" : L"");
+				}
+			}
+			else if (m_current_group_tab == kTabWatchlist) // 自选股
 			{
 				if (nItem < static_cast<int>(m_data.m_stock_codes.size()))
 				{

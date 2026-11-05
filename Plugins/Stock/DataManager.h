@@ -237,7 +237,8 @@ public:
 	bool GetShowInStatusBar(const std::wstring& code);
 	void SetShowInStatusBar(const std::wstring& code, bool show);
 	std::vector<std::wstring> GetStatusBarStockCodes();
-	// 勾选了"状态栏显示"的全部代码（顺序：自选股→持仓→自定义分组，去重），用于绑定任务栏显示槽位
+	// 勾选了"状态栏显示"的全部代码（顺序：自选股→持仓→自定义分组→台账独有，去重），用于绑定任务栏显示槽位
+	// 台账独有的代码主要是已清仓股：它们已不在任何分组里，但「已清仓」页签可勾选状态栏显示
 	std::vector<std::wstring> GetRegisteredStockCodes();
 	// 全部已知代码（自选股∪持仓∪自定义分组，去重），用于加载每股票配置
 	std::vector<std::wstring> GetAllKnownStockCodes();
