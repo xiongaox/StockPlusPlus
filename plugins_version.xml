@@ -1,4 +1,0 @@
-﻿<!-- 保存插件的版本信息，用于TrafficMonitor检查插件是否有更新 -->
-<plugins>
-    <plugin file_name= Stock.dll version=1.13/>
-</plugins>

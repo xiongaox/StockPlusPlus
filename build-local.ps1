@@ -8,7 +8,7 @@
     是本地编译 / 部署 Stock 插件的唯一入口。
 
     多个 TrafficMonitor 安装共用 AppData 里的同一份 config.ini，插件显示项勾选按
-    item id 持久化，任一目录的 Stock.dll 版本落后都会在切换实例时把勾选状态挤掉
+    item id 持久化，任一目录的 StockPlusPlus.dll 版本落后都会在切换实例时把勾选状态挤掉
     （显示项重启后取消勾选），因此默认把所有探测到的安装目录全部同步替换。
 
 .PARAMETER PluginDir
@@ -21,7 +21,7 @@
     不结束也不重启 TrafficMonitor（dll 被占用时会替换失败）。
 
 .PARAMETER NoBuild
-    跳过编译，直接用现有的 bin\x64\Release\Stock.dll 做同步。
+    跳过编译，直接用现有的 bin\x64\Release\StockPlusPlus.dll 做同步。
 
 .EXAMPLE
     .\build-local.ps1
@@ -29,11 +29,11 @@
 
 .EXAMPLE
     .\build-local.ps1 -NoRestart -NoBuild
-    不编译、不重启，只把现有 Stock.dll 复制到各安装目录。
+    不编译、不重启，只把现有 StockPlusPlus.dll 复制到各安装目录。
 
 .EXAMPLE
     .\build-local.ps1 -NoBuild -NoRestart -PluginDir 'D:\Program Files (x86)\NIR\TrafficMonitor\plugins'
-    只把现有 Stock.dll 部署到指定目录（等价于原 deploy.ps1）。
+    只把现有 StockPlusPlus.dll 部署到指定目录（等价于原 deploy.ps1）。
 #>
 param(
     [string[]]$PluginDir = @(),
@@ -46,7 +46,7 @@ $ErrorActionPreference = 'Stop'
 
 $solDir = (Resolve-Path $PSScriptRoot).Path + '\'
 $solDirArg = "/p:SolutionDir=`"$($solDir.TrimEnd('\'))\\`""
-$src = Join-Path $PSScriptRoot 'bin\x64\Release\Stock.dll'
+$src = Join-Path $PSScriptRoot 'bin\x64\Release\StockPlusPlus.dll'
 
 # ---------------------------------------------------------------- 1. 定位 MSBuild
 function Get-MSBuildPath {
@@ -145,10 +145,18 @@ $hashSrc = (Get-FileHash -Path $src -Algorithm SHA256).Hash
 $failed = @()
 
 foreach ($dir in $PluginDir) {
-    $dst = Join-Path $dir 'Stock.dll'
+    $dst = Join-Path $dir 'StockPlusPlus.dll'
     try {
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
         Copy-Item -Path $src -Destination $dst -Force -ErrorAction Stop
+
+        # 旧版 Stock.dll 必须删除：TrafficMonitor 会加载 plugins 下所有 dll，
+        # 两个插件同时存在会重复显示、并争抢同一份 stock_trades.db
+        $legacy = Join-Path $dir 'Stock.dll'
+        if (Test-Path $legacy) {
+            Remove-Item -Path $legacy -Force -ErrorAction SilentlyContinue
+            Write-Host "[+] Removed legacy: $legacy" -ForegroundColor Yellow
+        }
 
         $hashDst = (Get-FileHash -Path $dst -Algorithm SHA256).Hash
         if ($hashSrc -ne $hashDst) { throw 'SHA256 mismatch between source and destination!' }
@@ -158,7 +166,7 @@ foreach ($dir in $PluginDir) {
         Write-Host "[+] Verified SHA256: $hashDst" -ForegroundColor Green
     } catch {
         Write-Host '=========================================================' -ForegroundColor Red
-        Write-Host "[ERROR] Failed to replace Stock.dll in $dir !" -ForegroundColor Red
+        Write-Host "[ERROR] Failed to replace StockPlusPlus.dll in $dir !" -ForegroundColor Red
         Write-Host "Reason: $($_.Exception.Message)" -ForegroundColor Red
         Write-Host 'TrafficMonitor may be running and locking the file.' -ForegroundColor Yellow
         Write-Host '=========================================================' -ForegroundColor Red
@@ -186,4 +194,4 @@ if ($failed.Count -gt 0) {
     exit 1
 }
 
-Write-Host '[+] All done! Stock.dll synchronized.' -ForegroundColor Cyan
+Write-Host '[+] All done! StockPlusPlus.dll synchronized.' -ForegroundColor Cyan

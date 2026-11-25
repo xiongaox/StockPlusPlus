@@ -1260,7 +1260,7 @@ int CStockDbManager::HealAbnormalDayKLineCache()
 		}
 		std::string log = "[KLine] heal: cleared poisoned day kline cache of " + CCommon::UnicodeToStr(code.c_str())
 			+ ", abnormal at " + detail;
-		CCommon::WriteLog(log.c_str(), (m_db_path.substr(0, m_db_path.find_last_of(L"\\/") + 1) + L"Stock.log").c_str());
+		CCommon::WriteLog(log.c_str(), g_data.m_log_path.c_str());
 	}
 	return healed;
 }

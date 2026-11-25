@@ -104,7 +104,7 @@ flowchart TD
      - 给日志顶部待发布的日期分组补写本次版本号（`L"YYYY-MM-DD (v<目标版本>)"`），随 DLL 一起编译进「关于插件」页；
      - 关闭运行中的测试器释放文件占用；
      - MSBuild 编译 x64 和 x86 Release 动态库（包含最新内置更新日志）；
-     - 自动清理历史 zip，打包至 `download/Stock_V<版本>_x64.zip` 与 `download/Stock_V<版本>_x86.zip`；
+     - 自动清理历史 zip，打包至 `download/StockPlusPlus_V<版本>_x64.zip` 与 `download/StockPlusPlus_V<版本>_x86.zip`；
      - 同步更新 `download/plugin_download.md` 下载列表；
      - 自动提取本次版本号对应分组的更新日志生成 `RELEASE_NOTES.md`（提取不到会直接报错，杜绝发布空说明）；
 4. **提交发包改动**：

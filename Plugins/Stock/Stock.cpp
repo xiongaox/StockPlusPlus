@@ -211,11 +211,11 @@ const wchar_t* Stock::GetInfo(PluginInfoIndex index)
 	case TMI_DESCRIPTION:
 		return g_data.StringRes(IDS_PLUGIN_DESCRIPTION).GetString();
 	case TMI_AUTHOR:
-		return L"CListery";
+		return L"xiongaox";
 	case TMI_COPYRIGHT:
-		return L"Copyright (C) by CListery 2022";
+		return L"Copyright (C) 2025-2026 xiongaox";
 	case ITMPlugin::TMI_URL:
-		return L"https://github.com/zhongyang219/TrafficMonitorPlugins";
+		return L"https://github.com/xiongaox/StockPlusPlus";
 	case TMI_VERSION:
 		return STOCK_VERSION_STR;
 	default:

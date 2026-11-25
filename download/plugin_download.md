@@ -1,6 +1,6 @@
 ﻿# TrafficMonitor 股票插件下载与安装说明
 
-本页面提供 [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor) 股票行情看盘插件（Stock Plugin）的 x64 / x86 预编译版本下载与详细安装使用指南。
+本页面提供 [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor) 股票行情看盘插件（StockPlusPlus）的 x64 / x86 预编译版本下载与详细安装使用指南。
 ARM 设备（骁龙 / Surface Pro X 等）请使用 x64 版；本项目不提供 ARM64EC 预编译包，确需原生版本请参考仓库 README 的「编译 ARM64EC」一节自行编译。
 
 ---
@@ -11,25 +11,26 @@ ARM 设备（骁龙 / Surface Pro X 等）请使用 x64 版；本项目不提供
 
 | 架构版本 | 适用系统 / 环境 | 下载链接 | 文件说明 |
 | :--- | :--- | :---: | :--- |
-| **x64 Release**（推荐） | 64 位 Windows 系统及 64 位 TrafficMonitor | [**Stock_V2.0.15-beta_x64.zip**](./Stock_V2.0.15-beta_x64.zip) | 推荐绝大多数用户使用，性能最优 |
-| **x86 Release** | 32 位 Windows 系统或 32 位 TrafficMonitor | [**Stock_V2.0.15-beta_x86.zip**](./Stock_V2.0.15-beta_x86.zip) | 适用于 32 位兼容环境 |
+| **x64 Release**（推荐） | 64 位 Windows 系统及 64 位 TrafficMonitor | [**StockPlusPlus_V2.2.0_x64.zip**](./StockPlusPlus_V2.2.0_x64.zip) | 推荐绝大多数用户使用，性能最优 |
+| **x86 Release** | 32 位 Windows 系统或 32 位 TrafficMonitor | [**StockPlusPlus_V2.2.0_x86.zip**](./StockPlusPlus_V2.2.0_x86.zip) | 适用于 32 位兼容环境 |
 
 ---
 
 ## 🚀 安装与启用步骤
 
 1. **解压文件**：
-   下载上述对应架构的 zip 文件并解压，得到核心插件动态库文件 `Stock.dll`（本项目提供 x64 与 x86 两种预编译包；ARM 设备请使用 x64 版）。
+   下载上述对应架构的 zip 文件并解压，得到核心插件动态库文件 `StockPlusPlus.dll`（本项目提供 x64 与 x86 两种预编译包；ARM 设备请使用 x64 版）。
 
 2. **放置插件**：
-   将 `Stock.dll` 复制到 TrafficMonitor 程序所在目录下的 `plugins` 文件夹内：
+   将 `StockPlusPlus.dll` 复制到 TrafficMonitor 程序所在目录下的 `plugins` 文件夹内：
    ```text
    TrafficMonitor/
    ├── TrafficMonitor.exe
    └── plugins/
-       └── Stock.dll
+       └── StockPlusPlus.dll
    ```
    > 若当前目录下没有 `plugins` 文件夹，请手动新建一个。
+   > **从旧版升级**：请先删除 `plugins` 目录里的旧 `Stock.dll`。两个 dll 同时存在会被 TrafficMonitor 分别加载，导致任务栏重复显示并争抢同一份台账数据库。旧配置会在首次启动时自动从 `Stock.ini` 复制为 `StockPlusPlus.ini`，自选、持仓与分组都会保留。
 
 3. **重启 TrafficMonitor**：
    退出并重新启动 TrafficMonitor 程序。
@@ -60,9 +61,10 @@ ARM 设备（骁龙 / Surface Pro X 等）请使用 x64 版；本项目不提供
    本项目**不提供 ARM64EC 预编译包**；确需原生速度请参考仓库 README 的「编译 ARM64EC」一节自行编译。
    > 历史提醒：2026-09 以前发布的 arm64ec 包（文件名形如 `Stock_V2.0.x_arm64ec.zip`）其实是 2025-03-08 的 Stock v1.13 旧版本，只是被改成了新版本号，下载它会缺少此后所有新功能，现已下架。若你手上有这种包，建议换成同版本的 x64 包或更新的发行版。
 2. **位数不匹配导致插件未加载**：
-   若在 TrafficMonitor 的“插件管理”中未看到股票插件，请检查下载的 DLL 架构是否与运行中的 TrafficMonitor 完全一致（如 64 位程序必须使用 x64 版本的 `Stock.dll`）。
+   若在 TrafficMonitor 的“插件管理”中未看到股票插件，请检查下载的 DLL 架构是否与运行中的 TrafficMonitor 完全一致（如 64 位程序必须使用 x64 版本的 `StockPlusPlus.dll`）。
 3. **行情刷新机制**：
    平时插件在盘中自动高频轮询；若遇休眠唤醒或网络波动，可随时在任务栏右键菜单中点击 **“刷新股票信息”** 立即强制发起最新行情请求。
+
 
 
 

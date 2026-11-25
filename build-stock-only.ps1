@@ -9,4 +9,4 @@ if (-not (Test-Path $msbuild)) {
 $solDirArg = "/p:SolutionDir=`"$($solDir.TrimEnd('\'))\\`""
 & $msbuild "${solDir}Plugins\Stock\Stock.vcxproj" /p:Configuration=Release /p:Platform=x64 $solDirArg /m /v:m
 if ($LASTEXITCODE -ne 0) { Write-Error 'Build Stock failed.'; exit 1 }
-Write-Host '[+] Stock.dll build OK'
+Write-Host '[+] StockPlusPlus.dll build OK'

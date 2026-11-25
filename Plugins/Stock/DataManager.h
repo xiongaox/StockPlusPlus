@@ -146,7 +146,7 @@ public:
 	// ETF基金IOPV：ok=true 解析并保存净值缓存+更新分时iopv，ok=false 仅记录失败日志
 	void ApplyFundIOPV(const std::wstring& code, const std::string& resp, bool ok);
 	// TDX 共享内存是否在最近 withinSeconds 秒内为该代码送过行情：
-	// HTTP 补充调度据此判重——共享内存只喂自选股（Stock.ini stock_code），
+	// HTTP 补充调度据此判重——共享内存只喂自选股（StockPlusPlus.ini stock_code），
 	// 未覆盖的代码（仅持仓/状态栏/台账可见）不能被当作"A股已有"而从 HTTP 里剔除
 	bool IsTdxQuoteFresh(const std::wstring& code, int withinSeconds);
 	// ETF持仓：应用ETF持仓数据

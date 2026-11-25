@@ -125,7 +125,7 @@ if (Test-Path $mgrPath) {
 # 2. 检查并关闭运行中的测试器
 $tester = Get-Process -Name "PluginTester" -ErrorAction SilentlyContinue
 if ($tester) {
-    Write-Host ">>> [2/6] 检测到 PluginTester 运行中，正在关闭以释放 Stock.dll 占用..." -ForegroundColor Yellow
+    Write-Host ">>> [2/6] 检测到 PluginTester 运行中，正在关闭以释放 StockPlusPlus.dll 占用..." -ForegroundColor Yellow
     Stop-Process -Name "PluginTester" -Force
 }
 
@@ -146,13 +146,13 @@ if ($LASTEXITCODE -ne 0) { throw "x86 编译失败！" }
 # 4. 产物闸门 + 打包（本仓库只发布 x64 / x86 两个预编译包）。
 # ARM64EC 不再提供预编译包：需要原生版的用户请照 README「编译 ARM64EC」一节自行编译。
 $candidates = @(
-    [pscustomobject]@{ Dll = "$root\bin\x64\Release\Stock.dll"; Zip = "$root\download\Stock_V${cleanVer}${preSuffix}_x64.zip"; Arch = 'x64' },
-    [pscustomobject]@{ Dll = "$root\bin\Release\Stock.dll";     Zip = "$root\download\Stock_V${cleanVer}${preSuffix}_x86.zip"; Arch = 'x86' }
+    [pscustomobject]@{ Dll = "$root\bin\x64\Release\StockPlusPlus.dll"; Zip = "$root\download\StockPlusPlus_V${cleanVer}${preSuffix}_x64.zip"; Arch = 'x64' },
+    [pscustomobject]@{ Dll = "$root\bin\Release\StockPlusPlus.dll";     Zip = "$root\download\StockPlusPlus_V${cleanVer}${preSuffix}_x86.zip"; Arch = 'x86' }
 )
 
 # 4a. 产物闸门：必须在 Compress-Archive 之前校验并中止。
 # 否则即便中止，download 里也已经躺着一只贴着新版本号的坏包，
-# 而 CI 正是拿 download\Stock_V*.zip 直接上传到 Release 的——校验就等于没做。
+# 而 CI 正是拿 download\StockPlusPlus_V*.zip 直接上传到 Release 的——校验就等于没做。
 $expectVer = "$major.$minor.$patch.0"
 foreach ($item in $candidates) {
     if (-not (Test-Path $item.Dll)) { throw "缺少 $($item.Arch) 产物：$($item.Dll)（编译未成功？）" }
@@ -164,10 +164,12 @@ foreach ($item in $candidates) {
 
 # 4b. 打包输出至 download 目录（校验通过后才写文件）
 Write-Host ">>> [4/6] 正在打包发布产物到 download 目录..." -ForegroundColor Cyan
-# 先清掉所有历史 Stock_V*.zip：其中也包括任何残留的 arm64ec 包。
+# 先清掉所有历史 Stock_V*.zip / StockPlusPlus_V*.zip：其中也包括任何残留的 arm64ec 包。
 # 那些包历史上只是被改名冒充新版本（内容实为 2025-03-08 的 Stock v1.13 旧版），
 # 留在 download 里会被 CI 的通配符一并上传到 Release，必须就地清掉。
-Get-ChildItem -Path "$root\download" -Filter 'Stock_V*.zip' -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem -Path "$root\download\*.zip" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^(Stock|StockPlusPlus)_V.*\.zip$' } |
+    Remove-Item -Force
 foreach ($item in $candidates) {
     Compress-Archive -Path $item.Dll -DestinationPath $item.Zip -Force
     Write-Host "    已打包 $($item.Arch): $($item.Zip)" -ForegroundColor Green
@@ -178,8 +180,8 @@ Write-Host ">>> [5/6] 同步更新 download/plugin_download.md 下载链接..." 
 $dlDocPath = "$root\download\plugin_download.md"
 if (Test-Path $dlDocPath) {
     $dlDoc = (Get-Content $dlDocPath -Raw -Encoding UTF8) `
-        -replace 'Stock_V[a-zA-Z0-9\.]+_x64\.zip', "Stock_V${cleanVer}_x64.zip" `
-        -replace 'Stock_V[a-zA-Z0-9\.]+_x86\.zip', "Stock_V${cleanVer}_x86.zip"
+        -replace 'Stock(?:PlusPlus)?_V[a-zA-Z0-9\.]+_x64\.zip', "StockPlusPlus_V${cleanVer}_x64.zip" `
+        -replace 'Stock(?:PlusPlus)?_V[a-zA-Z0-9\.]+_x86\.zip', "StockPlusPlus_V${cleanVer}_x86.zip"
     # 本仓库不再发布 ARM64EC 预编译包：表格里若还留着该行就整行删掉，
     # 页面上绝不出现指向不存在文件的链接。
     $dlDoc = ($dlDoc -split "`r?`n" | Where-Object { $_ -notmatch '^(?i)\s*\|\s*\*\*ARM64EC' }) -join "`r`n"
@@ -211,7 +213,7 @@ if ($bullets.Count -eq 0) { throw "未能提取到 v$cleanVer 的更新日志：
 $bulletText = $bullets -join "`n"
 
 $releaseNotes = @"
-### 🚀 Stock Plugin v$cleanVer$preSuffix 更新日志
+### 🚀 StockPlusPlus v$cleanVer$preSuffix 更新日志
 
 $bulletText
 
@@ -219,6 +221,7 @@ $bulletText
 ### 📦 安装包说明
 - **x64 推荐版**：适用于绝大多数 64 位 Windows 系统及 64 位 TrafficMonitor
 - **x86 兼容版**：适用于 32 位系统环境
+- **从旧版升级（重要）**：请先删除 `TrafficMonitor\plugins` 下的旧 `Stock.dll`，再放入本包的 `StockPlusPlus.dll`。两个 dll 同时存在会被 TrafficMonitor 分别加载，导致重复显示并争抢同一份台账数据库；旧的 `Stock.ini` 配置会在首次启动时自动复制为 `StockPlusPlus.ini`，无需手工迁移。
 
 > **ARM64 设备（骁龙 / Surface Pro X 等）**：请直接使用上面的 **x64 版**——本项目不提供 ARM64EC 预编译包，确需原生版本请参照 README 的「编译 ARM64EC」一节自行编译。
 "@
@@ -228,7 +231,7 @@ Set-Content -Path $releaseNotesPath -Value $releaseNotes -Encoding UTF8
 
 Write-Host ""
 Write-Host "=================================================" -ForegroundColor Green
-Write-Host "🎉 Stock 插件 Release v$cleanVer 打包完成！" -ForegroundColor Green
+Write-Host "🎉 StockPlusPlus 插件 Release v$cleanVer 打包完成！" -ForegroundColor Green
 Write-Host "=================================================" -ForegroundColor Green
 Write-Host "产物文件：" -ForegroundColor Green
 foreach ($item in $candidates) { Write-Host "  - $($item.Zip)" }

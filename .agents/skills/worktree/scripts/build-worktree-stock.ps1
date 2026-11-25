@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    在指定的 Worktree 目录下编译 Stock.dll，严格不自启动 PluginTester.exe。
+    在指定的 Worktree 目录下编译 StockPlusPlus.dll，严格不自启动 PluginTester.exe。
 
 .DESCRIPTION
     1. 定位 MSBuild。
@@ -26,7 +26,7 @@ if (-not $WorktreePath) {
 $solDir = $WorktreePath.TrimEnd('\') + '\'
 $stockProj = Join-Path $WorktreePath 'Plugins\Stock\Stock.vcxproj'
 $utilitiesProj = Join-Path $WorktreePath 'utilities\utilities.vcxproj'
-$targetDll = Join-Path $WorktreePath 'bin\x64\Release\Stock.dll'
+$targetDll = Join-Path $WorktreePath 'bin\x64\Release\StockPlusPlus.dll'
 $testerExe = Join-Path $WorktreePath 'bin\x64\Release\PluginTester.exe'
 
 if (-not (Test-Path $stockProj)) {
@@ -64,7 +64,7 @@ Write-Host "[*] MSBuild : $msbuild" -ForegroundColor Gray
 # 3. 检查是否有 PluginTester 锁死 dll
 $lockingProcs = Get-Process -Name 'PluginTester' -ErrorAction SilentlyContinue
 if ($lockingProcs) {
-    Write-Warning "检测到 PluginTester 进程正在运行，可能会锁定 Stock.dll 导致链接失败 (LNK1104)。"
+    Write-Warning "检测到 PluginTester 进程正在运行，可能会锁定 StockPlusPlus.dll 导致链接失败 (LNK1104)。"
     Write-Warning "如遇编译报错，请先关闭测试器。"
 }
 
@@ -96,7 +96,7 @@ $hash = (Get-FileHash -Path $targetDll -Algorithm SHA256).Hash
 $sizeKB = [math]::Round($item.Length / 1KB, 1)
 
 Write-Host "==================================================" -ForegroundColor Green
-Write-Host "[+] Stock.dll 编译成功！" -ForegroundColor Green
+Write-Host "[+] StockPlusPlus.dll 编译成功！" -ForegroundColor Green
 Write-Host "    产物路径: $targetDll ($sizeKB KB)" -ForegroundColor Green
 Write-Host "    修改时间: $($item.LastWriteTime)" -ForegroundColor Green
 Write-Host "    SHA256  : $hash" -ForegroundColor Green

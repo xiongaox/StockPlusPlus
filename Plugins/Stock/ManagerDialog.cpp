@@ -3837,7 +3837,7 @@ void CManagerDialog::DrawSidebar(Gdiplus::Graphics& g, const CRect& clientRect)
 	// 侧边栏底部版本信息
 	Gdiplus::Font verFont(L"Segoe UI", static_cast<Gdiplus::REAL>(g_data.DPI(9.5)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 	Gdiplus::SolidBrush verBrush(Gdiplus::Color(255, 100, 116, 139));
-	g.DrawString(L"Stock Plugin v" STOCK_VERSION_STR, -1, &verFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(g_data.DPI(14)), static_cast<Gdiplus::REAL>(clientRect.Height() - g_data.DPI(28))), &verBrush);
+	g.DrawString(L"StockPlusPlus v" STOCK_VERSION_STR, -1, &verFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(g_data.DPI(14)), static_cast<Gdiplus::REAL>(clientRect.Height() - g_data.DPI(28))), &verBrush);
 }
 
 // 计算与 DrawString 文字墨迹垂直居中的标题竖条 top。
@@ -5533,6 +5533,11 @@ namespace
 		int count;
 	};
 
+	const wchar_t* kItems_1125_v220[] = {
+		L"•  【变更】 插件改名为 StockPlusPlus：产物由 Stock.dll 改为 StockPlusPlus.dll，显示名同步改为 StockPlusPlus，可与上游原版 Stock 插件区分并独立登记到 TrafficMonitor 官方插件下载页；任务栏显示项 ID 保持不变，勾选状态不会重置",
+		L"•  【新增】 自动迁移旧版配置：首次以 StockPlusPlus.dll 启动时，若同目录存在旧 Stock.ini（或 Stock.dll.ini），会自动复制为 StockPlusPlus.ini，自选、持仓、分组、预警与 WebDAV 设置全部保留；台账 stock_trades.db 文件名不变、原地继续使用",
+		L"•  【提示】 升级时请删除 plugins 目录下的旧 Stock.dll：TrafficMonitor 会加载目录下所有 dll，新旧两个插件同时存在会重复显示条目并争抢同一份台账数据库；检测到旧 dll 时插件会弹窗提醒",
+	};
 	const wchar_t* kItems_1125[] = {
 		L"•  【新增】 悬浮窗顶栏标题（股票名称+现价+涨跌幅+信号）可直接点击：浏览器打开雪球对应个股/基金页并顺手关闭悬浮窗，悬停变手型；覆盖 A 股（沪深北）/港股/美股，上海金交所等雪球无对应品种不响应",
 		L"•  【修复】 ETF IOPV 行情源失效导致估值/折溢价不更新：天天基金盘中估值接口 2026 年已下线（返回 200 + 404 页，旧逻辑只要响应非空就当成功，反而短路了后面的保底源）；现所有 IOPV 源一律按响应内容校验（上交所 snap / jsonpgz / 腾讯 iopv_timeline），接口检测页改为优先探测上交所真实 IOPV 源；深市 ETF 暂无可用源的失败日志按代码限频 10 分钟，不再每 3 秒刷屏",
@@ -5676,6 +5681,7 @@ namespace
 	};
 
 	const AboutLogGroup kAboutLogGroups[] = {
+		{ L"2026-11-25 (v2.2.0)", kItems_1125_v220, _countof(kItems_1125_v220) },
 		{ L"2026-11-25 (v2.1.18)", kItems_1125, _countof(kItems_1125) },
 		{ L"2026-11-05 (v2.1.17)", kItems_1105, _countof(kItems_1105) },
 		{ L"2026-11-04 (v2.1.16)", kItems_1104, _countof(kItems_1104) },
@@ -5909,7 +5915,7 @@ void CManagerDialog::DrawAboutPage(Gdiplus::Graphics& g)
 	int textY = cardRect.top + max(g_data.DPI(ABOUT_CARD_PAD), (cardRect.Height() - leftBlockH) / 2);
 
 	Gdiplus::SolidBrush nameBrush(Gdiplus::Color(255, 241, 245, 249));
-	const wchar_t* partName = L"TrafficMonitor 股票行情插件 (Stock Plugin)";
+	const wchar_t* partName = L"TrafficMonitor 股票行情插件 (StockPlusPlus)";
 	g.DrawString(partName, -1, &nameFont, Gdiplus::PointF(static_cast<Gdiplus::REAL>(textX), static_cast<Gdiplus::REAL>(textY)), &nameBrush);
 
 	textY += nameRowH + verRowY;

@@ -33,6 +33,9 @@
     <RootNamespace>Stock</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <ProjectName>Stock</ProjectName>
+    <!-- 输出文件名即 TrafficMonitor 插件版本清单（plugins_version.xml）的匹配键，
+         必须与上游 CListery 的 Stock.dll 区分，故只改产物名、不改工程名 -->
+    <TargetName>StockPlusPlus</TargetName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">

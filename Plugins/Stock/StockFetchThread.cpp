@@ -935,7 +935,7 @@ void CStockFetchThread::FetchRealtimeByHttp(bool onlyNonAG)
 	std::vector<std::wstring> realtimeCodes = codes;
 	if (onlyNonAG)
 	{
-		// 共享内存已覆盖的A股不再走HTTP。注意共享内存只喂自选股（Stock.ini stock_code），
+		// 共享内存已覆盖的A股不再走HTTP。注意共享内存只喂自选股（StockPlusPlus.ini stock_code），
 		// 仅出现在持仓/状态栏/台账里的代码（典型：T+0的ETF）不在其中，若按"A股个股"一律剔除
 		// 会彻底断更——表现为状态栏数值卡住、悬停/点开设为焦点股票后才恢复。
 		// 因此只剔除共享内存最近15秒内确实送过数的代码，自定义分组与焦点股票仍豁免

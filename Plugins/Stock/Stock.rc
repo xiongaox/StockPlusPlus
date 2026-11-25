@@ -217,12 +217,12 @@ BEGIN
     BEGIN
         BLOCK "080404b0"
         BEGIN
-            VALUE "CompanyName", "By CListery"
+            VALUE "CompanyName", "By xiongaox"
             VALUE "FileVersion", STOCK_VERSION_RC_STR
-            VALUE "InternalName", "Stock.dll"
-            VALUE "LegalCopyright", "Copyright (C) By CListery. All rights reserved."
-            VALUE "OriginalFilename", "Stock.dll"
-            VALUE "ProductName", "Stock Plugin for TrafficMonitor"
+            VALUE "InternalName", "StockPlusPlus.dll"
+            VALUE "LegalCopyright", "Copyright (C) 2025-2026 xiongaox. All rights reserved."
+            VALUE "OriginalFilename", "StockPlusPlus.dll"
+            VALUE "ProductName", "StockPlusPlus for TrafficMonitor"
             VALUE "ProductVersion", STOCK_VERSION_RC_STR
         END
     END
@@ -262,7 +262,7 @@ IDI_STOCK               ICON                    "res\\icon.ico"
 
 STRINGTABLE 
 BEGIN
-    IDS_PLUGIN_NAME         "股票插件"
+    IDS_PLUGIN_NAME         "StockPlusPlus"
     IDS_PLUGIN_DESCRIPTION  "用于TrafficMonitor的股票插件"
     IDS_PLUGIN_ITEM_NAME    "股票"
     IDS_MENU_STOCK_MANAGE   "管理股票列表(&O)..."
@@ -491,7 +491,7 @@ END
 
 STRINGTABLE 
 BEGIN
-    IDS_PLUGIN_NAME         "Stock Plugin"
+    IDS_PLUGIN_NAME         "StockPlusPlus"
     IDS_PLUGIN_DESCRIPTION  "Stock plugin for TrafficMonitor."
     IDS_PLUGIN_ITEM_NAME    "Stock"
     IDS_MENU_STOCK_MANAGE   "Stock List &Manage..."

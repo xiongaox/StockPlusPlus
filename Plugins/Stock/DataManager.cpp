@@ -151,6 +151,64 @@ static void WritePrivateProfileInt(const wchar_t* app_name, const wchar_t* key_n
 	WritePrivateProfileString(app_name, key_name, buff, file_path);
 }
 
+// StockPlusPlus.dll 的配置名由模块名派生（StockPlusPlus.ini），
+// 从旧版 Stock.dll 升级上来的用户直接读会得到空配置（自选/持仓/分组全丢）。
+// 仅在目标配置不存在时复制旧文件；旧文件保留，方便回滚到旧版本。
+static bool MigrateLegacyConfigFile(const std::wstring& config_path, std::wstring& migrated_from)
+{
+	if (GetFileAttributesW(config_path.c_str()) != INVALID_FILE_ATTRIBUTES)
+		return false;
+	const size_t pos = config_path.find_last_of(L"\\/");
+	if (pos == std::wstring::npos)
+		return false;
+	const std::wstring dir = config_path.substr(0, pos + 1);
+	// Stock.ini：正常升级路径；Stock.dll.ini：早期没有配置目录时的兜底命名
+	const wchar_t* const legacy_names[] = { L"Stock.ini", L"Stock.dll.ini" };
+	for (const wchar_t* name : legacy_names)
+	{
+		const std::wstring legacy_path = dir + name;
+		if (GetFileAttributesW(legacy_path.c_str()) == INVALID_FILE_ATTRIBUTES)
+			continue;
+		if (CopyFileW(legacy_path.c_str(), config_path.c_str(), TRUE))
+		{
+			migrated_from = legacy_path;
+			return true;
+		}
+		break;
+	}
+	return false;
+}
+
+// TrafficMonitor 会加载 plugins 目录下所有 dll：旧版 Stock.dll 不删会与 StockPlusPlus.dll
+// 同时加载（同一个 item id、同一个 stock_trades.db），必须提示用户删除。
+static void WarnLegacyPluginDll(const std::wstring& module_path, const std::wstring& log_path)
+{
+	static bool warned = false;
+	if (warned)
+		return;
+
+	wchar_t host_path[MAX_PATH]{};
+	const DWORD host_len = GetModuleFileNameW(nullptr, host_path, _countof(host_path));
+	const wchar_t* host_name = (host_len > 0 && host_len < _countof(host_path)) ? wcsrchr(host_path, L'\\') : nullptr;
+	if (host_name != nullptr && _wcsicmp(host_name + 1, L"PluginTester.exe") == 0)
+		return;     // 测试器目录里同时放新旧 dll 是正常的调试场景
+
+	const size_t slash = module_path.find_last_of(L"\\/");
+	if (slash == std::wstring::npos)
+		return;
+	const std::wstring old_dll = module_path.substr(0, slash + 1) + L"Stock.dll";
+	if (GetFileAttributesW(old_dll.c_str()) == INVALID_FILE_ATTRIBUTES)
+		return;
+
+	warned = true;
+	CCommon::WriteLog((L"[CONFIG] 检测到旧版插件，请删除: " + old_dll).c_str(), log_path.c_str());
+	MessageBoxW(nullptr,
+		(L"检测到旧版 Stock.dll，请删除后重启 TrafficMonitor。\n\n"
+		 L"两个插件会同时加载并共用同一份台账数据库，可能造成重复显示或数据异常。\n\n"
+		 L"文件位置：" + old_dll).c_str(),
+		L"StockPlusPlus", MB_ICONWARNING | MB_OK);
+}
+
 void CDataManager::LoadConfig(const std::wstring& config_dir)
 {
 	// 获取模块的路径
@@ -180,6 +238,12 @@ void CDataManager::LoadConfig(const std::wstring& config_dir)
 	}
 	m_config_path += L".ini";
 	m_log_path += L".log";
+
+	// 改名升级：先复制旧版配置，否则用户自选/持仓会被读成空配置
+	std::wstring migrated_from;
+	if (MigrateLegacyConfigFile(m_config_path, migrated_from))
+		CCommon::WriteLog((L"[CONFIG] 已从旧版配置迁移: " + migrated_from + L" -> " + m_config_path).c_str(), m_log_path.c_str());
+	WarnLegacyPluginDll(module_path, m_log_path);
 
 	utilities::CIniHelper ini(m_config_path);
 	const bool isNewConfig = ini.IsEmpty();

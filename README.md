@@ -119,15 +119,17 @@
 
 ### 1. 插件安装
 
-1. 前往 Release 或下载页面获取最新版本的 `Stock.dll`（64位系统请使用 x64 版本）。
-2. 将 `Stock.dll` 复制到 TrafficMonitor 安装目录下的 `plugins` 文件夹中：
+1. 前往 Release 或下载页面获取最新版本的 `StockPlusPlus.dll`（64位系统请使用 x64 版本）。
+2. 将 `StockPlusPlus.dll` 复制到 TrafficMonitor 安装目录下的 `plugins` 文件夹中：
    ```text
    TrafficMonitor/
    ├── TrafficMonitor.exe
    └── plugins/
-       └── Stock.dll
+       └── StockPlusPlus.dll
    ```
 3. 重启 TrafficMonitor。
+
+> **从旧版（Stock.dll）升级**：请先删除 `plugins` 目录里的旧 `Stock.dll`。两个 dll 同时存在会被 TrafficMonitor 分别加载，导致任务栏重复显示并争抢同一份台账数据库。旧的 `Stock.ini` 会在首次启动时自动复制为 `StockPlusPlus.ini`，自选、持仓、分组与台账数据都会保留。
 
 ### 2. 启用任务栏显示
 
@@ -159,7 +161,7 @@
 1. 使用 Visual Studio 2022 打开根目录下的 `Stock++.sln`。
 2. 将构建配置切换为 **Release | x64**。
 3. 编译 `utilities` 基础库工程，然后编译 `Stock` 工程。
-4. 编译输出产物位于 `bin/x64/Release/Stock.dll`。
+4. 编译输出产物位于 `bin/x64/Release/StockPlusPlus.dll`。
 
 ### 编译 ARM64EC（ARM 设备原生版）
 
@@ -187,7 +189,7 @@ vs_installer.exe modify --installPath "<VS安装路径>" --add Microsoft.VisualS
 1. 打开 `Stock++.sln`；
 2. 顶部配置下拉选择 **Release | ARM64EC**；
 3. 依次编译 `utilities`、`Stock` 两个工程；
-4. 产物位于 `bin/ARM64EC/Release/Stock.dll`。
+4. 产物位于 `bin/ARM64EC/Release/StockPlusPlus.dll`。
 
 **方式二：命令行**
 
@@ -196,7 +198,7 @@ vs_installer.exe modify --installPath "<VS安装路径>" --add Microsoft.VisualS
 & "<MSBuild路径>\MSBuild.exe" "Stock++.sln" /p:Configuration=Release /p:Platform=ARM64EC /t:Stock /m
 ```
 
-产物同样在 `bin\ARM64EC\Release\Stock.dll`，把它复制到 `TrafficMonitor\plugins\` 即可。
+产物同样在 `bin\ARM64EC\Release\StockPlusPlus.dll`，把它复制到 `TrafficMonitor\plugins\` 即可。
 
 #### 3. 验证产物是不是真的 ARM64EC
 
@@ -204,7 +206,7 @@ vs_installer.exe modify --installPath "<VS安装路径>" --add Microsoft.VisualS
 
 ```powershell
 # 用 VS 开发者命令行的 dumpbin
-dumpbin /headers bin\ARM64EC\Release\Stock.dll | Select-String "machine|a64xrm|hexpthk"
+dumpbin /headers bin\ARM64EC\Release\StockPlusPlus.dll | Select-String "machine|a64xrm|hexpthk"
 ```
 
 - ✅ 正确产物：机器码显示 `8664 machine (x64) (ARM64X)`，且能看到 `.a64xrm` / `.hexpthk` 节区。
@@ -262,7 +264,7 @@ dumpbin /headers bin\ARM64EC\Release\Stock.dll | Select-String "machine|a64xrm|h
 curl -L -o getPrice.exe https://github.com/xiongaox/StockPlusPlus/raw/dev/tools/getPrice.exe
 ```
 
-下载后放到 **`Stock.dll` 同目录**（TrafficMonitor 的插件目录），重启 TrafficMonitor 即可。
+下载后放到 **`StockPlusPlus.dll` 同目录**（TrafficMonitor 的插件目录），重启 TrafficMonitor 即可。
 
 **方式二：用 Python 直接跑脚本**（开发/自打包场景）：
 
@@ -272,7 +274,7 @@ python tools/getPrice.py
 ```
 想自己打成免环境 exe：`pip install pyinstaller` 后在 tools 目录执行 `pyinstaller --onefile getPrice.py`。
 
-部署后它会读取同目录 `Stock.ini` 的自选股列表——该文件由插件自动生成与维护（TrafficMonitor 的配置目录或插件同目录，插件跑过一次就有），自选变化会自动跟随；全新环境没有 ini 时程序用内置默认自选照常运行，插件首次保存配置后下次启动自动接管。盘中每 1 秒推送、非交易时段自动降到每 10 秒。
+部署后它会读取同目录 `StockPlusPlus.ini` 的自选股列表（旧版升级时会自动从 `Stock.ini` 复制一份）——该文件由插件自动生成与维护（TrafficMonitor 的配置目录或插件同目录，插件跑过一次就有），自选变化会自动跟随；全新环境没有 ini 时程序用内置默认自选照常运行，插件首次保存配置后下次启动自动接管。盘中每 1 秒推送、非交易时段自动降到每 10 秒。
 不想用了直接删掉 exe，插件自动回退 HTTP 轮询。
 
 ---

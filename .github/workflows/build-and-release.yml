@@ -1,4 +1,4 @@
-name: Build and Release Stock Plugin
+name: Build and Release StockPlusPlus Plugin
 
 on:
   push:
@@ -21,8 +21,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Stock Plugin ${{ github.ref_name }}
+          name: StockPlusPlus ${{ github.ref_name }}
           body_path: RELEASE_NOTES.md
           files: |
-            download/Stock_V*.zip
+            download/StockPlusPlus_V*.zip
           generate_release_notes: false
