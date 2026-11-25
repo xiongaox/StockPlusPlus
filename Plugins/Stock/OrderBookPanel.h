@@ -42,7 +42,6 @@ private:
 		COLORREF backgroundColor{ RGB(255,255,255) };
 		bool drawSmallSuffix{ false };
 		bool darkBackground{ false };  // 深色背景时文字改白色
-		bool blink{ false };  // 闪烁效果：当前价=卖一/买一且挂单≤1万
 		bool bold{ false };   // 粗体
 	};
 
@@ -78,13 +77,13 @@ private:
 	void DrawWeiBi(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo);
 
 	// 绘制卖盘五档（卖五~卖一，行1-5）
-	void DrawAskRows(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo, bool blinkOn);
+	void DrawAskRows(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo);
 
 	// 绘制中间行情行：现价与今开（行6）
 	void DrawMidPriceRow(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo);
 
 	// 绘制买盘五档（买一~买五，行7-11）
-	void DrawBidRows(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo, bool blinkOn);
+	void DrawBidRows(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo);
 
 	// 绘制净比汇总（行12）
 	void DrawNetRatioRows(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo);
@@ -92,9 +91,6 @@ private:
 	// 绘制振幅与换手率（行13）
 	void DrawStatsRow(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo,
 		const std::vector<STOCK::KLinePoint>& klineData);
-
-	// 辅助：绘制单行盘口文本（含小号后缀、右对齐后缀）
-	void DrawOrderBookRowText(CDC& memDC, const OrderBookRow& row, int x, int y, int rowWidth, bool blinkOff = false);
 
 	// 辅助：绘制净比条形图
 	void DrawRatioBar(CDC& memDC, int x, int y, int w, int h, double ratio);
@@ -121,7 +117,7 @@ private:
 	OrderBookRow BuildBidRow(const STOCK::StockInfo& stockInfo, int idx, STOCK::Volume delta) const;
 
 	// 辅助：绘制一组盘口行
-	void DrawPriceRows(CDC& memDC, const LayoutContext& lc, const std::vector<OrderBookRow>& rows, int startRow, bool blinkOn);
+	void DrawPriceRows(CDC& memDC, const LayoutContext& lc, const std::vector<OrderBookRow>& rows, int startRow);
 
 private:
 	// 缓存数据（原Draw中的static变量）

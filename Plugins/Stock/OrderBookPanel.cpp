@@ -69,13 +69,10 @@ void COrderBookPanel::Draw(CDC& memDC, int left, int right, int height, const ST
 	lc.rem = rem;
 	lc.textX = textX;
 
-	DWORD tickCount = GetTickCount();
-	bool blinkOn = (tickCount / 500) % 2 == 0;
-
 	DrawWeiBi(memDC, lc, stockInfo);
-	DrawAskRows(memDC, lc, stockInfo, blinkOn);
+	DrawAskRows(memDC, lc, stockInfo);
 	DrawMidPriceRow(memDC, lc, stockInfo);
-	DrawBidRows(memDC, lc, stockInfo, blinkOn);
+	DrawBidRows(memDC, lc, stockInfo);
 	DrawNetRatioRows(memDC, lc, stockInfo);
 	DrawStatsRow(memDC, lc, stockInfo, klineData);
 }
@@ -133,7 +130,7 @@ void COrderBookPanel::DrawWeiBi(CDC& memDC, const LayoutContext& lc, const STOCK
 // ============================================================================
 // 绘制卖盘行（卖五~卖一，行1-5）
 // ============================================================================
-void COrderBookPanel::DrawAskRows(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo, bool blinkOn)
+void COrderBookPanel::DrawAskRows(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo)
 {
 	std::vector<OrderBookRow> priceRows;
 	priceRows.reserve(5);
@@ -145,7 +142,7 @@ void COrderBookPanel::DrawAskRows(CDC& memDC, const LayoutContext& lc, const STO
 		priceRows.push_back(BuildAskRow(stockInfo, idx, delta));
 	}
 
-	DrawPriceRows(memDC, lc, priceRows, 1, blinkOn);
+	DrawPriceRows(memDC, lc, priceRows, 1);
 }
 
 // ============================================================================
@@ -189,7 +186,7 @@ void COrderBookPanel::DrawMidPriceRow(CDC& memDC, const LayoutContext& lc, const
 // ============================================================================
 // 绘制买盘行（买一~买五，行7-11）
 // ============================================================================
-void COrderBookPanel::DrawBidRows(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo, bool blinkOn)
+void COrderBookPanel::DrawBidRows(CDC& memDC, const LayoutContext& lc, const STOCK::StockInfo& stockInfo)
 {
 	std::vector<OrderBookRow> bottomRows;
 	bottomRows.reserve(5);
@@ -201,7 +198,7 @@ void COrderBookPanel::DrawBidRows(CDC& memDC, const LayoutContext& lc, const STO
 		bottomRows.push_back(BuildBidRow(stockInfo, i, delta));
 	}
 
-	DrawPriceRows(memDC, lc, bottomRows, 7, blinkOn);
+	DrawPriceRows(memDC, lc, bottomRows, 7);
 }
 
 // ============================================================================
@@ -303,81 +300,6 @@ void COrderBookPanel::DrawStatsRow(CDC& memDC, const LayoutContext& lc, const ST
 // ============================================================================
 // 辅助函数
 // ============================================================================
-
-void COrderBookPanel::DrawOrderBookRowText(CDC& memDC, const OrderBookRow& row, int x, int y, int rowWidth, bool blinkOff)
-{
-	COLORREF textColor;
-	if (row.darkBackground && !(row.blink && blinkOff))
-		textColor = RGB(255, 255, 255);
-	else
-		textColor = row.textColor;
-	memDC.SetTextColor(textColor);
-
-	// 粗体字体
-	CFont* pOldFont = nullptr;
-	CFont boldFont;
-	if (row.bold)
-	{
-		pOldFont = memDC.GetCurrentFont();
-		LOGFONT lf;
-		pOldFont->GetLogFont(&lf);
-		lf.lfWeight = FW_BOLD;
-		boldFont.CreateFontIndirect(&lf);
-		memDC.SelectObject(&boldFont);
-	}
-
-	memDC.TextOut(x, y, row.text);
-
-	if (row.bold && pOldFont)
-		memDC.SelectObject(pOldFont);
-	if (!row.drawSmallSuffix || row.smallSuffix.IsEmpty())
-	{
-		// 只有右对齐后缀
-		if (!row.rightAlignSuffix.IsEmpty())
-		{
-			CFont* oldFont = memDC.GetCurrentFont();
-			LOGFONT lf;
-			oldFont->GetLogFont(&lf);
-			lf.lfHeight = lf.lfHeight * 3 / 4;
-			CFont smallFont;
-			smallFont.CreateFontIndirect(&lf);
-			memDC.SelectObject(&smallFont);
-			memDC.SetTextColor(row.rightAlignSuffixColor);
-			int suffixW = memDC.GetTextExtent(row.rightAlignSuffix).cx;
-			memDC.TextOut(x + rowWidth - suffixW - g_data.RDPI(4), y + g_data.RDPI(1), row.rightAlignSuffix);
-			memDC.SelectObject(oldFont);
-		}
-		return;
-	}
-
-	int suffixX = x + memDC.GetTextExtent(row.text).cx;
-	CFont* oldFont = memDC.GetCurrentFont();
-	LOGFONT lf;
-	oldFont->GetLogFont(&lf);
-	lf.lfHeight = lf.lfHeight * 3 / 4;
-	CFont smallFont;
-	smallFont.CreateFontIndirect(&lf);
-	memDC.SelectObject(&smallFont);
-	memDC.SetTextColor(row.darkBackground ? RGB(255, 255, 200) : textColor);
-	memDC.TextOut(suffixX, y + g_data.RDPI(1), row.smallSuffix);
-	// 右对齐绘制累计成交量和瞬时变化量
-	// 布局：[...smallSuffix] [rightAlignSuffix] [cumVolSuffix] 右边距
-	int rightEdge = x + rowWidth - g_data.RDPI(4);
-	if (!row.cumVolSuffix.IsEmpty())
-	{
-		memDC.SetTextColor(row.cumVolSuffixColor);
-		int cumVolW = memDC.GetTextExtent(row.cumVolSuffix).cx;
-		memDC.TextOut(rightEdge - cumVolW, y + g_data.RDPI(1), row.cumVolSuffix);
-		rightEdge -= cumVolW;
-	}
-	if (!row.rightAlignSuffix.IsEmpty())
-	{
-		memDC.SetTextColor(row.rightAlignSuffixColor);
-		int raSuffixW = memDC.GetTextExtent(row.rightAlignSuffix).cx;
-		memDC.TextOut(rightEdge - raSuffixW, y + g_data.RDPI(1), row.rightAlignSuffix);
-	}
-	memDC.SelectObject(oldFont);
-}
 
 void COrderBookPanel::DrawRatioBar(CDC& memDC, int x, int y, int w, int h, double ratio)
 {
@@ -485,8 +407,6 @@ COrderBookPanel::OrderBookRow COrderBookPanel::BuildAskRow(const STOCK::StockInf
 	// 卖一当前价高亮
 	row.fillBackground = (stockInfo.currentPrice > 0 && price > 0 && stockInfo.currentPrice == price);
 	row.backgroundColor = COLOR_DEPTH_SELL_HL;
-	if (idx == 0 && row.fillBackground && volume <= 10000)
-		row.blink = true;
 
 	return row;
 }
@@ -510,13 +430,11 @@ COrderBookPanel::OrderBookRow COrderBookPanel::BuildBidRow(const STOCK::StockInf
 	// 买一当前价高亮
 	row.fillBackground = (stockInfo.currentPrice > 0 && price > 0 && stockInfo.currentPrice == price);
 	row.backgroundColor = COLOR_DEPTH_BUY_HL;
-	if (idx == 0 && row.fillBackground && volume <= 10000)
-		row.blink = true;
 
 	return row;
 }
 
-void COrderBookPanel::DrawPriceRows(CDC& memDC, const LayoutContext& lc, const std::vector<OrderBookRow>& rows, int startRow, bool blinkOn)
+void COrderBookPanel::DrawPriceRows(CDC& memDC, const LayoutContext& lc, const std::vector<OrderBookRow>& rows, int startRow)
 {
 	STOCK::Volume maxVol = 1;
 	for (const auto& r : rows)
@@ -535,24 +453,27 @@ void COrderBookPanel::DrawPriceRows(CDC& memDC, const LayoutContext& lc, const s
 		// 1. 绘制基础行背景 (暗黑面板底色)
 		memDC.FillSolidRect(lc.left, y, totalW, h, COLOR_BG_PANEL);
 
-		// 2. 绘制挂单量深度条（Depth Bar 从右往左按挂单量比例绘制）
+		const COLORREF barColor = rows[i].isAsk ? COLOR_DEPTH_SELL_BG : COLOR_DEPTH_BUY_BG;
+
+		// 2. 当前价所在档位整行高亮（常亮）
+		//    底色用深度条底色、深度条本身用高亮色，两者都可见；旧版这里是 500ms 一
+		//    闪的整行高亮且画在深度条之后，闪显时把深度条整条盖住，闪隐时又露出来，
+		//    观感就是卖一横条"一下子填满、一下子又缩回去"
+		if (rows[i].fillBackground)
+			memDC.FillSolidRect(lc.left, y, totalW, h, barColor);
+
+		// 3. 绘制挂单量深度条（Depth Bar 从右往左按挂单量比例绘制）
 		if (rows[i].volume > 0 && maxVol > 0)
 		{
 			int depthW = static_cast<int>((double)rows[i].volume / maxVol * (totalW * 0.60));
 			depthW = max(g_data.RDPI(2), min(totalW, depthW));
-			COLORREF depthColor = rows[i].isAsk ? COLOR_DEPTH_SELL_BG : COLOR_DEPTH_BUY_BG;
+			COLORREF depthColor = rows[i].fillBackground ? rows[i].backgroundColor : barColor;
 			memDC.FillSolidRect(lc.right - depthW, y + 1, depthW, h - 2, depthColor);
-		}
-
-		if (rows[i].fillBackground)
-		{
-			if (!(rows[i].blink && !blinkOn))
-				memDC.FillSolidRect(lc.left, y, totalW, h, rows[i].backgroundColor);
 		}
 
 		int textY = y + max(0, (h - memDC.GetTextExtent(_T("Ay")).cy) / 2);
 
-		// 3. 绘制三列布局：档位 | 价格 | 挂单量
+		// 4. 绘制三列布局：档位 | 价格 | 挂单量
 		// 列1：档位标签（卖5 / 买1）
 		CString labelTxt = rows[i].isAsk ? (CString(_T("卖")) + std::to_wstring(rows[i].level).c_str()) : (CString(_T("买")) + std::to_wstring(rows[i].level).c_str());
 		memDC.SetTextColor(COLOR_TEXT_DIM);

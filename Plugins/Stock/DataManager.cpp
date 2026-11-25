@@ -1171,6 +1171,9 @@ int CDataManager::UpdateRealtimeFromQuotes(const std::vector<QuoteItem>& items)
 
 			// 更新显示字段（价格/涨跌幅/涨跌额）
 			info.UpdateDisplayFields();
+
+			// 记录共享内存送数时间，供 HTTP 补充调度判断该代码是否已被共享内存覆盖
+			m_tdx_quote_tick[code] = time(nullptr);
 		}
 
 		// 更新内外盘采样（净比计算）
@@ -1190,6 +1193,16 @@ int CDataManager::UpdateRealtimeFromQuotes(const std::vector<QuoteItem>& items)
 	// 	UpdateRelatedStocksAvgDiff();
 
 	return validCount;
+}
+
+bool CDataManager::IsTdxQuoteFresh(const std::wstring& code, int withinSeconds)
+{
+	// 与 UpdateRealtimeFromQuotes 共用 m_stockDataMutex（该锁为外层锁，此处单独使用无嵌套）
+	std::lock_guard<std::mutex> lock(Stock::Instance().m_stockDataMutex);
+	auto it = m_tdx_quote_tick.find(code);
+	if (it == m_tdx_quote_tick.end())
+		return false;
+	return time(nullptr) - it->second <= withinSeconds;
 }
 
 void CDataManager::ApplyRealtimeData(const std::vector<std::wstring>& codes, const std::string& resp)
@@ -1502,8 +1515,26 @@ void CDataManager::ApplyFundIOPV(const std::wstring& code, const std::string& re
 {
 	if (!ok)
 	{
-		std::string failLog = "[IOPV] FAIL: GetURL failed for " + CCommon::UnicodeToStr(code.c_str());
-		CCommon::WriteLog(failLog.c_str(), m_log_path.c_str());
+		// 关注基金盘中每3秒拉一次IOPV，深市ETF目前没有可用估值源会周期性走到这里，
+		// 每代码限频10分钟记一条，避免日志刷屏
+		static std::mutex s_iopv_fail_mutex;
+		static std::map<std::wstring, time_t> s_iopv_fail_last;
+		bool shouldLog = false;
+		{
+			std::lock_guard<std::mutex> lockLog(s_iopv_fail_mutex);
+			time_t now = time(nullptr);
+			auto it = s_iopv_fail_last.find(code);
+			if (it == s_iopv_fail_last.end() || now - it->second >= 600)
+			{
+				s_iopv_fail_last[code] = now;
+				shouldLog = true;
+			}
+		}
+		if (shouldLog)
+		{
+			std::string failLog = "[IOPV] FAIL: all sources failed for " + CCommon::UnicodeToStr(code.c_str());
+			CCommon::WriteLog(failLog.c_str(), m_log_path.c_str());
+		}
 		return;
 	}
 

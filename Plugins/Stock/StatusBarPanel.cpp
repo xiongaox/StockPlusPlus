@@ -11,7 +11,7 @@
 #include <limits>
 
 void CStatusBarPanel::DrawHeader(CDC& memDC, const STOCK::StockInfo& realtimeData, int windowWidth, int headerHeight,
-    const CString& macdTrendSignal)
+    const CString& macdTrendSignal, CRect* outTitleRect)
 {
 	double diff = realtimeData.GetChangeAmount();
 	double diffPercent = realtimeData.GetChangePercent();
@@ -50,6 +50,10 @@ void CStatusBarPanel::DrawHeader(CDC& memDC, const STOCK::StockInfo& realtimeDat
 	// 主标题始终按整个窗口居中；右侧缓存状态仅在剩余空白足够时显示。
 	int startX = max(g_data.RDPI(4), (windowWidth - totalWidth) / 2);
 	int centerY = headerHeight / 2;
+
+	// 回填标题热区（前后各放宽4px，纵向铺满标题条，便于点击）
+	if (outTitleRect)
+		*outTitleRect = CRect(startX - g_data.RDPI(4), 0, startX + totalWidth + g_data.RDPI(4), headerHeight);
 
 	memDC.SetTextColor(COLOR_BLACK);
 	memDC.TextOut(startX, centerY - prefixSize.cy / 2, prefixTxt);

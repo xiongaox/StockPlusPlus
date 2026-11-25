@@ -54,10 +54,10 @@ void CApiHealthManager::InitSources()
 
 	// 5. 天天基金 / 上交所
 	m_sources[API_FUND_IOPV].type = API_FUND_IOPV;
-	m_sources[API_FUND_IOPV].name = L"天天基金 / 上交所行情源 (fundgz / sse)";
+	m_sources[API_FUND_IOPV].name = L"ETF IOPV 行情源 (上交所 yunhq / 天天基金 fundgz)";
 	m_sources[API_FUND_IOPV].shortName = L"基金估值源";
 	m_sources[API_FUND_IOPV].role = L"ETF 盘中实时估值 (IOPV) / 净值折溢价";
-	m_sources[API_FUND_IOPV].targetUrl = L"http://fundgz.1234567.com.cn/";
+	m_sources[API_FUND_IOPV].targetUrl = L"https://yunhq.sse.com.cn:32042/";
 	m_sources[API_FUND_IOPV].lastStatusMsg = L"待命 / 等待检测";
 
 	// 不再预置假心跳历史：此前启动时硬编码 25 条 200 OK（含一条假「响应偏慢」），
@@ -216,24 +216,40 @@ void CApiHealthManager::DoActiveProbes()
 		}
 	}
 
-	// 5. 天天基金
+	// 5. ETF IOPV（上交所 yunhq snap / 天天基金 fundgz）
+	//    天天基金盘中估值(jsonpgz)已于2026年下线，接口现返回 200 + 404 页；
+	//    实际 IOPV 通道是上交所 yunhq（沪市ETF真实IOPV），优先探测它
 	{
 		auto t0 = std::chrono::steady_clock::now();
 		std::string resp;
-		CString headers = _T("Referer: http://fund.eastmoney.com");
-		bool ok = CCommon::GetURL(L"http://fundgz.1234567.com.cn/js/510050.js", resp, false,
+		CString headers = _T("Referer: https://etf.sse.com.cn");
+		bool ok = CCommon::GetURL(L"https://yunhq.sse.com.cn:32042/v1/sh1/snap/510050?callback=jQuery&select=name,last,iopv", resp, false,
 			_T("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"), headers, headers.GetLength());
 		auto t1 = std::chrono::steady_clock::now();
 		int ms = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count());
-		if (ok && !resp.empty() && resp.find("jsonpgz") != std::string::npos)
+		if (ok && !resp.empty() && resp.find("snap") != std::string::npos)
 		{
-			HeartbeatLevel lvl = (ms > 350) ? LEVEL_WARN : LEVEL_OK;
-			std::wstring msg = L"HTTP 200 OK (" + std::to_wstring(ms) + L"ms)";
+			HeartbeatLevel lvl = (ms > 400) ? LEVEL_WARN : LEVEL_OK;
+			std::wstring msg = L"上交所 snap OK (" + std::to_wstring(ms) + L"ms) · fundgz 估值已下线";
 			RecordPoint(API_FUND_IOPV, ms, 200, lvl, msg);
 		}
 		else
 		{
-			RecordPoint(API_FUND_IOPV, ms, 0, LEVEL_FAIL, L"请求超时或返回数据异常");
+			// yunhq 不可用时再试天天基金旧接口（场内已无估值数据，仅探测保底源存活性）
+			std::string gzResp;
+			CString gzHeaders = _T("Referer: http://fund.eastmoney.com");
+			bool gzOk = CCommon::GetURL(L"http://fundgz.1234567.com.cn/js/510050.js", gzResp, false,
+				_T("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"), gzHeaders, gzHeaders.GetLength())
+				&& !gzResp.empty() && gzResp.find("jsonpgz") != std::string::npos;
+			if (gzOk)
+			{
+				std::wstring msg = L"天天基金估值 OK (" + std::to_wstring(ms) + L"ms)";
+				RecordPoint(API_FUND_IOPV, ms, 200, LEVEL_OK, msg);
+			}
+			else
+			{
+				RecordPoint(API_FUND_IOPV, ms, 0, LEVEL_FAIL, L"上交所/天天基金 IOPV 源均不可用");
+			}
 		}
 	}
 }

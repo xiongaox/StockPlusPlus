@@ -2132,6 +2132,38 @@ void CFloatingWnd::OnPaint()
 // ========== RSI相对强弱指标绘制 ==========
 // 注：CalculateTimelineRSI/CalculateKLineRSI 已移至 CStockIndicator 类。
 
+// 雪球个股/基金页：https://xueqiu.com/S/<symbol>
+// sh/sz/bj 前缀 → SH/SZ/BJ + 六位代码；rt_hk 前缀 → 港股五位代码（保留前导零）；
+// gb_ 前缀（美股，如 gb_nvda.oq）→ 去交易所后缀转大写；
+// secid 形态（118.* 上金所等）雪球无对应品种，返回空串（点击不响应）
+static std::wstring BuildXueqiuQuoteUrl(const std::wstring& stockId)
+{
+	if (stockId.size() >= 8)
+	{
+		const std::wstring prefix2 = stockId.substr(0, 2);
+		if (prefix2 == L"sh" || prefix2 == L"sz" || prefix2 == L"bj")
+		{
+			std::wstring market = prefix2;
+			std::transform(market.begin(), market.end(), market.begin(), ::towupper);
+			return L"https://xueqiu.com/S/" + market + stockId.substr(2);
+		}
+		if (stockId.compare(0, 5, L"rt_hk") == 0)
+			return L"https://xueqiu.com/S/" + stockId.substr(5);
+		if (stockId.compare(0, 3, L"gb_") == 0)
+		{
+			std::wstring us = stockId.substr(3);
+			const size_t dot = us.find(L'.');
+			if (dot != std::wstring::npos)
+				us = us.substr(0, dot);
+			if (us.empty())
+				return std::wstring();
+			std::transform(us.begin(), us.end(), us.begin(), ::towupper);
+			return L"https://xueqiu.com/S/" + us;
+		}
+	}
+	return std::wstring();
+}
+
 BOOL CFloatingWnd::OnEraseBkgnd(CDC* pDC)
 {
 	return TRUE; // 不擦除背景
@@ -2190,6 +2222,21 @@ void CFloatingWnd::OnLButtonDown(UINT nFlags, CPoint point)
 				return;
 			}
 		}
+	}
+
+	// 顶栏标题（名称+现价+涨跌幅+信号）点击：浏览器打开雪球对应股票/基金页，
+	// 并顺手关闭悬浮窗（统一走 Stock 销毁入口：捕获界面状态、清理指针）
+	if (m_viewMode != UI_VIEW_OVERVIEW && !m_settingsMode
+		&& !m_timelineChart.headerTitleRect.IsRectEmpty()
+		&& m_timelineChart.headerTitleRect.PtInRect(point))
+	{
+		std::wstring url = BuildXueqiuQuoteUrl(m_stock_id);
+		if (!url.empty())
+		{
+			ShellExecute(GetSafeHwnd(), L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+			Stock::Instance().DestroyFloatingWnd();
+		}
+		return;
 	}
 
 	// 左侧列表面板分组标题右侧的实心排序箭头：▲涨最多在上，▼跌最多在上；再次点击恢复默认顺序
@@ -5346,6 +5393,20 @@ BOOL CFloatingWnd::OnSetCursor(CWnd* pWnd, UINT nHitTest, UINT message)
 		GetCursorPos(&pt);
 		ScreenToClient(&pt);
 		if (m_marketCenterPanel.IsCursorOverInteractive(pt))
+		{
+			::SetCursor(::LoadCursor(NULL, IDC_HAND));
+			return TRUE;
+		}
+	}
+
+	// 顶栏标题热区（点击跳雪球）：手型光标
+	if (nHitTest == HTCLIENT && m_viewMode != UI_VIEW_OVERVIEW && !m_settingsMode
+		&& !m_timelineChart.headerTitleRect.IsRectEmpty())
+	{
+		CPoint pt;
+		GetCursorPos(&pt);
+		ScreenToClient(&pt);
+		if (m_timelineChart.headerTitleRect.PtInRect(pt))
 		{
 			::SetCursor(::LoadCursor(NULL, IDC_HAND));
 			return TRUE;

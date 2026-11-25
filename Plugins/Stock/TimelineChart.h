@@ -47,6 +47,9 @@ public:
 	};
 
 	// 分时图绘制
+	// 顶栏标题热区（名称+现价+涨跌幅+信号，客户区坐标；每次 DrawTimelineHeader 更新），
+	// 供悬浮窗做「点击标题跳转雪球」命中判断
+	CRect headerTitleRect;
 	void DrawTimelineHeader(CDC& memDC, const TimelineDrawContext& ctx, const HoverState& hover);
 	void DrawTimelineBackgroundHighlights(CDC& memDC, const TimelineDrawContext& ctx, UIViewMode viewMode);
 	// 在指定区域绘制分时背景高亮（5分钟交替），供价格区/成交量/MACD/KDJ等区域复用

@@ -935,12 +935,16 @@ void CStockFetchThread::FetchRealtimeByHttp(bool onlyNonAG)
 	std::vector<std::wstring> realtimeCodes = codes;
 	if (onlyNonAG)
 	{
-		// 与 FetchRealtimeHtml 内置过滤等价，但豁免自定义分组代码和焦点股票
+		// 共享内存已覆盖的A股不再走HTTP。注意共享内存只喂自选股（Stock.ini stock_code），
+		// 仅出现在持仓/状态栏/台账里的代码（典型：T+0的ETF）不在其中，若按"A股个股"一律剔除
+		// 会彻底断更——表现为状态栏数值卡住、悬停/点开设为焦点股票后才恢复。
+		// 因此只剔除共享内存最近15秒内确实送过数的代码，自定义分组与焦点股票仍豁免
 		realtimeCodes.erase(std::remove_if(realtimeCodes.begin(), realtimeCodes.end(),
 			[&groupCodes, &focusId](const std::wstring& code) {
 				return CCommon::IsAGStockCode(code) && GetStockPriority(code) >= 200 &&
 					code != focusId &&
-					std::find(groupCodes.begin(), groupCodes.end(), code) == groupCodes.end();
+					std::find(groupCodes.begin(), groupCodes.end(), code) == groupCodes.end() &&
+					g_data.IsTdxQuoteFresh(code, 15);
 			}), realtimeCodes.end());
 	}
 	std::vector<std::wstring> outCodes;

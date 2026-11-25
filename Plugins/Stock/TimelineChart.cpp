@@ -291,7 +291,7 @@ void CTimelineChart::DrawTimelineHeader(CDC& memDC, const TimelineDrawContext& c
 	headerFont.DeleteObject();
 
 	CStatusBarPanel statusBarPanel;
-	statusBarPanel.DrawHeader(memDC, ctx.realtimeData, ctx.windowWidth, g_data.RDPI(26), macdSignal);
+	statusBarPanel.DrawHeader(memDC, ctx.realtimeData, ctx.windowWidth, g_data.RDPI(26), macdSignal, &headerTitleRect);
 
 	// 空间不足时逐级退到更短文案；首个候选已是最短的「本地缓存」口径，
 	// 故后备只留「缓存」，不再重复收录同名字符串
@@ -1303,7 +1303,7 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 		CString dateStr = hasKp ? CString(kp.day.c_str()) : (!item.fullTime.empty() ? CString(item.fullTime.c_str()) : CString(item.time.c_str()));
 		rows.push_back({ _T("时间"), dateStr, COLOR_TEXT_PRIMARY });
 
-		// 2. 收盘价
+		// 2. 收盘价（本K线的最新价，紧随时间行）
 		STOCK::Price closePrice = hasKp ? kp.close : item.price;
 		CString closeStr = isEtf ? CCommon::FormatETFPrice(closePrice) : CCommon::FormatFloat(closePrice);
 
@@ -1337,7 +1337,24 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 
 		rows.push_back({ _T("收盘价"), closeStr, changeColor });
 
-		// 3. 涨跌幅
+		// 3. 开盘价/最高价/最低价（K线点自带OHLC；无K线点数据时跳过；相对昨收红涨绿跌）
+		if (hasKp)
+		{
+			auto ohlcColor = [prevClose](STOCK::Price v) -> COLORREF {
+				if (prevClose <= 0)
+					return COLOR_TEXT_PRIMARY;
+				if (v > prevClose + 0.00001)
+					return COLOR_RED_UP;
+				if (v < prevClose - 0.00001)
+					return COLOR_GREEN_DOWN;
+				return COLOR_TEXT_PRIMARY;
+			};
+			rows.push_back({ _T("开盘价"), isEtf ? CCommon::FormatETFPrice(kp.open) : CCommon::FormatFloat(kp.open), ohlcColor(kp.open) });
+			rows.push_back({ _T("最高价"), isEtf ? CCommon::FormatETFPrice(kp.high) : CCommon::FormatFloat(kp.high), ohlcColor(kp.high) });
+			rows.push_back({ _T("最低价"), isEtf ? CCommon::FormatETFPrice(kp.low) : CCommon::FormatFloat(kp.low), ohlcColor(kp.low) });
+		}
+
+		// 4. 涨跌幅
 		CString pctStr;
 		if (pct > 0.00001)
 			pctStr.Format(_T("+%.2f%%"), pct);
@@ -1347,7 +1364,7 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 			pctStr = _T("0.00%");
 		rows.push_back({ _T("涨跌幅"), pctStr, changeColor });
 
-		// 4. 涨跌额
+		// 5. 涨跌额
 		CString diffStr;
 		if (diff > 0.00001)
 			diffStr = _T("+") + (isEtf ? CCommon::FormatETFPrice(diff) : CCommon::FormatFloat(diff));
@@ -1357,12 +1374,12 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 			diffStr = isEtf ? _T("0.000") : _T("0.00");
 		rows.push_back({ _T("涨跌额"), diffStr, changeColor });
 
-		// 5. 成交量
+		// 6. 成交量
 		STOCK::Volume volLots = (hasKp ? kp.volume : item.volume) / 100;
 		CString volStr = CCommon::FormatVolumeInt(static_cast<double>(volLots)) + _T("手");
 		rows.push_back({ _T("成交量"), volStr, COLOR_TEXT_PRIMARY });
 
-		// 6. 成交额
+		// 7. 成交额
 		double amount = item.amount;
 		if (amount <= 0 && hasKp)
 			amount = static_cast<double>(kp.volume) * kp.close;
@@ -1379,7 +1396,7 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 		if (tStr.GetLength() > 5) tStr = tStr.Left(5);
 		rows.push_back({ _T("时间"), tStr, COLOR_TEXT_PRIMARY });
 
-		// 2. 最新
+		// 2. 最新（紧随时间行）
 		CString priceStr = isEtf ? CCommon::FormatETFPrice(item.price) : CCommon::FormatFloat(item.price);
 		STOCK::Price prevClose = ctx.realtimeData.prevClosePrice;
 		double diff = 0;
@@ -1396,7 +1413,29 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 		}
 		rows.push_back({ _T("最新"), priceStr, changeColor });
 
-		// 3. 涨跌幅
+		// 3. 当日开盘/最高/最低（分时点没有独立OHLC，这里展示当日累计口径；相对昨收红涨绿跌）
+		{
+			auto ohlcColor = [prevClose](STOCK::Price v) -> COLORREF {
+				if (prevClose <= 0)
+					return COLOR_TEXT_PRIMARY;
+				if (v > prevClose + 0.00001)
+					return COLOR_RED_UP;
+				if (v < prevClose - 0.00001)
+					return COLOR_GREEN_DOWN;
+				return COLOR_TEXT_PRIMARY;
+			};
+			STOCK::Price dayOpen = ctx.realtimeData.openPrice;
+			STOCK::Price dayHigh = ctx.realtimeData.highPrice;
+			STOCK::Price dayLow = ctx.realtimeData.lowPrice;
+			if (dayOpen > 0)
+				rows.push_back({ _T("开盘价"), isEtf ? CCommon::FormatETFPrice(dayOpen) : CCommon::FormatFloat(dayOpen), ohlcColor(dayOpen) });
+			if (dayHigh > 0)
+				rows.push_back({ _T("最高价"), isEtf ? CCommon::FormatETFPrice(dayHigh) : CCommon::FormatFloat(dayHigh), ohlcColor(dayHigh) });
+			if (dayLow > 0)
+				rows.push_back({ _T("最低价"), isEtf ? CCommon::FormatETFPrice(dayLow) : CCommon::FormatFloat(dayLow), ohlcColor(dayLow) });
+		}
+
+		// 4. 涨跌幅
 		CString pctStr;
 		if (pct > 0.00001)
 			pctStr.Format(_T("+%.2f%%"), pct);
@@ -1406,7 +1445,7 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 			pctStr = _T("0.00%");
 		rows.push_back({ _T("涨跌幅"), pctStr, changeColor });
 
-		// 4. 涨跌额
+		// 5. 涨跌额
 		CString diffStr;
 		if (diff > 0.00001)
 			diffStr = _T("+") + (isEtf ? CCommon::FormatETFPrice(diff) : CCommon::FormatFloat(diff));
@@ -1416,19 +1455,19 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 			diffStr = isEtf ? _T("0.000") : _T("0.00");
 		rows.push_back({ _T("涨跌额"), diffStr, changeColor });
 
-		// 5. 成交量
+		// 6. 成交量
 		STOCK::Volume volLots = item.volume / 100;
 		CString volStr = CCommon::FormatVolumeInt(static_cast<double>(volLots)) + _T("手");
 		rows.push_back({ _T("成交量"), volStr, COLOR_TEXT_PRIMARY });
 
-		// 6. 成交额
+		// 7. 成交额
 		double amount = item.amount;
 		if (amount <= 0)
 			amount = static_cast<double>(item.volume) * item.price;
 		CString amountStr = CCommon::FormatAmount(amount);
 		rows.push_back({ _T("成交额"), amountStr, COLOR_TEXT_PRIMARY });
 
-		// 7. 均价（当日累计成交均价，即图上那条暖金色均价线；与标题栏"均:"同源）
+		// 8. 均价（当日累计成交均价，即图上那条暖金色均价线；与标题栏"均:"同源）
 		//    并给出「偏离」= 该分钟价格相对均价的百分比，供判断买点/卖点
 		{
 			STOCK::Price avgPrice = item.averagePrice;
@@ -1462,30 +1501,9 @@ void CTimelineChart::DrawTimelineHoverOverlay(CDC& memDC, const TimelineDrawCont
 	int globalIdx = ctx.startIndex + hover.hoveredBarIndex;
 	if (fullPts && globalIdx >= 0 && globalIdx < static_cast<int>(fullPts->size()))
 	{
-		if (hover.timelineIndicator == 0) // VOL / CJL
-		{
-			auto calcVolMA = [&](int idx, int period) -> double {
-				if (idx < period - 1 || idx >= static_cast<int>(fullPts->size()))
-					return 0.0;
-				double sum = 0.0;
-				for (int p = idx - period + 1; p <= idx; ++p)
-					sum += static_cast<double>((*fullPts)[p].volume);
-				return sum / period;
-			};
-			double volMa5 = calcVolMA(globalIdx, 5);
-			double volMa10 = calcVolMA(globalIdx, 10);
-			if (volMa5 > 0)
-			{
-				CString ma5Str = CCommon::FormatVolumeInt(volMa5 / 100.0) + _T("手");
-				rows.push_back({ _T("MA5"), ma5Str, RGB(56, 189, 248) });
-			}
-			if (volMa10 > 0)
-			{
-				CString ma10Str = CCommon::FormatVolumeInt(volMa10 / 100.0) + _T("手");
-				rows.push_back({ _T("MA10"), ma10Str, RGB(251, 146, 60) });
-			}
-		}
-		else if (hover.timelineIndicator == 1) // MACD
+		// VOL/CJL 副图不往悬浮卡片加行：成交量/成交额已在基础行里，量均线(MA5/MA10)看副图图例即可
+
+		if (hover.timelineIndicator == 1) // MACD
 		{
 			int shortP = isKLine ? 12 : 6;
 			int longP = isKLine ? 26 : 12;

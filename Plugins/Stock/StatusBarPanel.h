@@ -11,8 +11,10 @@ class CStatusBarPanel
 {
 public:
     // 绘制主标题栏（股票名称+现价+涨跌幅+MACD信号）
+    // outTitleRect 非空时回填标题整体（名称+现价+涨跌幅+信号）的矩形（客户区坐标、纵向铺满标题条），
+    // 供悬浮窗做「点击标题跳转雪球」的点击热区
     void DrawHeader(CDC& memDC, const STOCK::StockInfo& realtimeData, int windowWidth, int headerHeight,
-        const CString& macdTrendSignal = CString());
+        const CString& macdTrendSignal = CString(), CRect* outTitleRect = nullptr);
 
     // 绘制管理股票栏（关联股票状态栏，位于标题栏下方）
     void DrawRelatedStockBar(CDC& memDC, int w, int topBarY, int singleBarHeight, const std::wstring& stockId, int viewMode);

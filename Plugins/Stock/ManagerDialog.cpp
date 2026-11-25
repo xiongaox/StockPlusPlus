@@ -5533,6 +5533,14 @@ namespace
 		int count;
 	};
 
+	const wchar_t* kItems_1125[] = {
+		L"•  【新增】 悬浮窗顶栏标题（股票名称+现价+涨跌幅+信号）可直接点击：浏览器打开雪球对应个股/基金页并顺手关闭悬浮窗，悬停变手型；覆盖 A 股（沪深北）/港股/美股，上海金交所等雪球无对应品种不响应",
+		L"•  【修复】 ETF IOPV 行情源失效导致估值/折溢价不更新：天天基金盘中估值接口 2026 年已下线（返回 200 + 404 页，旧逻辑只要响应非空就当成功，反而短路了后面的保底源）；现所有 IOPV 源一律按响应内容校验（上交所 snap / jsonpgz / 腾讯 iopv_timeline），接口检测页改为优先探测上交所真实 IOPV 源；深市 ETF 暂无可用源的失败日志按代码限频 10 分钟，不再每 3 秒刷屏",
+		L"•  【修复】 仅出现在持仓/状态栏/台账里的股票（典型 T+0 ETF）行情卡住不刷新：HTTP 补充调度原先把所有 A 股一律当作「共享内存已覆盖」剔除，但共享内存只喂自选股；现改为按共享内存最近 15 秒内是否真送过数判重，未被覆盖的代码照常走 HTTP 补数据，不再出现「悬停或设为焦点股票后才恢复」",
+		L"•  【优化】 分时/K线鼠标悬浮卡片新增开盘价、最高价、最低价三行（K线用该点自身 OHLC，分时用当日累计 OHLC，均相对昨收红涨绿跌）；成交量副图不再往卡片追加 MA5/MA10 行，量均线看副图图例即可",
+		L"•  【修复】 盘口卖一/买一高亮不再 500ms 闪烁：此前整行闪烁且画在深度条之上，闪烁时把挂单条整条盖住，观感是卖一横条「一下子填满、一下子又缩回去」；现改为常亮高亮、深度条改用高亮色，两者同时可见",
+		L"•  【修复】 分组管理里删除股票/自定义分组、上下移动排序不落盘：内嵌设置没有「确定」按钮，退出只是隐藏对话框、下次进入按内存配置重建，改动会被静默丢弃（表现为「删不掉」）；现每次操作后立即保存配置",
+	};
 	const wchar_t* kItems_1105[] = {
 		L"•  【新增】「已清仓」分组新增「状态栏显示」勾选列：清仓股已不在自选/持仓列表，此前没有任何入口设置它的状态栏显示；现最后一列可直接勾选/取消并立即落盘生效，本页签其余列仍为只读",
 		L"•  【修复】已清仓股勾选「状态栏显示」不生效、原来显示的又取消不掉：任务栏只注册自选/持仓/自定义分组里的代码，台账独有的清仓股即使勾了也不显示；现把台账股票一并纳入注册，并在启动时按代码补读它们的勾选配置，勾选跨重启保留",
@@ -5668,6 +5676,7 @@ namespace
 	};
 
 	const AboutLogGroup kAboutLogGroups[] = {
+		{ L"2026-11-25 (v2.1.18)", kItems_1125, _countof(kItems_1125) },
 		{ L"2026-11-05 (v2.1.17)", kItems_1105, _countof(kItems_1105) },
 		{ L"2026-11-04 (v2.1.16)", kItems_1104, _countof(kItems_1104) },
 		{ L"2026-10-13 (v2.1.15)", kItems_1013, _countof(kItems_1013) },
@@ -7210,6 +7219,11 @@ void CManagerDialog::OnDelBtnClick()
 		if (curSel >= 0 && curSel < static_cast<int>(m_data.m_stock_codes.size()))
 		{
 			m_data.m_stock_codes.erase(m_data.m_stock_codes.begin() + curSel);
+			// 与添加路径同口径：删除必须立即落盘。内嵌设置模式没有「确定」按钮，
+			// 退出设置只是隐藏对话框，下次进入按 m_data = g_data.m_setting_data 重建，
+			// 不写回配置时删除结果会被静默丢弃（表现为「删不掉」）
+			g_data.m_setting_data.m_stock_codes = m_data.m_stock_codes;
+			g_data.SaveConfig();
 			RefreshStockList();
 			RefreshPositionList();
 		}
@@ -7242,6 +7256,8 @@ void CManagerDialog::OnDelBtnClick()
 			if (curSel >= 0 && curSel < static_cast<int>(codes.size()))
 			{
 				codes.erase(codes.begin() + curSel);
+				g_data.m_setting_data.m_custom_groups = m_data.m_custom_groups;
+				g_data.SaveConfig();
 				RefreshCustomList();
 			}
 		}
@@ -7275,6 +7291,8 @@ void CManagerDialog::OnMoveUpBtnClick()
 		if (curSel > 0 && curSel < static_cast<int>(m_data.m_stock_codes.size()))
 		{
 			std::swap(m_data.m_stock_codes[curSel - 1], m_data.m_stock_codes[curSel]);
+			g_data.m_setting_data.m_stock_codes = m_data.m_stock_codes;
+			g_data.SaveConfig();
 			RefreshStockList();
 			m_stock_listctrl.SetItemState(curSel - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 		}
@@ -7289,6 +7307,8 @@ void CManagerDialog::OnMoveUpBtnClick()
 			if (curSel > 0 && curSel < static_cast<int>(codes.size()))
 			{
 				std::swap(codes[curSel - 1], codes[curSel]);
+				g_data.m_setting_data.m_custom_groups = m_data.m_custom_groups;
+				g_data.SaveConfig();
 				RefreshCustomList();
 				m_custom_listctrl.SetItemState(curSel - 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 			}
@@ -7304,6 +7324,8 @@ void CManagerDialog::OnMoveDownBtnClick()
 		if (curSel >= 0 && curSel < static_cast<int>(m_data.m_stock_codes.size()) - 1)
 		{
 			std::swap(m_data.m_stock_codes[curSel], m_data.m_stock_codes[curSel + 1]);
+			g_data.m_setting_data.m_stock_codes = m_data.m_stock_codes;
+			g_data.SaveConfig();
 			RefreshStockList();
 			m_stock_listctrl.SetItemState(curSel + 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 		}
@@ -7318,6 +7340,8 @@ void CManagerDialog::OnMoveDownBtnClick()
 			if (curSel >= 0 && curSel < static_cast<int>(codes.size()) - 1)
 			{
 				std::swap(codes[curSel], codes[curSel + 1]);
+				g_data.m_setting_data.m_custom_groups = m_data.m_custom_groups;
+				g_data.SaveConfig();
 				RefreshCustomList();
 				m_custom_listctrl.SetItemState(curSel + 1, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
 			}
